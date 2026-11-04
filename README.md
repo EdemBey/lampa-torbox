@@ -1,52 +1,44 @@
 # lampa-torbox
 
-Форк плагина TorBox для Lampa с поиском **по IMDb через Torrentio**.
+Плагин TorBox для Lampa с поиском **по IMDb через Torrentio**.
 MaxVol/Jacred остались вторым источником.
 
-## Что изменено относительно upstream
+## Установка
 
-1. **Torrentio по IMDb.** `searchTorrentio()` дергает
-   `/stream/movie/<imdb>.json` или `/stream/series/<imdb>:<s>:<e>.json` —
-   поиск больше не зависит от названия.
-2. **Комбинирование.** Torrentio и старые парсеры (MaxVol, Jacred) опрашиваются
-   параллельно, результаты склеиваются и дедуплицируются по `infoHash`.
-   При совпадении побеждает Torrentio, потому что только он может отдать
-   готовую ссылку.
+Ссылка для Lampa (jsDelivr, отдаёт `application/javascript`):
+
+```
+https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
+```
+
+Lampa → Настройки → Расширения → Добавить расширение → вставить ссылку.
+После этого вписать TorBox API-ключ в настройках плагина.
+
+Для жёсткой привязки к коммиту используйте `@<sha>` вместо `@master`.
+
+## Что изменено
+
+1. **Torrentio по IMDb.** `/stream/movie/<imdb>.json` или
+   `/stream/series/<imdb>:<s>:<e>.json` — поиск не зависит от названия.
+2. **Комбинирование.** Torrentio и MaxVol/Jacred опрашиваются параллельно,
+   результаты склеиваются и дедуплицируются по `infoHash`; Torrentio побеждает
+   при совпадении, потому что только он отдаёт готовую ссылку.
 3. **Прямое воспроизведение.** Если Torrentio (с ключом TorBox) вернул `url`,
-   плагин играет его сразу, без `createtorrent → mylist → requestdl`.
-4. **Сначала серия, потом поиск.** Для сериалов открывается выбор сезона и
-   серии, и только после выбора уходит запрос. Кэш теперь учитывает сезон и
-   серию, иначе эпизоды затирали друг друга.
+   плагин играет сразу, без `createtorrent → mylist → requestdl`.
+4. **Сначала серия.** Для сериалов открывается выбор сезона и серии; кэш
+   учитывает сезон и серию.
 
-## Ключ Torrentio
+## Ключи
 
-Ключ передаётся в пути: `torrentio.strem.fun/torbox=<KEY>/stream/...`.
+Ключи не хранятся в репозитории.
 
-Вставить можно двумя способами:
-
-1. В файле, константа рядом с началом:
-   ```js
-   const TORRENTIO_KEY = 'ваш-ключ';
-   ```
-   В репозитории она пустая — свой ключ не коммитьте.
-2. Или в консоли Lampa:
-   ```js
-   localStorage.setItem('torrentio_key', 'ваш-ключ')
-   ```
-
-Если ключа нет, Torrentio всё равно ищет по IMDb, но отдаёт только `infoHash`,
-и ссылку достаёт TorBox — как в оригинальном плагине.
-
-## Установка в Lampa
-
-1. Разместите `plugin/torbox-lampa-plugin.js` на любом HTTP-хостинге.
-2. Lampa → Настройки → Расширения → Добавить расширение → URL файла.
-3. В настройках плагина заполните TorBox API-ключ.
+- Torrentio: `?torrentio_key=...` в ссылке расширения, `localStorage.torrentio_key`
+  или пустая константа `TORRENTIO_KEY` в файле.
+- TorBox: вводится в настройках плагина, лежит в `localStorage` устройства.
 
 ## Структура
 
 ```
-plugin/torbox-lampa-plugin.js   рабочая копия с нашими правками
-upstream/torbox-lampa-plugin.js исходник 51.2.14 как скачан
+plugin/torbox-lampa-plugin.js   рабочая копия
 UPSTREAM.md                     откуда форк
 ```
