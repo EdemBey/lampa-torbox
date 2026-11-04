@@ -2026,6 +2026,9 @@ try {
           `| 🟢<span style="color:var(--color-good);">${Number(raw?.Seeders) || 0}</span>` +
           ` / 🔴<span style="color:var(--color-bad);">${Number(raw?.Peers || raw?.Leechers) || 0}</span>`,
         meta_formated:
+          (/(сезон|season|complete|серии из|\bS\d{1,2}\b(?!E\d))/i.test(raw?.Title || '')
+            ? `📦 ${translate('torbox_pack')} | `
+            : '') +
           `${translate('torbox_info_trackers')}: ${Utils.escapeHtml(primaryTracker)} ` +
           `| ${translate('torbox_info_added')}: ${Utils.formatAge(raw?.PublishDate) || translate('torbox_not_available')}`,
         tech_bar_html: this.buildTechBar(tech, raw),
@@ -2640,6 +2643,31 @@ try {
         drawEpisodes(torrentData, preferredFile);
       };
 
+      // A Torrentio release names the exact episode file; play it instead of
+      // showing a pack with dozens of files.
+      const wantedFile = String(torrentData.__preferredFile || '')
+        .split('/')
+        .pop()
+        .toLowerCase();
+      const baseName = (name) =>
+        String(name || '')
+          .split('/')
+          .pop()
+          .toLowerCase();
+
+      if (wantedFile) {
+        const exact = vids.find((file) => baseName(file.name) === wantedFile);
+        if (exact) {
+          play(torrentData, exact);
+          return;
+        }
+        const idx = Number(torrentData.__fileIdx);
+        if (Number.isInteger(idx) && idx >= 0 && vids[idx]) {
+          play(torrentData, vids[idx]);
+          return;
+        }
+      }
+
       const remembered = getRememberedFile(torrentData, vids);
       if (remembered) {
         openFileList(remembered);
@@ -2822,6 +2850,9 @@ try {
 
       const processAndOpen = (data, hash) => {
         data.hash = hash;
+        // Torrentio already knows which file inside the pack is the episode.
+        data.__preferredFile = item.filename || '';
+        data.__fileIdx = item.file_idx != null ? item.file_idx : null;
         Lampa.Loading.stop();
         finalizeTracker();
         selectFile(data);
@@ -3600,7 +3631,7 @@ try {
         build();
         Lampa.Controller.toggle('content');
       };
-      filter.onBack = () => this.back();
+      filter.onBack = () => Lampa.Controller.toggle('content');
       filter.onSearch = (v) => search(true, v);
       if (filter.addButtonBack) filter.addButtonBack();
 
@@ -3648,6 +3679,15 @@ try {
     };
 
     this.back = function () {
+      // 1. File list -> torrents
+      if (state.view === 'episodes') {
+        state.view = 'torrents';
+        filter.render().show();
+        revertPendingPlayback();
+        build();
+        return;
+      }
+      // 2. Picker -> episodes -> seasons -> out
       if (state.view === 'picker') {
         if (state.pickerLevel === 'episodes') {
           openEpisodePicker((pick) => search(false, null, pick));
@@ -3658,23 +3698,16 @@ try {
         Lampa.Activity.backward();
         return;
       }
-      // Torrents of a series: go up to that season's episodes.
+      // 3. Torrents of a series -> the season's episodes
       if (seriesInfo() && state.picked) {
         cancelActiveTorrentFlow();
         abort.abort();
         showEpisodesForCurrent();
         return;
       }
-      if (state.view === 'episodes') {
-        state.view = 'torrents';
-        filter.render().show();
-        revertPendingPlayback();
-        build();
-      } else {
-        cancelActiveTorrentFlow();
-        abort.abort();
-        Lampa.Activity.backward();
-      }
+      cancelActiveTorrentFlow();
+      abort.abort();
+      Lampa.Activity.backward();
     };
 
     this.destroy = function () {
@@ -3974,6 +4007,7 @@ try {
       torbox_continue: { ru: 'Продолжить', en: 'Continue', uk: 'Продовжити' },
       torbox_back_to_seasons: { ru: 'К выбору сезона', en: 'Back to seasons', uk: 'До сезонів' },
       torbox_episodes_short: { ru: 'серий', en: 'episodes', uk: 'серій' },
+      torbox_pack: { ru: 'сезон/сериал', en: 'season pack', uk: 'сезон/серіал' },
       torbox_episodes_loading: { ru: 'Загрузка серий…', en: 'Loading episodes…', uk: 'Завантаження серій…' },
       torbox_season: { ru: 'Сезон', en: 'Season', uk: 'Сезон' },
       torbox_episode: { ru: 'Серия', en: 'Episode', uk: 'Серія' },
