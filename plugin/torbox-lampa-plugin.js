@@ -26,6 +26,11 @@ try {
   // ───────────────────────────── Constants / Config ─────────────────────────────
   const VERSION = '51.2.14';
 
+  // Torrentio reads its TorBox key from the URL path, so it is safe to set here
+  // or in the plugin settings (localStorage key `torrentio_key`). Empty in git.
+  const TORRENTIO_KEY = '';
+  const TORRENTIO_BASE = 'https://torrentio.strem.fun';
+
   const CONST = {
     CACHE_LIMIT: 128,
     CACHE_TTL_MS: 10 * 60 * 1000, // 10 minutes
@@ -794,7 +799,130 @@ try {
       return { status: 'network', cooldown: true, reason: message || 'network', statusCode };
     }
 
+    function parseTorrentioSize(text) {
+      const m = String(text || '').match(/([\d.]+)\s*(TB|GB|MB|KB)/i);
+      if (!m) return 0;
+      const value = parseFloat(m[1]) || 0;
+      const unit = m[2].toUpperCase();
+      const mult = unit === 'TB' ? 1024 ** 4 : unit === 'GB' ? 1024 ** 3 : unit === 'MB' ? 1024 ** 2 : 1024;
+      return Math.round(value * mult);
+    }
+
+    function parseTorrentioSeeders(text) {
+      const m = String(text || '').match(/(?:👤|seeders?|сид\w*)[^\d]{0,6}(\d+)/i);
+      return m ? Number(m[1]) || 0 : 0;
+    }
+
+    function torrentioKey() {
+      return String(Store.get('torrentio_key', '') || TORRENTIO_KEY || '')
+        .replace(/\s+/g, '')
+        .trim();
+    }
+
+    // Torrentio is keyed by IMDb, so the search no longer depends on the title.
+    async function searchTorrentio(movie, signal) {
+      const imdb = String(movie.imdb_id || '').trim();
+      if (!/^tt\d+$/.test(imdb)) return new Map();
+
+      const season = Number(movie.season_number || movie.season || 0) || 0;
+      const episode = Number(movie.episode_number || movie.episode || 0) || 0;
+      const isSeries =
+        season > 0 ||
+        !!movie.first_air_date ||
+        movie.media_type === 'tv' ||
+        !!movie.number_of_seasons;
+
+      const id = isSeries ? `${imdb}:${season || 1}:${episode || 1}` : imdb;
+      const key = torrentioKey();
+      const prefix = key ? `/torbox=${encodeURIComponent(key)}` : '';
+      const url = `${TORRENTIO_BASE}${prefix}/stream/${isSeries ? 'series' : 'movie'}/${id}.json`;
+
+      LOG('Torrentio request', url.replace(/torbox=[^/]+/, 'torbox=***'));
+
+      const res = await fetch(url, { signal, cache: 'no-store' });
+      if (!res.ok) {
+        throw { type: 'network', status: res.status, message: `Torrentio HTTP ${res.status}` };
+      }
+      const json = await res.json();
+      const streams = Array.isArray(json?.streams) ? json.streams : [];
+      const out = new Map();
+
+      streams.forEach((s) => {
+        const hash = String(s?.infoHash || '').toLowerCase();
+        if (!/^[a-f0-9]{40}$/.test(hash)) return;
+        const title = String(s.title || s.name || '');
+        out.set(hash, {
+          InfoHash: hash,
+          MagnetUri: `magnet:?xt=urn:btih:${hash}`,
+          Title: title,
+          Size: parseTorrentioSize(title),
+          Seeders: parseTorrentioSeeders(title),
+          Peers: 0,
+          Tracker: 'torrentio',
+          PublishDate: '',
+          _directUrl: typeof s.url === 'string' ? s.url : '',
+          _fileIdx: Number.isInteger(s.fileIdx) ? s.fileIdx : null,
+          _filename: (s.behaviorHints && s.behaviorHints.filename) || ''
+        });
+      });
+
+      LOG('Torrentio streams', streams.length, 'with hash', out.size, 'direct', [...out.values()].filter((v) => v._directUrl).length);
+      return out;
+    }
+
+    // Both indexers run in parallel; Torrentio wins on hash collisions because
+    // it is the only one that can carry a ready-to-play TorBox link.
     async function searchPublicTrackers(movie, signal) {
+      const [tio, parsers] = await Promise.all([
+        searchTorrentio(movie, signal).catch((e) => {
+          LOG('Torrentio failed', e?.message || e);
+          return new Map();
+        }),
+        searchParsers(movie, signal).catch((e) => ({
+          error: e,
+          entriesByHash: new Map(),
+          diagnostics: []
+        }))
+      ]);
+
+      const merged = new Map();
+      (parsers.entriesByHash || new Map()).forEach((value, hash) => merged.set(hash, value));
+      tio.forEach((value, hash) => {
+        const existing = merged.get(hash);
+        if (!existing) {
+          merged.set(hash, value);
+          return;
+        }
+        merged.set(
+          hash,
+          Object.assign({}, existing, {
+            _directUrl: value._directUrl || existing._directUrl || '',
+            _fileIdx: value._fileIdx != null ? value._fileIdx : existing._fileIdx,
+            _filename: value._filename || existing._filename || ''
+          })
+        );
+      });
+
+      if (!merged.size) {
+        throw (
+          parsers.error || { type: 'api', message: translate('torbox_error_public_parsers_empty') }
+        );
+      }
+
+      const parser =
+        parsers.parser ||
+        (tio.size
+          ? { name: 'Torrentio', domain: 'torrentio.strem.fun', valid_count: tio.size, raw_count: tio.size }
+          : null);
+
+      return {
+        parser,
+        entriesByHash: merged,
+        diagnostics: parsers.diagnostics || []
+      };
+    }
+
+    async function searchParsers(movie, signal) {
       // Try parsers sequentially until we get valid results (Failover strategy).
       // TMDB TV cards carry the title in .name/.original_name and the date in
       // .first_air_date, not .title/.year — mirror generateSearchCombinations so
@@ -1857,8 +1985,11 @@ try {
         last_known_seeders: Number(raw?.Seeders) || 0,
         last_known_peers: Number(raw?.Peers || raw?.Leechers) || 0,
         trackers,
-        icon: isCached ? '⚡' : '☁️',
-        cached: isCached,
+        icon: raw?._directUrl ? '⚡' : isCached ? '⚡' : '☁️',
+        cached: isCached || !!raw?._directUrl,
+        direct_url: raw?._directUrl || '',
+        file_idx: Number.isInteger(raw?._fileIdx) ? raw._fileIdx : null,
+        filename: raw?._filename || '',
         publish_date: raw?.PublishDate || '',
         publish_timestamp: publishDate && isFinite(publishDate) ? publishDate.getTime() : 0,
         age: Utils.formatAge(raw?.PublishDate),
@@ -2622,6 +2753,23 @@ try {
       });
 
     const onTorrentClick = (item) => {
+      // Torrentio (with a TorBox key) already returns the final file link:
+      // skip add -> track -> file pick and play it right away.
+      if (item?.direct_url) {
+        try {
+          if (object.movie?.id) Lampa.Favorite.add('history', object.movie);
+        } catch (e) {
+          LOG('History save error', e);
+        }
+        const name = String(item.filename || item.raw_title || '').split('/').pop();
+        const config = _getPlayerConfig(item.direct_url, { name }, object.movie);
+        const started = Lampa.Player.play(config);
+        if (started === false) {
+          ErrorHandler.show('cancel', { message: translate('torbox_error_player_cancelled') });
+        }
+        return;
+      }
+
       if (!item?.magnet) {
         return ErrorHandler.show('validation', { message: translate('torbox_error_no_magnet') });
       }
@@ -2951,7 +3099,10 @@ try {
     const generateKeyForMovie = (customTitle) => {
       if (customTitle) return `torbox_custom_search_${customTitle}`;
       const mid = object.movie?.id || object.movie?.imdb_id || 'unknown';
-      return `torbox_hybrid_${mid}`;
+      const season = Number(object.movie?.season_number || object.movie?.season || 0) || 0;
+      const episode = Number(object.movie?.episode_number || object.movie?.episode || 0) || 0;
+      const tag = season || episode ? `_s${season}_e${episode}` : '';
+      return `torbox_hybrid_${mid}${tag}`;
     };
 
     const buildFilter = () => {
@@ -3019,7 +3170,61 @@ try {
       refreshFilterFocusBinding();
     };
 
-    const search = (force = false, customTitle = null) => {
+    const seriesInfo = () => {
+      const m = object.movie || {};
+      const isSeries =
+        m.media_type === 'tv' ||
+        !!m.first_air_date ||
+        !!m.number_of_seasons ||
+        (Array.isArray(m.seasons) && m.seasons.length > 0);
+      if (!isSeries) return null;
+
+      const seasons = Array.isArray(m.seasons) && m.seasons.length
+        ? m.seasons
+            .map((s) => ({
+              season: Number(s.season_number ?? s.season) || 0,
+              episodes: Number(s.episode_count ?? s.episodes) || 0
+            }))
+            .filter((s) => s.season > 0)
+        : Array.from({ length: Number(m.number_of_seasons) || 1 }, (_, i) => ({
+            season: i + 1,
+            episodes: Number(m.number_of_episodes) || 0
+          }));
+
+      return { seasons };
+    };
+
+    const pickEpisode = (onDone) => {
+      const info = seriesInfo();
+      if (!info || !info.seasons.length) {
+        onDone({ season: 1, episode: 1 });
+        return;
+      }
+
+      Lampa.Select.show({
+        title: translate('torbox_pick_season'),
+        items: info.seasons.map((s) => ({
+          title: `${translate('torbox_season')} ${s.season}`,
+          season: s.season,
+          episodes: s.episodes
+        })),
+        onSelect: (sel) => {
+          const count = sel.episodes || 24;
+          Lampa.Select.show({
+            title: `${translate('torbox_season')} ${sel.season}`,
+            items: Array.from({ length: count }, (_, i) => ({
+              title: `${translate('torbox_episode')} ${i + 1}`,
+              episode: i + 1
+            })),
+            onSelect: (ep) => onDone({ season: sel.season, episode: ep.episode }),
+            onBack: () => Lampa.Controller.toggle('content')
+          });
+        },
+        onBack: () => Lampa.Controller.toggle('content')
+      });
+    };
+
+    const search = (force = false, customTitle = null, episodePick = null) => {
       cancelActiveTorrentFlow();
       abort.abort();
       abort = new AbortController();
@@ -3031,9 +3236,13 @@ try {
       reset();
       state.search_query = customTitle;
 
-      const movieForSearch = customTitle
+      const baseMovie = customTitle
         ? { ...object.movie, title: customTitle, original_title: customTitle, year: '' }
         : object.movie;
+
+      const movieForSearch = episodePick
+        ? { ...baseMovie, season_number: episodePick.season, episode_number: episodePick.episode }
+        : baseMovie;
 
       const cacheKey = generateKeyForMovie(customTitle);
       const cached = !force && Cache.get(cacheKey);
@@ -3043,6 +3252,22 @@ try {
         build();
         this.activity.loader(false);
         return;
+      }
+
+      // Series: choose the episode first, then search. Without this the list
+      // opens for the show as a whole and finds the wrong torrents.
+      if (!customTitle && !episodePick) {
+        const info = seriesInfo();
+        const m = object.movie || {};
+        const hasEpisode = !!(m.season_number || m.season) && !!(m.episode_number || m.episode);
+        if (info && !hasEpisode) {
+          this.activity.loader(false);
+          empty(translate('torbox_pick_episode_hint'));
+          pickEpisode((pick) => {
+            search(force, null, pick);
+          });
+          return;
+        }
       }
 
       empty(
@@ -3512,6 +3737,10 @@ try {
         uk: 'Нічого не знайдено за вибраними фільтрами',
       },
       torbox_actions_title: { ru: 'Действия', en: 'Actions', uk: 'Дії' },
+      torbox_pick_season: { ru: 'Выберите сезон', en: 'Pick a season', uk: 'Оберіть сезон' },
+      torbox_season: { ru: 'Сезон', en: 'Season', uk: 'Сезон' },
+      torbox_episode: { ru: 'Серия', en: 'Episode', uk: 'Серія' },
+      torbox_pick_episode_hint: { ru: 'Выберите серию', en: 'Pick an episode', uk: 'Оберіть серію' },
       torbox_actions_copy_magnet: { ru: 'Скопировать Magnet', en: 'Copy magnet link', uk: 'Скопіювати Magnet' },
       torbox_actions_copied: {
         ru: 'Magnet‑ссылка скопирована',
