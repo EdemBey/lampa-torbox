@@ -950,13 +950,14 @@ try {
       const searchOriginal = (movie.original_title || movie.original_name || '').trim();
       const yearRaw = (movie.year || movie.release_date || movie.first_air_date || '').toString();
       const searchYear = yearRaw ? yearRaw.slice(0, 4) : '';
-      const queryBase = `${searchTitle} ${searchYear}`.trim();
-      const qsCommon = {
-        Query: queryBase,
-        title: searchTitle,
-        title_original: searchOriginal,
-        Category: '2000,5000', // Movies + TV
-      };
+      // The indexers understand an IMDb id in Query and return the right title
+      // without the noise of a text search. `Category`, `title` and `year` are
+      // not sent: a CSV Category makes the API answer with zero results, and
+      // `title=<id>` does the same.
+      const imdbId = String(movie.imdb_id || '').trim();
+      const qsCommon = /^tt\d+$/.test(imdbId)
+        ? { Query: imdbId }
+        : { Query: `${searchTitle} ${searchYear}`.trim() };
 
       // Merge custom parsers
       const customStr = Store.get('torbox_custom_parsers', '').trim();
@@ -1020,8 +1021,8 @@ try {
         if (signal.aborted) break;
         const qs = new URLSearchParams(qsCommon);
         if (p.key) qs.set('apikey', p.key);
-        if (searchYear) qs.set('year', searchYear);
         const url = `https://${p.url}/api/v2.0/indexers/all/results?${qs.toString()}`;
+        LOG('Parser query', p.name, qs.toString());
         const startedAt = Date.now();
 
         try {
