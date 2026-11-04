@@ -3211,37 +3211,142 @@ try {
       return { seasons };
     };
 
-    const pickEpisode = (onDone) => {
-      const info = seriesInfo();
-      if (!info || !info.seasons.length) {
-        onDone({ season: 1, episode: 1 });
-        return;
-      }
+    const lastEpisodeKey = () =>
+      `torbox_last_episode_${object.movie?.imdb_id || object.movie?.id || 'unknown'}`;
 
-      Lampa.Select.show({
-        title: translate('torbox_pick_season'),
-        items: info.seasons.map((s) => ({
-          title: `${translate('torbox_season')} ${s.season}`,
-          season: s.season,
-          episodes: s.episodes
-        })),
-        onSelect: (sel) => {
-          const count = sel.episodes || 24;
-          Lampa.Select.show({
-            title: `${translate('torbox_season')} ${sel.season}`,
-            items: Array.from({ length: count }, (_, i) => ({
-              title: `${translate('torbox_episode')} ${i + 1}`,
-              episode: i + 1
-            })),
-            onSelect: (ep) => onDone({ season: sel.season, episode: ep.episode }),
-            onBack: () => Lampa.Controller.toggle('content')
-          });
-        },
-        onBack: () => Lampa.Controller.toggle('content')
+    const saveLastEpisode = (pick) => {
+      try {
+        Store.set(lastEpisodeKey(), JSON.stringify(pick));
+      } catch {}
+    };
+
+    const lastWatchedEpisode = () => {
+      try {
+        const v = JSON.parse(Store.get(lastEpisodeKey(), 'null'));
+        return v && v.season && v.episode ? v : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const renderEpisodePicker = (seasons, onDone) => {
+      scroll.clear();
+      state.view = 'picker';
+
+      const last = lastWatchedEpisode();
+      let focusTarget = null;
+
+      seasons.forEach((seasonBlock) => {
+        const head = $(
+          `<div class="torbox-ep-season">${translate('torbox_season')} ${seasonBlock.season}</div>`
+        );
+        scroll.append(head);
+
+        seasonBlock.episodes.forEach((ep) => {
+          const isLast = last && last.season === ep.season && last.episode === ep.episode;
+          const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
+          const name = ep.title ? ` · ${Utils.escapeHtml(ep.title)}` : '';
+          const badge = isLast
+            ? `<span class="torbox-ep-continue">${translate('torbox_continue')}</span>`
+            : '';
+          const date = (ep.released || '').slice(0, 10);
+
+          const item = $(`
+            <div class="torbox-item torbox-ep-item">
+              <div class="torbox-ep-thumb">${
+                ep.thumb
+                  ? `<img src="${ep.thumb}" loading="lazy" alt="">`
+                  : '<span class="torbox-ep-thumb__empty"></span>'
+              }</div>
+              <div class="torbox-ep-body">
+                <div class="torbox-item__title">${Utils.escapeHtml(code)}${name}${badge}</div>
+                <div class="torbox-ep-sub">${Utils.escapeHtml(date)}</div>
+              </div>
+            </div>`);
+
+          item.on('hover:enter', () => onDone({ season: ep.season, episode: ep.episode }));
+          scroll.append(item);
+          if (isLast && !focusTarget) focusTarget = item;
+        });
       });
+
+      Lampa.Controller.toggle('content');
+      if (focusTarget && focusElement(focusTarget)) return;
+      focusFirstListItem();
+    };
+
+    const pickEpisode = (onDone) => {
+      const imdb = String(object.movie?.imdb_id || '').trim();
+      state.view = 'picker';
+      filter.render().hide();
+      empty(translate('torbox_episodes_loading'));
+
+      const fallback = () => {
+        const info = seriesInfo();
+        const seasons =
+          info && info.seasons.length
+            ? info.seasons.map((s) => ({
+                season: s.season,
+                episodes: Array.from({ length: s.episodes || 24 }, (_, i) => ({
+                  season: s.season,
+                  episode: i + 1,
+                  title: '',
+                  thumb: '',
+                  released: ''
+                }))
+              }))
+            : [];
+        if (!seasons.length) return onDone({ season: 1, episode: 1 });
+        renderEpisodePicker(seasons, onDone);
+      };
+
+      if (!/^tt\d+$/.test(imdb)) return fallback();
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+
+      fetch(`https://v3-cinemeta.strem.io/meta/series/${imdb}.json`, {
+        signal: controller.signal,
+        cache: 'no-store'
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          clearTimeout(timer);
+          const videos = json && json.meta && json.meta.videos;
+          if (!Array.isArray(videos) || !videos.length) return fallback();
+
+          const bySeason = new Map();
+          videos.forEach((v) => {
+            const season = Number(v.season) || 0;
+            const episode = Number(v.number) || 0;
+            if (!season || !episode) return;
+            if (!bySeason.has(season)) bySeason.set(season, []);
+            bySeason.get(season).push({
+              season,
+              episode,
+              title: v.name || '',
+              thumb: v.thumbnail || '',
+              released: v.released || ''
+            });
+          });
+
+          const seasons = [...bySeason.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([, episodes]) => ({
+              season: episodes[0].season,
+              episodes: episodes.sort((a, b) => a.episode - b.episode)
+            }));
+
+          renderEpisodePicker(seasons, onDone);
+        })
+        .catch(() => {
+          clearTimeout(timer);
+          fallback();
+        });
     };
 
     const search = (force = false, customTitle = null, episodePick = null) => {
+      state.view = 'torrents';
       cancelActiveTorrentFlow();
       abort.abort();
       abort = new AbortController();
@@ -3260,6 +3365,8 @@ try {
       const movieForSearch = episodePick
         ? { ...baseMovie, season_number: episodePick.season, episode_number: episodePick.episode }
         : baseMovie;
+
+      if (episodePick) saveLastEpisode(episodePick);
 
       const cacheKey = generateKeyForMovie(customTitle);
       const cached = !force && Cache.get(cacheKey);
@@ -3442,13 +3549,26 @@ try {
       if (!initialized) {
         initialized = true;
         this.initialize();
-      } else {
-        build();
-        Lampa.Controller.toggle('content');
+        return;
       }
+      // Re-entering a series: ask for the episode again instead of showing the
+      // torrent list left over from the previous visit.
+      if (seriesInfo()) {
+        search();
+        Lampa.Controller.toggle('content');
+        return;
+      }
+      build();
+      Lampa.Controller.toggle('content');
     };
 
     this.back = function () {
+      if (state.view === 'picker') {
+        cancelActiveTorrentFlow();
+        abort.abort();
+        Lampa.Activity.backward();
+        return;
+      }
       if (state.view === 'episodes') {
         state.view = 'torrents';
         filter.render().show();
@@ -3755,6 +3875,8 @@ try {
       },
       torbox_actions_title: { ru: 'Действия', en: 'Actions', uk: 'Дії' },
       torbox_pick_season: { ru: 'Выберите сезон', en: 'Pick a season', uk: 'Оберіть сезон' },
+      torbox_continue: { ru: 'Продолжить', en: 'Continue', uk: 'Продовжити' },
+      torbox_episodes_loading: { ru: 'Загрузка серий…', en: 'Loading episodes…', uk: 'Завантаження серій…' },
       torbox_season: { ru: 'Сезон', en: 'Season', uk: 'Сезон' },
       torbox_episode: { ru: 'Серия', en: 'Episode', uk: 'Серія' },
       torbox_pick_episode_hint: { ru: 'Выберите серию', en: 'Pick an episode', uk: 'Оберіть серію' },
@@ -4124,6 +4246,13 @@ try {
           .torbox-item__meta { font-size:.88em; opacity:.75; line-height:1.4; margin-bottom:.7em; }
           .torbox-item__progress { position:absolute; left:0; right:0; bottom:0; height:3px; background:rgba(255,255,255,.22); }
           .torbox-item__progress > div { height:100%; background:var(--color-primary); }
+          .torbox-ep-season { font-weight:700; font-size:1.05em; opacity:.85; margin:1.1em 0 .6em; }
+          .torbox-ep-item { display:flex; align-items:center; gap:.9em; padding:.5em; }
+          .torbox-ep-thumb { flex:0 0 9.4em; width:9.4em; aspect-ratio:16/9; border-radius:.45em; overflow:hidden; background:rgba(255,255,255,.08); }
+          .torbox-ep-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+          .torbox-ep-body { flex:1 1 auto; min-width:0; }
+          .torbox-ep-sub { font-size:.82em; opacity:.6; }
+          .torbox-ep-continue { display:inline-block; margin-left:.6em; padding:.1em .45em; border-radius:.35em; background:var(--color-primary); color:#000; font-size:.8em; font-weight:700; }
           .torbox-item__tech-bar { display:flex; flex-wrap:wrap; gap:.55em; margin:0 -1.2em -1em; padding:.6em 1.2em; background:rgba(0,0,0,.08); font-size:.84em; font-weight:500; transition:background .2s; }
           .torbox-item__tech-item { padding:.22em .55em; border-radius:.4em; color:#fff; }
           .torbox-item__tech-item--res { background:#3b82f6; }
