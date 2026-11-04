@@ -879,7 +879,8 @@ try {
           PublishDate: '',
           _directUrl: typeof s.url === 'string' ? s.url : '',
           _fileIdx: Number.isInteger(s.fileIdx) ? s.fileIdx : null,
-          _filename: (s.behaviorHints && s.behaviorHints.filename) || ''
+          _filename: (s.behaviorHints && s.behaviorHints.filename) || '',
+          _origin: 'torrentio'
         });
       });
 
@@ -915,7 +916,8 @@ try {
           Object.assign({}, existing, {
             _directUrl: value._directUrl || existing._directUrl || '',
             _fileIdx: value._fileIdx != null ? value._fileIdx : existing._fileIdx,
-            _filename: value._filename || existing._filename || ''
+            _filename: value._filename || existing._filename || '',
+            _origin: 'torrentio'
           })
         );
       });
@@ -1390,7 +1392,9 @@ try {
       sort: Store.get('torbox_sort_method', 'seeders'),
       filters: loadFilters(),
       last_hash: null,
-      view: 'torrents', // 'torrents' | 'episodes'
+      view: 'torrents', // 'torrents' | 'episodes' | 'picker'
+      pickerLevel: 'seasons', // 'seasons' | 'episodes'
+      picked: null, // { season, episode, title }
       current_torrent_data: null,
       search_query: null,
       show_only_cached: loadCachedOnly(),
@@ -2004,6 +2008,7 @@ try {
         trackers,
         icon: raw?._directUrl ? '⚡' : isCached ? '⚡' : '☁️',
         cached: isCached || !!raw?._directUrl,
+        origin: raw?._origin || '',
         direct_url: raw?._directUrl || '',
         file_idx: Number.isInteger(raw?._fileIdx) ? raw._fileIdx : null,
         filename: raw?._filename || '',
@@ -2976,6 +2981,15 @@ try {
 
       if (sort.reverse) list.reverse();
 
+      // Series: Torrentio returns single-episode releases while the trackers
+      // only have season packs, so keep its rows on top of any sort order.
+      if (seriesInfo()) {
+        const tio = [];
+        const rest = [];
+        list.forEach((item) => (item.origin === 'torrentio' ? tio : rest).push(item));
+        list = tio.concat(rest);
+      }
+
       // Guard: cap number of rendered items (performance on low-end)
       if (list.length > CONST.MAX_DRAW_ITEMS) list = list.slice(0, CONST.MAX_DRAW_ITEMS);
 
@@ -2996,6 +3010,14 @@ try {
         viewDataForMovie = viewObj?.[object.movie?.id];
       } catch {
         viewDataForMovie = null;
+      }
+
+      if (state.picked && seriesInfo()) {
+        const label =
+          `${translate('torbox_season')} ${state.picked.season} · ` +
+          `${translate('torbox_episode')} ${state.picked.episode}` +
+          (state.picked.title ? ` — ${Utils.escapeHtml(state.picked.title)}` : '');
+        scroll.append($(`<div class="torbox-ep-current">${label}</div>`));
       }
 
       if (!Array.isArray(items) || !items.length) {
@@ -3216,7 +3238,10 @@ try {
 
     const saveLastEpisode = (pick) => {
       try {
-        Store.set(lastEpisodeKey(), JSON.stringify(pick));
+        Store.set(
+          lastEpisodeKey(),
+          JSON.stringify({ season: pick.season, episode: pick.episode, title: pick.title || '' })
+        );
       } catch {}
     };
 
@@ -3229,45 +3254,36 @@ try {
       }
     };
 
-    const renderEpisodePicker = (seasons, onDone) => {
+    const makeBackItem = (label, onEnter) => {
+      const item = $(
+        `<div class="torbox-item selector torbox-back-item"><span class="torbox-back-item__icon">‹</span> ${Utils.escapeHtml(
+          label
+        )}</div>`
+      );
+      item.on('hover:enter', onEnter);
+      return item;
+    };
+
+    const renderSeasonList = (seasons, onPick, focusSeason) => {
       scroll.clear();
       state.view = 'picker';
+      state.pickerLevel = 'seasons';
+      if (filter && filter.render) filter.render().hide();
 
-      const last = lastWatchedEpisode();
+      const current = focusSeason || (state.picked && state.picked.season);
       let focusTarget = null;
 
-      seasons.forEach((seasonBlock) => {
-        const head = $(
-          `<div class="torbox-ep-season">${translate('torbox_season')} ${seasonBlock.season}</div>`
-        );
-        scroll.append(head);
-
-        seasonBlock.episodes.forEach((ep) => {
-          const isLast = last && last.season === ep.season && last.episode === ep.episode;
-          const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
-          const name = ep.title ? ` · ${Utils.escapeHtml(ep.title)}` : '';
-          const badge = isLast
-            ? `<span class="torbox-ep-continue">${translate('torbox_continue')}</span>`
-            : '';
-          const date = (ep.released || '').slice(0, 10);
-
-          const item = $(`
-            <div class="torbox-item selector torbox-ep-item">
-              <div class="torbox-ep-thumb">${
-                ep.thumb
-                  ? `<img src="${ep.thumb}" loading="lazy" alt="">`
-                  : '<span class="torbox-ep-thumb__empty"></span>'
-              }</div>
-              <div class="torbox-ep-body">
-                <div class="torbox-item__title">${Utils.escapeHtml(code)}${name}${badge}</div>
-                <div class="torbox-ep-sub">${Utils.escapeHtml(date)}</div>
-              </div>
-            </div>`);
-
-          item.on('hover:enter', () => onDone({ season: ep.season, episode: ep.episode }));
-          scroll.append(item);
-          if (isLast && !focusTarget) focusTarget = item;
-        });
+      seasons.forEach((block) => {
+        const item = $(`
+          <div class="torbox-item selector torbox-season-item">
+            <div class="torbox-ep-body">
+              <div class="torbox-item__title">${translate('torbox_season')} ${block.season}</div>
+              <div class="torbox-ep-sub">${block.episodes.length} ${translate('torbox_episodes_short')}</div>
+            </div>
+          </div>`);
+        item.on('hover:enter', () => onPick(block));
+        scroll.append(item);
+        if (current === block.season && !focusTarget) focusTarget = item;
       });
 
       Lampa.Controller.toggle('content');
@@ -3275,10 +3291,59 @@ try {
       focusFirstListItem();
     };
 
-    const pickEpisode = (onDone) => {
+    const renderEpisodeList = (seasons, block, onPick) => {
+      scroll.clear();
+      state.view = 'picker';
+      state.pickerLevel = 'episodes';
+      if (filter && filter.render) filter.render().hide();
+
+      scroll.append(
+        makeBackItem(translate('torbox_back_to_seasons'), () =>
+          renderSeasonList(seasons, (b) => renderEpisodeList(seasons, b, onPick), block.season)
+        )
+      );
+
+      const last = lastWatchedEpisode();
+      let focusTarget = null;
+
+      block.episodes.forEach((ep) => {
+        const isLast = last && last.season === ep.season && last.episode === ep.episode;
+        const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`;
+        const name = ep.title ? ` · ${Utils.escapeHtml(ep.title)}` : '';
+        const badge = isLast
+          ? `<span class="torbox-ep-continue">${translate('torbox_continue')}</span>`
+          : '';
+        const date = (ep.released || '').slice(0, 10);
+
+        const item = $(`
+          <div class="torbox-item selector torbox-ep-item">
+            <div class="torbox-ep-thumb">${
+              ep.thumb
+                ? `<img src="${ep.thumb}" loading="lazy" alt="">`
+                : '<span class="torbox-ep-thumb__empty"></span>'
+            }</div>
+            <div class="torbox-ep-body">
+              <div class="torbox-item__title">${Utils.escapeHtml(code)}${name}${badge}</div>
+              <div class="torbox-ep-sub">${Utils.escapeHtml(date)}</div>
+            </div>
+          </div>`);
+
+        item.on('hover:enter', () =>
+          onPick({ season: ep.season, episode: ep.episode, title: ep.title || '' })
+        );
+        scroll.append(item);
+        if (isLast && !focusTarget) focusTarget = item;
+      });
+
+      Lampa.Controller.toggle('content');
+      if (focusTarget && focusElement(focusTarget)) return;
+      focusFirstListItem();
+    };
+
+    const openEpisodePicker = (onPick, preferSeason) => {
       const imdb = String(object.movie?.imdb_id || '').trim();
       state.view = 'picker';
-      filter.render().hide();
+      if (filter && filter.render) filter.render().hide();
       empty(translate('torbox_episodes_loading'));
 
       const fallback = () => {
@@ -3296,8 +3361,12 @@ try {
                 }))
               }))
             : [];
-        if (!seasons.length) return onDone({ season: 1, episode: 1 });
-        renderEpisodePicker(seasons, onDone);
+        if (!seasons.length) return onPick({ season: 1, episode: 1 });
+        if (preferSeason) {
+          const block = seasons.find((x) => x.season === preferSeason) || seasons[0];
+          return renderEpisodeList(seasons, block, onPick);
+        }
+        renderSeasonList(seasons, (block) => renderEpisodeList(seasons, block, onPick));
       };
 
       if (!/^tt\d+$/.test(imdb)) return fallback();
@@ -3337,12 +3406,22 @@ try {
               episodes: episodes.sort((a, b) => a.episode - b.episode)
             }));
 
-          renderEpisodePicker(seasons, onDone);
+          if (preferSeason) {
+            const block = seasons.find((x) => x.season === preferSeason) || seasons[0];
+            return renderEpisodeList(seasons, block, onPick);
+          }
+          renderSeasonList(seasons, (block) => renderEpisodeList(seasons, block, onPick));
         })
         .catch(() => {
           clearTimeout(timer);
           fallback();
         });
+    };
+
+    // Reopen the picker on the season of the episode in use.
+    const showEpisodesForCurrent = () => {
+      const season = (state.picked && state.picked.season) || 1;
+      openEpisodePicker((pick) => search(false, null, pick), season);
     };
 
     const search = (force = false, customTitle = null, episodePick = null) => {
@@ -3362,11 +3441,25 @@ try {
         ? { ...object.movie, title: customTitle, original_title: customTitle, year: '' }
         : object.movie;
 
-      const movieForSearch = episodePick
-        ? { ...baseMovie, season_number: episodePick.season, episode_number: episodePick.episode }
+      // Prefer an explicit pick, then the episode Lampa passes, then the last
+      // one we played. Only ask when nothing is known.
+      let pick = episodePick;
+      if (!customTitle && !pick) {
+        const m = object.movie || {};
+        const sNum = Number(m.season_number || m.season || 0);
+        const eNum = Number(m.episode_number || m.episode || 0);
+        if (sNum && eNum) pick = { season: sNum, episode: eNum, title: '' };
+        else pick = lastWatchedEpisode();
+      }
+
+      const movieForSearch = pick
+        ? { ...baseMovie, season_number: pick.season, episode_number: pick.episode }
         : baseMovie;
 
-      if (episodePick) saveLastEpisode(episodePick);
+      if (pick) {
+        state.picked = pick;
+        saveLastEpisode(pick);
+      }
 
       const cacheKey = generateKeyForMovie(customTitle);
       const cached = !force && Cache.get(cacheKey);
@@ -3378,20 +3471,12 @@ try {
         return;
       }
 
-      // Series: choose the episode first, then search. Without this the list
-      // opens for the show as a whole and finds the wrong torrents.
-      if (!customTitle && !episodePick) {
-        const info = seriesInfo();
-        const m = object.movie || {};
-        const hasEpisode = !!(m.season_number || m.season) && !!(m.episode_number || m.episode);
-        if (info && !hasEpisode) {
-          this.activity.loader(false);
-          empty(translate('torbox_pick_episode_hint'));
-          pickEpisode((pick) => {
-            search(force, null, pick);
-          });
-          return;
-        }
+      // Nothing known: ask for season and episode before searching.
+      if (!customTitle && !pick && seriesInfo()) {
+        this.activity.loader(false);
+        empty(translate('torbox_pick_episode_hint'));
+        openEpisodePicker((chosen) => search(force, null, chosen));
+        return;
       }
 
       empty(
@@ -3515,7 +3600,7 @@ try {
         build();
         Lampa.Controller.toggle('content');
       };
-      filter.onBack = () => this.start();
+      filter.onBack = () => this.back();
       filter.onSearch = (v) => search(true, v);
       if (filter.addButtonBack) filter.addButtonBack();
 
@@ -3564,9 +3649,20 @@ try {
 
     this.back = function () {
       if (state.view === 'picker') {
+        if (state.pickerLevel === 'episodes') {
+          openEpisodePicker((pick) => search(false, null, pick));
+          return;
+        }
         cancelActiveTorrentFlow();
         abort.abort();
         Lampa.Activity.backward();
+        return;
+      }
+      // Torrents of a series: go up to that season's episodes.
+      if (seriesInfo() && state.picked) {
+        cancelActiveTorrentFlow();
+        abort.abort();
+        showEpisodesForCurrent();
         return;
       }
       if (state.view === 'episodes') {
@@ -3876,6 +3972,8 @@ try {
       torbox_actions_title: { ru: 'Действия', en: 'Actions', uk: 'Дії' },
       torbox_pick_season: { ru: 'Выберите сезон', en: 'Pick a season', uk: 'Оберіть сезон' },
       torbox_continue: { ru: 'Продолжить', en: 'Continue', uk: 'Продовжити' },
+      torbox_back_to_seasons: { ru: 'К выбору сезона', en: 'Back to seasons', uk: 'До сезонів' },
+      torbox_episodes_short: { ru: 'серий', en: 'episodes', uk: 'серій' },
       torbox_episodes_loading: { ru: 'Загрузка серий…', en: 'Loading episodes…', uk: 'Завантаження серій…' },
       torbox_season: { ru: 'Сезон', en: 'Season', uk: 'Сезон' },
       torbox_episode: { ru: 'Серия', en: 'Episode', uk: 'Серія' },
@@ -4253,6 +4351,10 @@ try {
           .torbox-ep-body { flex:1 1 auto; min-width:0; }
           .torbox-ep-sub { font-size:.82em; opacity:.6; }
           .torbox-ep-continue { display:inline-block; margin-left:.6em; padding:.1em .45em; border-radius:.35em; background:var(--color-primary); color:#000; font-size:.8em; font-weight:700; }
+          .torbox-ep-current { padding:.45em .6em; margin:0 0 .7em; border-left:3px solid var(--color-primary); font-weight:700; opacity:.95; }
+          .torbox-back-item { opacity:.8; }
+          .torbox-back-item__icon { display:inline-block; margin-right:.4em; font-size:1.2em; }
+          .torbox-season-item { padding:.7em .5em; }
           .torbox-item__tech-bar { display:flex; flex-wrap:wrap; gap:.55em; margin:0 -1.2em -1em; padding:.6em 1.2em; background:rgba(0,0,0,.08); font-size:.84em; font-weight:500; transition:background .2s; }
           .torbox-item__tech-item { padding:.22em .55em; border-radius:.4em; color:#fff; }
           .torbox-item__tech-item--res { background:#3b82f6; }
