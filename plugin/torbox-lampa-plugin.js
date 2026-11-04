@@ -3252,7 +3252,7 @@ try {
           const date = (ep.released || '').slice(0, 10);
 
           const item = $(`
-            <div class="torbox-item torbox-ep-item">
+            <div class="torbox-item selector torbox-ep-item">
               <div class="torbox-ep-thumb">${
                 ep.thumb
                   ? `<img src="${ep.thumb}" loading="lazy" alt="">`
