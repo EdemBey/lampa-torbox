@@ -26,10 +26,25 @@ try {
   // ───────────────────────────── Constants / Config ─────────────────────────────
   const VERSION = '51.2.14';
 
-  // Torrentio reads its TorBox key from the URL path, so it is safe to set here
-  // or in the plugin settings (localStorage key `torrentio_key`). Empty in git.
+  // Torrentio reads its TorBox key from the URL path. Keep it out of git:
+  // pass it as ?torrentio_key=... on the extension URL, set the localStorage
+  // key `torrentio_key`, or edit the constant below locally.
   const TORRENTIO_KEY = '';
   const TORRENTIO_BASE = 'https://torrentio.strem.fun';
+
+  const SCRIPT_KEY = (() => {
+    try {
+      const src = (document.currentScript && document.currentScript.src) || '';
+      const u = new URL(src);
+      return (
+        u.searchParams.get('torrentio_key') ||
+        u.searchParams.get('torrentio') ||
+        ''
+      ).replace(/\s+/g, '');
+    } catch (_) {
+      return '';
+    }
+  })();
 
   const CONST = {
     CACHE_LIMIT: 128,
@@ -814,7 +829,9 @@ try {
     }
 
     function torrentioKey() {
-      return String(Store.get('torrentio_key', '') || TORRENTIO_KEY || '')
+      return String(
+        Store.get('torrentio_key', '') || SCRIPT_KEY || TORRENTIO_KEY || ''
+      )
         .replace(/\s+/g, '')
         .trim();
     }
