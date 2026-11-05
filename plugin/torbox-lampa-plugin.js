@@ -875,7 +875,7 @@ try {
         const hash = String(s?.infoHash || '').toLowerCase();
         if (!/^[a-f0-9]{40}$/.test(hash)) return;
         const title = String(s.title || s.name || '');
-        out.set(hash, {
+        const entry = {
           InfoHash: hash,
           MagnetUri: `magnet:?xt=urn:btih:${hash}`,
           Title: title,
@@ -888,7 +888,20 @@ try {
           _fileIdx: Number.isInteger(s.fileIdx) ? s.fileIdx : null,
           _filename: (s.behaviorHints && s.behaviorHints.filename) || '',
           _origin: 'torrentio'
-        });
+        };
+
+        const existing = out.get(hash);
+        if (!existing) {
+          out.set(hash, entry);
+          return;
+        }
+        // The same season pack can arrive as several streams. Do not let a
+        // stream without a ready URL overwrite one that has it.
+        const merged = { ...existing };
+        if (!merged._directUrl) merged._directUrl = entry._directUrl;
+        if (!merged._filename) merged._filename = entry._filename;
+        if (merged._fileIdx == null) merged._fileIdx = entry._fileIdx;
+        out.set(hash, merged);
       });
 
       LOG('Torrentio streams', streams.length, 'with hash', out.size, 'direct', [...out.values()].filter((v) => v._directUrl).length);
@@ -2306,7 +2319,7 @@ try {
         })[0] || null;
     };
 
-    /** File of a season pack whose name carries this episode (S01E02, 1x02, "Серия 2"). */
+    /** File of a season pack whose name carries this episode (S01E02, 1x02, "_-_02_", "Серия 2"). */
     const matchEpisodeFile = (files, season, episode) => {
       if (!season || !episode) return null;
       const base = (name) => String(name || '').split('/').pop();
@@ -2314,7 +2327,13 @@ try {
         new RegExp(`s0?${season}[\\s._-]*e0?${episode}(?!\\d)`, 'i'),
         new RegExp(`\\b0?${season}x0?${episode}\\b`, 'i'),
         new RegExp(`(?:серия|эпизод)[\\s._-]*0?${episode}(?!\\d)`, 'i'),
-        new RegExp(`\\b0?${episode}\\s*(?:серия|эпизод)`, 'i')
+        new RegExp(`\\b0?${episode}\\s*(?:серия|эпизод)`, 'i'),
+        // Bracketed / dashed episode number: [02], (02), _-02-_, - 02 -.
+        // The negative lookahead keeps "2.0" and "1080"/"x265" from matching.
+        new RegExp(
+          `(?:^|[\\s._\\-\\[\\](){}])0?${episode}(?![\\d.,])(?:[\\s._\\-\\[\\](){}]|$)`,
+          'i'
+        )
       ];
       return files.find((file) => patterns.some((re) => re.test(base(file.name)))) || null;
     };
@@ -2423,9 +2442,15 @@ try {
     };
 
     const resolveFileDownloadLink = async (torrentData, file) => {
+      LOG('requestDl', torrentData.id, file?.id, file?.name);
       const dl = await Api.requestDl(torrentData.id, file.id);
       const link = normalizeSafeDownloadLink(dl?.url || dl?.data);
       if (!link) throw { type: 'api', message: translate('torbox_error_file_link') };
+      try {
+        LOG('requestDl host', new URL(link).host);
+      } catch (e) {
+        LOG('requestDl host parse failed', e?.message || e);
+      }
       return link;
     };
 
@@ -2809,8 +2834,6 @@ try {
         drawEpisodes(torrentData, preferredFile);
       };
 
-      // A Torrentio release names the exact episode file; play it instead of
-      // showing a pack with dozens of files.
       const wantedFile = String(torrentData.__preferredFile || '')
         .split('/')
         .pop()
@@ -2821,6 +2844,32 @@ try {
           .pop()
           .toLowerCase();
 
+      // Season packs: the episode picked in our own UI wins over Torrentio's
+      // preferred file. Otherwise `__preferredFile` may still point at E01 and
+      // every episode replays the first file.
+      if (state.picked) {
+        const matched = matchEpisodeFile(vids, state.picked.season, state.picked.episode);
+        LOG(
+          'selectFile',
+          `S${state.picked.season}E${state.picked.episode}`,
+          'wanted',
+          wantedFile,
+          'matched',
+          matched?.name || null
+        );
+        if (matched) {
+          play(torrentData, matched);
+          return;
+        }
+        // A pack without the requested episode must not silently replay the
+        // first file; let the user see the real file list.
+        if (vids.length > 1) {
+          openFileList();
+          return;
+        }
+      }
+
+      // Torrentio release names the exact episode file; play it for single-file releases.
       if (wantedFile) {
         const exact = vids.find((file) => baseName(file.name) === wantedFile);
         if (exact) {
@@ -2830,16 +2879,6 @@ try {
         const idx = Number(torrentData.__fileIdx);
         if (Number.isInteger(idx) && idx >= 0 && vids[idx]) {
           play(torrentData, vids[idx]);
-          return;
-        }
-      }
-
-      // Season packs: the file name carries the episode, which is more reliable
-      // than the remembered file id (that one is shared by the whole torrent).
-      if (isSeriesContent() && state.picked) {
-        const matched = matchEpisodeFile(vids, state.picked.season, state.picked.episode);
-        if (matched) {
-          play(torrentData, matched);
           return;
         }
       }
@@ -2981,7 +3020,10 @@ try {
     const onTorrentClick = (item) => {
       // Torrentio (with a TorBox key) already returns the final file link:
       // skip add -> track -> file pick and play it right away.
-      if (item?.direct_url) {
+      // For series this URL is often tied to one file of a season pack and
+      // cannot be switched to another episode, so use the TorBox flow there.
+      const seriesRequest = isSeriesContent() || !!state.picked;
+      if (item?.direct_url && !seriesRequest) {
         try {
           if (object.movie?.id) Lampa.Favorite.add('history', object.movie);
         } catch (e) {
@@ -2994,6 +3036,9 @@ try {
           ErrorHandler.show('cancel', { message: translate('torbox_error_player_cancelled') });
         }
         return;
+      }
+      if (item?.direct_url) {
+        LOG('Series direct URL skipped, using TorBox flow', item.filename || item.raw_title || '');
       }
 
       if (!item?.magnet) {
