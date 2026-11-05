@@ -38,7 +38,9 @@ function m3u(items) {
       const title = String(i.title || 'Video').replace(/\n/g, ' ').slice(0, 200);
       return `#EXTINF:-1,${title}\n${i.url}`;
     });
-  return `#EXTM3U\n#EXT-X-VERSION:3\n${lines.join('\n')}\n`;
+  // No #EXT-X-* tags: DDD treats any HLS tag as an HLS manifest and hands the
+  // file to ExoPlayer's HLS parser, which rejects M3U entries.
+  return `#EXTM3U\n${lines.join('\n')}\n`;
 }
 
 function prune() {
@@ -77,14 +79,17 @@ const server = http.createServer((req, res) => {
       prune();
       const id = crypto.randomBytes(6).toString('hex');
       playlists.set(id, { text: m3u(items), exp: Date.now() + TTL_MS });
+      console.log(`[m3u] POST ${items.length} items -> ${id}`);
       const base = `http://${req.headers.host || `127.0.0.1:${PORT}`}`;
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ url: `${base}/p/${id}.m3u` }));
+      res.end(JSON.stringify({ url: `${base}/p/${id}.m3u8` }));
     });
     return;
   }
 
-  const match = url.pathname.match(/^\/p\/([a-f0-9]+)\.m3u$/);
+  // .m3u8 so Android intents reach DDD Player (its filters only match *.m3u8
+  // and mpegurl types); the body has no #EXT-X- tags, so DDD parses it as M3U.
+  const match = url.pathname.match(/^\/p\/([a-f0-9]+)\.m3u8$/);
   if (match) {
     const entry = playlists.get(match[1]);
     if (!entry || entry.exp < Date.now()) {
@@ -92,7 +97,8 @@ const server = http.createServer((req, res) => {
       res.end('playlist expired');
       return;
     }
-    res.writeHead(200, { 'content-type': TYPES['.m3u'], 'cache-control': 'no-store' });
+    console.log(`[m3u] GET ${match[1]} (${entry.text.split('\n').length - 2} items)`);
+    res.writeHead(200, { 'content-type': TYPES['.m3u8'], 'cache-control': 'no-store' });
     res.end(entry.text);
     return;
   }
