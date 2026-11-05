@@ -3480,6 +3480,12 @@ try {
       }
     };
 
+    const bindPickerFocus = (item) =>
+      item.on('hover:focus', (e) => {
+        const el = $(e.currentTarget);
+        if (typeof scroll.update === 'function') scroll.update(el, true);
+      });
+
     const makeBackItem = (label, onEnter) => {
       const item = $(
         `<div class="torbox-item selector torbox-back-item"><span class="torbox-back-item__icon">‹</span> ${Utils.escapeHtml(
@@ -3487,6 +3493,7 @@ try {
         )}</div>`
       );
       item.on('hover:enter', onEnter);
+      bindPickerFocus(item);
       return item;
     };
 
@@ -3508,6 +3515,7 @@ try {
             </div>
           </div>`);
         item.on('hover:enter', () => onPick(block));
+        bindPickerFocus(item);
         scroll.append(item);
         if (current === block.season && !focusTarget) focusTarget = item;
       });
@@ -3557,6 +3565,7 @@ try {
         item.on('hover:enter', () =>
           onPick({ season: ep.season, episode: ep.episode, title: ep.title || '' })
         );
+        bindPickerFocus(item);
         scroll.append(item);
         if (isLast && !focusTarget) focusTarget = item;
       });
