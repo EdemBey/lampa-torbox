@@ -2312,9 +2312,41 @@ try {
       return files.find((file) => patterns.some((re) => re.test(base(file.name)))) || null;
     };
 
+    // Resolved file links are valid for a while; reuse them so reopening a
+    // pack (or going back in Lampa) does not re-ask TorBox for everything.
+    const DL_CACHE_TTL = 15 * 60 * 1000;
+    const dlCache = new Map();
+
+    const cachedFileLink = (torrentId, fileId) => {
+      const key = `${torrentId}:${fileId}`;
+      const hit = dlCache.get(key);
+      if (!hit) return '';
+      if (hit.exp < Date.now()) {
+        dlCache.delete(key);
+        return '';
+      }
+      return hit.url;
+    };
+
+    const fileLink = async (torrentId, file, currentFile, currentLink) => {
+      if (currentFile && String(file.id) === String(currentFile.id)) return currentLink;
+      const known = cachedFileLink(torrentId, file.id);
+      if (known) return known;
+      try {
+        const dl = await Api.requestDl(torrentId, file.id);
+        const url = normalizeSafeDownloadLink(dl?.url || dl?.data) || '';
+        if (url) {
+          if (dlCache.size > 400) dlCache.clear();
+          dlCache.set(`${torrentId}:${file.id}`, { url, exp: Date.now() + DL_CACHE_TTL });
+        }
+        return url;
+      } catch (e) {
+        return '';
+      }
+    };
+
     /** Links for every video file of a pack, for the player's playlist. */
-    const buildPlaylist = async (torrentData, currentFile, currentLink) => {
-      if (Store.get('torbox_playlist', '1') === '0') return [];
+    const buildPlaylist = async (torrentData, currentFile, currentLink, timeoutMs = 8000) => {
       const videoExtensions = getVideoExtensions();
       const videoRegex = new RegExp(
         `\\.(${videoExtensions.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`,
@@ -2328,22 +2360,44 @@ try {
 
       if (vids.length < 2) return [];
 
-      const items = [];
-      for (const f of vids) {
-        let url = '';
-        if (currentFile && String(f.id) === String(currentFile.id)) {
-          url = currentLink;
-        } else {
-          try {
-            const dl = await Api.requestDl(torrentData.id, f.id);
-            url = normalizeSafeDownloadLink(dl?.url || dl?.data) || '';
-          } catch (e) {
-            url = '';
-          }
+      // A few at a time: sequential cost one round-trip per file, which is what
+      // made a 12-episode pack take 10-15 s before playback started.
+      const urls = new Array(vids.length).fill('');
+      const deadline = Date.now() + timeoutMs;
+      let cursor = 0;
+
+      const worker = async () => {
+        while (cursor < vids.length) {
+          const idx = cursor++;
+          if (Date.now() > deadline) return;
+          urls[idx] = await fileLink(torrentData.id, vids[idx], currentFile, currentLink);
         }
-        if (url) items.push({ title: String(f.name || '').split('/').pop(), url });
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(4, vids.length) }, () => worker())
+      );
+
+      return vids
+        .map((file, idx) =>
+          urls[idx] ? { title: String(file.name || '').split('/').pop(), url: urls[idx] } : null
+        )
+        .filter(Boolean);
+    };
+
+    const playlistMode = () => {
+      const mode = Store.get('torbox_playlist_mode', 'auto');
+      return ['auto', 'on', 'off'].includes(mode) ? mode : 'auto';
+    };
+
+    /** Lampa keeps the external player choice in the `player` setting. */
+    const usesExternalPlayer = () => {
+      try {
+        const p = Lampa.Storage.field('player');
+        return !!p && p !== 'inner';
+      } catch (e) {
+        return false;
       }
-      return items;
     };
 
     const normalizeSafeDownloadLink = (link) => {
@@ -2575,11 +2629,19 @@ try {
 
         const playbackConfig = _getPlayerConfig(link, file, object.movie);
 
-        // A season pack goes to the player as a playlist: the chosen episode
+        // A season pack can go to the player as a playlist: the chosen episode
         // starts, the rest of the season is one "next" away.
-        if (isSeriesContent() && Array.isArray(torrentData?.files) && torrentData.files.length > 1) {
+        const mode = playlistMode();
+        const external = usesExternalPlayer();
+        const hasPack =
+          isSeriesContent() && Array.isArray(torrentData?.files) && torrentData.files.length > 1;
+        const wantPlaylist = hasPack && (mode === 'on' || (mode === 'auto' && !external));
+
+        // An external player receives the list once, inside the launch intent,
+        // so it has to be ready before start. Bound the wait.
+        if (wantPlaylist && external) {
           try {
-            const list = await buildPlaylist(torrentData, file, link);
+            const list = await buildPlaylist(torrentData, file, link, 6000);
             if (list.length > 1) playbackConfig.playlist = list;
           } catch (e) {
             LOG('Playlist build failed', e?.message || e);
@@ -2593,6 +2655,18 @@ try {
         }
 
         if (pendingPlayback) pendingPlayback.started = true;
+
+        // The built-in player can take the list later, so playback is not held
+        // back by the extra requests.
+        if (wantPlaylist && !external) {
+          buildPlaylist(torrentData, file, link, 20000)
+            .then((list) => {
+              if (list.length > 1 && Lampa.Player && typeof Lampa.Player.playlist === 'function') {
+                Lampa.Player.playlist(list);
+              }
+            })
+            .catch((e) => LOG('Playlist build failed', e?.message || e));
+        }
 
         // Mark watched as early as possible after successful player start.
         // We still also mark on Player.callback; this early mark improves UX robustness.
@@ -4099,6 +4173,15 @@ try {
       torbox_back_to_seasons: { ru: 'К выбору сезона', en: 'Back to seasons', uk: 'До сезонів' },
       torbox_episodes_short: { ru: 'серий', en: 'episodes', uk: 'серій' },
       torbox_pack: { ru: 'сезон/сериал', en: 'season pack', uk: 'сезон/серіал' },
+      torbox_settings_playlist_name: { ru: 'Плейлист сезона', en: 'Season playlist', uk: 'Плейлист сезону' },
+      torbox_settings_playlist_desc: {
+        ru: 'Авто: собирать только для встроенного плеера. Внешний плеер получает список один раз при запуске.',
+        en: 'Auto: build only for the built-in player. An external player gets the list once, at launch.',
+        uk: 'Авто: збирати лише для вбудованого плеєра.'
+      },
+      torbox_settings_playlist_auto: { ru: 'Авто', en: 'Auto', uk: 'Авто' },
+      torbox_settings_playlist_on: { ru: 'Включён', en: 'On', uk: 'Увімкнено' },
+      torbox_settings_playlist_off: { ru: 'Выключен', en: 'Off', uk: 'Вимкнено' },
       torbox_episodes_loading: { ru: 'Загрузка серий…', en: 'Loading episodes…', uk: 'Завантаження серій…' },
       torbox_season: { ru: 'Сезон', en: 'Season', uk: 'Сезон' },
       torbox_episode: { ru: 'Серия', en: 'Episode', uk: 'Серія' },
@@ -4386,6 +4469,20 @@ try {
           set: (v) => (Config.proxyUrl = String(v || '').trim()),
         },
         {
+          key: 'torbox_playlist_mode',
+          name: translate('torbox_settings_playlist_name'),
+          desc: translate('torbox_settings_playlist_desc'),
+          type: 'select',
+          values: {
+            auto: translate('torbox_settings_playlist_auto'),
+            on: translate('torbox_settings_playlist_on'),
+            off: translate('torbox_settings_playlist_off'),
+          },
+          default: 'auto',
+          get: () => Store.get('torbox_playlist_mode', 'auto'),
+          set: (v) => Store.set('torbox_playlist_mode', ['auto', 'on', 'off'].includes(v) ? v : 'auto'),
+        },
+        {
           key: 'torbox_api_key',
           name: translate('torbox_settings_api_name'),
           desc: translate('torbox_settings_api_desc'),
@@ -4401,7 +4498,7 @@ try {
         let currentField = null;
         Lampa.SettingsApi.addParam({
           component: 'torbox_enh',
-          param: { name: p.key, type: p.type, values: '', default: p.default },
+          param: { name: p.key, type: p.type, values: p.values || '', default: p.default },
           field: { name: p.name, description: p.desc },
           onChange: (v) => {
             const value = typeof v === 'object' ? v.value : v;
