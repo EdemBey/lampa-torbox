@@ -8,7 +8,7 @@ MaxVol/Jacred остались вторым источником.
 Ссылка для Lampa (jsDelivr, отдаёт `application/javascript`):
 
 ```
-https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
+https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox-test@master/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
 ```
 
 Lampa → Настройки → Расширения → Добавить расширение → вставить ссылку.
