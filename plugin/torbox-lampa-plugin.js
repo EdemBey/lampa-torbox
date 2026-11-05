@@ -2662,17 +2662,16 @@ try {
           try {
             const list = await buildPlaylist(torrentData, file, link, 6000);
             if (list.length > 1) {
-              // DDD expands an .m3u8 into a playlist and always starts with its
-              // first entry (start_index is ignored on that path), so rotate:
-              // the chosen episode leads, the rest of the season follows in
-              // order and wraps to the beginning.
+              // Season stays in order, the episode is chosen with start_index:
+              // prev/next work. Needs the patched DDD Player (EdemBey/dddplayer),
+              // upstream ignores start_index when it expands a single .m3u8.
               const currentName = String(file?.name || '').split('/').pop();
               const at = list.findIndex((item) => item.title === currentName);
-              const rotated = at > 0 ? list.slice(at).concat(list.slice(0, at)) : list;
-              const url = await publishPlaylist(rotated);
+              const url = await publishPlaylist(list);
               if (url) {
                 playbackConfig.url = url;
                 playbackConfig.title = currentName || playbackConfig.title;
+                if (at > 0) playbackConfig.start_index = at;
               } else {
                 playbackConfig.playlist = list;
               }
