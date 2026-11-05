@@ -2378,6 +2378,7 @@ try {
     const TB_CDN_FALLBACK_HOSTS = [
       '316', '318', '319', '321', '322', '324', '326', '328', '329', '330', '331'
     ].map((n) => `nexus-${n}.ceur.tb-cdn.st`);
+    let liveCdnHost = '';
 
     /** HEAD is a CORS-simple request and does not download the file. */
     const cdnHostAlive = async (host, sampleUrl) => {
@@ -2389,7 +2390,7 @@ try {
         return false;
       }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2500);
+      const timer = setTimeout(() => controller.abort(), 1200);
       try {
         const res = await fetch(target.href, {
           method: 'HEAD',
@@ -2420,12 +2421,26 @@ try {
       });
       if (!sample) return '';
       const candidates = [...hosts, ...TB_CDN_FALLBACK_HOSTS.filter((h) => !hosts.includes(h))];
-      const results = await Promise.all(
-        candidates.map((host) => cdnHostAlive(host, sample).then((ok) => (ok ? host : '')))
-      );
-      const host = results.find(Boolean) || '';
-      if (host) LOG('Live CDN host', host);
-      return host;
+      // First live host wins. Waiting for every dead node made startup feel
+      // like a 5-second pause; dead nodes usually fail in milliseconds.
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = (host) => {
+          if (done) return;
+          done = true;
+          if (host) LOG('Live CDN host', host);
+          resolve(host);
+        };
+        const timer = setTimeout(() => finish(''), 1500);
+        candidates.forEach((host) => {
+          cdnHostAlive(host, sample).then((ok) => {
+            if (ok) {
+              clearTimeout(timer);
+              finish(host);
+            }
+          });
+        });
+      });
     };
 
     const rewriteCdnHost = (url, host) => {
@@ -2447,15 +2462,22 @@ try {
       } catch (e) {
         return url;
       }
+      if (liveCdnHost) return rewriteCdnHost(url, liveCdnHost);
       const host = await pickLiveCdnHost([url]);
-      return host ? rewriteCdnHost(url, host) : url;
+      if (!host) return url;
+      liveCdnHost = host;
+      return rewriteCdnHost(url, host);
     };
 
     const ensureLivePlaylist = async (items) => {
       if (!Array.isArray(items) || !items.length) return items;
+      if (liveCdnHost) {
+        return items.map((item) => ({ ...item, url: rewriteCdnHost(item.url, liveCdnHost) }));
+      }
       const urls = items.map((item) => item.url).filter(Boolean);
       const host = await pickLiveCdnHost(urls);
       if (!host) return items;
+      liveCdnHost = host;
       return items.map((item) => ({ ...item, url: rewriteCdnHost(item.url, host) }));
     };
 
@@ -2492,7 +2514,7 @@ try {
       };
 
       await Promise.all(
-        Array.from({ length: Math.min(4, vids.length) }, () => worker())
+        Array.from({ length: Math.min(8, vids.length) }, () => worker())
       );
 
       const items = vids
