@@ -2371,6 +2371,94 @@ try {
       }
     };
 
+    // TorBox returns a specific nexus-* CDN node; nodes die independently and
+    // the same /dld/<id>?token=... path works on the other nodes. Pick a live
+    // one before handing URLs to the player or putting them in a playlist.
+    const TB_CDN_RE = /^nexus-\d+\.ceur\.tb-cdn\.st$/i;
+    const TB_CDN_FALLBACK_HOSTS = [
+      '316', '318', '319', '321', '322', '324', '326', '328', '329', '330', '331'
+    ].map((n) => `nexus-${n}.ceur.tb-cdn.st`);
+
+    /** HEAD is a CORS-simple request and does not download the file. */
+    const cdnHostAlive = async (host, sampleUrl) => {
+      let target;
+      try {
+        target = new URL(sampleUrl);
+        target.host = host;
+      } catch (e) {
+        return false;
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      try {
+        const res = await fetch(target.href, {
+          method: 'HEAD',
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        return res.ok;
+      } catch (e) {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    const pickLiveCdnHost = async (urls) => {
+      if (!Array.isArray(urls) || !urls.length) return '';
+      let sample = '';
+      const hosts = [];
+      urls.forEach((url) => {
+        try {
+          const u = new URL(url);
+          if (!TB_CDN_RE.test(u.host)) return;
+          if (!sample) sample = url;
+          if (!hosts.includes(u.host)) hosts.push(u.host);
+        } catch (e) {
+          /* ignore malformed URLs */
+        }
+      });
+      if (!sample) return '';
+      const candidates = [...hosts, ...TB_CDN_FALLBACK_HOSTS.filter((h) => !hosts.includes(h))];
+      const results = await Promise.all(
+        candidates.map((host) => cdnHostAlive(host, sample).then((ok) => (ok ? host : '')))
+      );
+      const host = results.find(Boolean) || '';
+      if (host) LOG('Live CDN host', host);
+      return host;
+    };
+
+    const rewriteCdnHost = (url, host) => {
+      if (!url || !host) return url;
+      try {
+        const u = new URL(url);
+        if (!TB_CDN_RE.test(u.host)) return url;
+        u.host = host;
+        return u.href;
+      } catch (e) {
+        return url;
+      }
+    };
+
+    const ensureLiveCdnUrl = async (url) => {
+      if (!url) return url;
+      try {
+        if (!TB_CDN_RE.test(new URL(url).host)) return url;
+      } catch (e) {
+        return url;
+      }
+      const host = await pickLiveCdnHost([url]);
+      return host ? rewriteCdnHost(url, host) : url;
+    };
+
+    const ensureLivePlaylist = async (items) => {
+      if (!Array.isArray(items) || !items.length) return items;
+      const urls = items.map((item) => item.url).filter(Boolean);
+      const host = await pickLiveCdnHost(urls);
+      if (!host) return items;
+      return items.map((item) => ({ ...item, url: rewriteCdnHost(item.url, host) }));
+    };
+
     /** Links for every video file of a pack, for the player's playlist. */
     const buildPlaylist = async (torrentData, currentFile, currentLink, timeoutMs = 8000, onProgress) => {
       const videoExtensions = getVideoExtensions();
@@ -2407,11 +2495,12 @@ try {
         Array.from({ length: Math.min(4, vids.length) }, () => worker())
       );
 
-      return vids
+      const items = vids
         .map((file, idx) =>
           urls[idx] ? { title: String(file.name || '').split('/').pop(), url: urls[idx] } : null
         )
         .filter(Boolean);
+      return ensureLivePlaylist(items);
     };
 
     const playlistMode = () => {
@@ -2660,7 +2749,7 @@ try {
 
         if (object.movie?.id) Lampa.Favorite.add('history', object.movie);
 
-        const link = await resolveFileDownloadLink(torrentData, file);
+        const link = await ensureLiveCdnUrl(await resolveFileDownloadLink(torrentData, file));
 
         const playbackConfig = _getPlayerConfig(link, file, object.movie);
 
@@ -3017,7 +3106,7 @@ try {
         loop();
       });
 
-    const onTorrentClick = (item) => {
+    const onTorrentClick = async (item) => {
       // Torrentio (with a TorBox key) already returns the final file link:
       // skip add -> track -> file pick and play it right away.
       // For series this URL is often tied to one file of a season pack and
@@ -3030,7 +3119,8 @@ try {
           LOG('History save error', e);
         }
         const name = String(item.filename || item.raw_title || '').split('/').pop();
-        const config = _getPlayerConfig(item.direct_url, { name }, object.movie);
+        const directLink = await ensureLiveCdnUrl(item.direct_url);
+        const config = _getPlayerConfig(directLink, { name }, object.movie);
         const started = Lampa.Player.play(config);
         if (started === false) {
           ErrorHandler.show('cancel', { message: translate('torbox_error_player_cancelled') });
