@@ -2067,7 +2067,7 @@ try {
       // would highlight/focus an unrelated file in a different release.
       const preferredFocusId =
         preferredFile && preferredFile.id !== undefined && preferredFile.id !== null ? String(preferredFile.id) : null;
-      const storedLastPlayedId = Store.get(`torbox_last_played_file_${mid}_${torrentKey}`, null);
+      const storedLastPlayedId = Store.get(`torbox_last_played_file_${mid}_${torrentKey}${episodeScope()}`, null);
 
       const videoExtensions = getVideoExtensions();
       const videoRegex = new RegExp(
@@ -2235,14 +2235,21 @@ try {
 
       Store.set(key, JSON.stringify(normalized));
       // Match drawEpisodes' torrent-scoped read (file ids are per-torrent).
-      if (fileKey) Store.set(`torbox_last_played_file_${mid}_${torrentHashOrId}`, fileKey);
+      if (fileKey) Store.set(`torbox_last_played_file_${mid}_${torrentHashOrId}${episodeScope()}`, fileKey);
       return changed;
     };
+
+    const episodeScope = () =>
+      state.picked && state.picked.season && state.picked.episode
+        ? `_s${state.picked.season}e${state.picked.episode}`
+        : '';
 
     const preferredFileStorageKey = (torrentData) => {
       const mid = object.movie.imdb_id || object.movie.id || 'unknown';
       const torrentKey = torrentData?.hash || torrentData?.id || 'unknown';
-      return `torbox_preferred_file_${mid}_${torrentKey}`;
+      // A season pack is one torrent: without the episode in the key the file
+      // watched last wins and every episode replays it.
+      return `torbox_preferred_file_${mid}_${torrentKey}${episodeScope()}`;
     };
 
     const rememberPreferredFile = (torrentData, file) => {
@@ -2290,6 +2297,53 @@ try {
           const nameB = String(b?.name || '');
           return nameA.localeCompare(nameB);
         })[0] || null;
+    };
+
+    /** File of a season pack whose name carries this episode (S01E02, 1x02, "Серия 2"). */
+    const matchEpisodeFile = (files, season, episode) => {
+      if (!season || !episode) return null;
+      const base = (name) => String(name || '').split('/').pop();
+      const patterns = [
+        new RegExp(`s0?${season}[\\s._-]*e0?${episode}(?!\\d)`, 'i'),
+        new RegExp(`\\b0?${season}x0?${episode}\\b`, 'i'),
+        new RegExp(`(?:серия|эпизод)[\\s._-]*0?${episode}(?!\\d)`, 'i'),
+        new RegExp(`\\b0?${episode}\\s*(?:серия|эпизод)`, 'i')
+      ];
+      return files.find((file) => patterns.some((re) => re.test(base(file.name)))) || null;
+    };
+
+    /** Links for every video file of a pack, for the player's playlist. */
+    const buildPlaylist = async (torrentData, currentFile, currentLink) => {
+      if (Store.get('torbox_playlist', '1') === '0') return [];
+      const videoExtensions = getVideoExtensions();
+      const videoRegex = new RegExp(
+        `\\.(${videoExtensions.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`,
+        'i'
+      );
+
+      const vids = (Array.isArray(torrentData?.files) ? torrentData.files : [])
+        .filter((f) => videoRegex.test(f?.name || ''))
+        .slice()
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true }));
+
+      if (vids.length < 2) return [];
+
+      const items = [];
+      for (const f of vids) {
+        let url = '';
+        if (currentFile && String(f.id) === String(currentFile.id)) {
+          url = currentLink;
+        } else {
+          try {
+            const dl = await Api.requestDl(torrentData.id, f.id);
+            url = normalizeSafeDownloadLink(dl?.url || dl?.data) || '';
+          } catch (e) {
+            url = '';
+          }
+        }
+        if (url) items.push({ title: String(f.name || '').split('/').pop(), url });
+      }
+      return items;
     };
 
     const normalizeSafeDownloadLink = (link) => {
@@ -2521,6 +2575,17 @@ try {
 
         const playbackConfig = _getPlayerConfig(link, file, object.movie);
 
+        // A season pack goes to the player as a playlist: the chosen episode
+        // starts, the rest of the season is one "next" away.
+        if (isSeriesContent() && Array.isArray(torrentData?.files) && torrentData.files.length > 1) {
+          try {
+            const list = await buildPlaylist(torrentData, file, link);
+            if (list.length > 1) playbackConfig.playlist = list;
+          } catch (e) {
+            LOG('Playlist build failed', e?.message || e);
+          }
+        }
+
         const startResult = Lampa.Player.play(playbackConfig);
         playbackStarted = startResult !== false;
         if (!playbackStarted) {
@@ -2665,6 +2730,16 @@ try {
         const idx = Number(torrentData.__fileIdx);
         if (Number.isInteger(idx) && idx >= 0 && vids[idx]) {
           play(torrentData, vids[idx]);
+          return;
+        }
+      }
+
+      // Season packs: the file name carries the episode, which is more reliable
+      // than the remembered file id (that one is shared by the whole torrent).
+      if (isSeriesContent() && state.picked) {
+        const matched = matchEpisodeFile(vids, state.picked.season, state.picked.episode);
+        if (matched) {
+          play(torrentData, matched);
           return;
         }
       }
