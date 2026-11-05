@@ -3242,11 +3242,18 @@ try {
       scroll.reset();
     };
 
-    const generateKeyForMovie = (customTitle) => {
+    const generateKeyForMovie = (customTitle, pick = null) => {
       if (customTitle) return `torbox_custom_search_${customTitle}`;
       const mid = object.movie?.id || object.movie?.imdb_id || 'unknown';
-      const season = Number(object.movie?.season_number || object.movie?.season || 0) || 0;
-      const episode = Number(object.movie?.episode_number || object.movie?.episode || 0) || 0;
+      // The episode picked in our own UI lives in `pick`, not in object.movie.
+      // Keying on object.movie alone gave every episode the same cache entry,
+      // so E1 replayed E2's list (and its Torrentio links).
+      const season = pick
+        ? Number(pick.season) || 0
+        : Number(object.movie?.season_number || object.movie?.season || 0) || 0;
+      const episode = pick
+        ? Number(pick.episode) || 0
+        : Number(object.movie?.episode_number || object.movie?.episode || 0) || 0;
       const tag = season || episode ? `_s${season}_e${episode}` : '';
       return `torbox_hybrid_${mid}${tag}`;
     };
@@ -3563,12 +3570,20 @@ try {
         ? { ...baseMovie, season_number: pick.season, episode_number: pick.episode }
         : baseMovie;
 
+      // A different episode must not inherit the previous selection/highlight.
+      const episodeChanged =
+        !!pick &&
+        (!state.picked ||
+          state.picked.season !== pick.season ||
+          state.picked.episode !== pick.episode);
+
       if (pick) {
         state.picked = pick;
         saveLastEpisode(pick);
       }
+      if (episodeChanged) state.last_hash = null;
 
-      const cacheKey = generateKeyForMovie(customTitle);
+      const cacheKey = generateKeyForMovie(customTitle, pick);
       const cached = !force && Cache.get(cacheKey);
       if (cached) {
         state.all_torrents = cached;
