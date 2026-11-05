@@ -2385,6 +2385,25 @@ try {
         .filter(Boolean);
     };
 
+    const playlistEndpoint = () =>
+      String(Store.get('torbox_playlist_endpoint', 'http://192.168.1.26:7300') || '')
+        .replace(/\/+$/, '')
+        .trim();
+
+    /** Stores the list next to the plugin and returns a URL the player can open. */
+    const publishPlaylist = async (items) => {
+      const base = playlistEndpoint();
+      if (!base) return '';
+      const res = await fetch(`${base}/m3u`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ items })
+      });
+      if (!res.ok) throw new Error(`playlist endpoint ${res.status}`);
+      const json = await res.json();
+      return typeof json?.url === 'string' ? json.url : '';
+    };
+
     const playlistMode = () => {
       const mode = Store.get('torbox_playlist_mode', 'auto');
       return ['auto', 'on', 'off'].includes(mode) ? mode : 'auto';
@@ -2642,7 +2661,23 @@ try {
         if (wantPlaylist && external) {
           try {
             const list = await buildPlaylist(torrentData, file, link, 6000);
-            if (list.length > 1) playbackConfig.playlist = list;
+            if (list.length > 1) {
+              // DDD Player opens a .m3u URL as a playlist and starts with the
+              // first entry, so the chosen episode goes first.
+              const currentName = String(file?.name || '').split('/').pop();
+              const ordered = list.slice().sort((a, b) => {
+                const aCur = a.title === currentName ? 0 : 1;
+                const bCur = b.title === currentName ? 0 : 1;
+                return aCur - bCur;
+              });
+              const url = await publishPlaylist(ordered);
+              if (url) {
+                playbackConfig.url = url;
+                playbackConfig.title = currentName || playbackConfig.title;
+              } else {
+                playbackConfig.playlist = list;
+              }
+            }
           } catch (e) {
             LOG('Playlist build failed', e?.message || e);
           }
@@ -4173,6 +4208,12 @@ try {
       torbox_back_to_seasons: { ru: 'К выбору сезона', en: 'Back to seasons', uk: 'До сезонів' },
       torbox_episodes_short: { ru: 'серий', en: 'episodes', uk: 'серій' },
       torbox_pack: { ru: 'сезон/сериал', en: 'season pack', uk: 'сезон/серіал' },
+      torbox_settings_endpoint_name: { ru: 'Playlist endpoint', en: 'Playlist endpoint', uk: 'Playlist endpoint' },
+      torbox_settings_endpoint_desc: {
+        ru: 'Адрес сервера плейлистов (сейчас Mac, потом Cloudflare). Пусто — плейлист не отдавать.',
+        en: 'Playlist host (Mac now, Cloudflare later). Empty disables it.',
+        uk: 'Адреса сервера плейлистів.'
+      },
       torbox_settings_playlist_name: { ru: 'Плейлист сезона', en: 'Season playlist', uk: 'Плейлист сезону' },
       torbox_settings_playlist_desc: {
         ru: 'Авто: собирать только для встроенного плеера. Внешний плеер получает список один раз при запуске.',
@@ -4481,6 +4522,15 @@ try {
           default: 'auto',
           get: () => Store.get('torbox_playlist_mode', 'auto'),
           set: (v) => Store.set('torbox_playlist_mode', ['auto', 'on', 'off'].includes(v) ? v : 'auto'),
+        },
+        {
+          key: 'torbox_playlist_endpoint',
+          name: translate('torbox_settings_endpoint_name'),
+          desc: translate('torbox_settings_endpoint_desc'),
+          type: 'input',
+          default: 'http://192.168.1.26:7300',
+          get: () => Store.get('torbox_playlist_endpoint', 'http://192.168.1.26:7300'),
+          set: (v) => Store.set('torbox_playlist_endpoint', String(v || '').trim()),
         },
         {
           key: 'torbox_api_key',
