@@ -2346,7 +2346,7 @@ try {
     };
 
     /** Links for every video file of a pack, for the player's playlist. */
-    const buildPlaylist = async (torrentData, currentFile, currentLink, timeoutMs = 8000) => {
+    const buildPlaylist = async (torrentData, currentFile, currentLink, timeoutMs = 8000, onProgress) => {
       const videoExtensions = getVideoExtensions();
       const videoRegex = new RegExp(
         `\\.(${videoExtensions.map((e) => e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`,
@@ -2366,11 +2366,14 @@ try {
       const deadline = Date.now() + timeoutMs;
       let cursor = 0;
 
+      let done = 0;
       const worker = async () => {
         while (cursor < vids.length) {
           const idx = cursor++;
           if (Date.now() > deadline) return;
           urls[idx] = await fileLink(torrentData.id, vids[idx], currentFile, currentLink);
+          done++;
+          if (typeof onProgress === 'function') onProgress(done, vids.length);
         }
       };
 
@@ -2654,30 +2657,42 @@ try {
         const external = usesExternalPlayer();
         const hasPack =
           isSeriesContent() && Array.isArray(torrentData?.files) && torrentData.files.length > 1;
-        const wantPlaylist = hasPack && (mode === 'on' || (mode === 'auto' && !external));
+        const wantPlaylist = hasPack && mode !== 'off';
 
         // An external player receives the list once, inside the launch intent,
         // so it has to be ready before start. Bound the wait.
-        if (wantPlaylist && external) {
-          try {
-            const list = await buildPlaylist(torrentData, file, link, 6000);
-            if (list.length > 1) {
-              // Season stays in order, the episode is chosen with start_index:
-              // prev/next work. Needs the patched DDD Player (EdemBey/dddplayer),
-              // upstream ignores start_index when it expands a single .m3u8.
-              const currentName = String(file?.name || '').split('/').pop();
-              const at = list.findIndex((item) => item.title === currentName);
-              const url = await publishPlaylist(list);
-              if (url) {
-                playbackConfig.url = url;
-                playbackConfig.title = currentName || playbackConfig.title;
-                if (at > 0) playbackConfig.start_index = at;
-              } else {
-                playbackConfig.playlist = list;
+        if (wantPlaylist && !external) {
+          buildPlaylist(torrentData, file, link, 20000)
+            .then((list) => {
+              if (list.length > 1 && Lampa.Player && typeof Lampa.Player.playlist === 'function') {
+                Lampa.Player.playlist(list);
               }
-            }
+            })
+            .catch((e) => LOG('Playlist build failed', e?.message || e));
+        }
+
+        if (wantPlaylist && external) {
+          // Lampa builds DDD's `video_list` extras itself when the config carries
+          // a `playlist`: intent.data stays the chosen episode, so the player
+          // starts on it and prev/next follow the real order. No server needed.
+          const loadingText = (done, total) =>
+            translateWithParams('torbox_playlist_progress', { done, total: total || 0 });
+          try {
+            try {
+              Lampa.Loading.start(() => {}, translate('torbox_playlist_preparing'));
+            } catch (e) {}
+            const list = await buildPlaylist(torrentData, file, link, 12000, (done, total) => {
+              try {
+                $('.loading-layer .loading-layer__text').text(loadingText(done, total));
+              } catch (e) {}
+            });
+            if (list.length > 1) playbackConfig.playlist = list;
           } catch (e) {
             LOG('Playlist build failed', e?.message || e);
+          } finally {
+            try {
+              Lampa.Loading.stop();
+            } catch (e) {}
           }
         }
 
@@ -2689,17 +2704,7 @@ try {
 
         if (pendingPlayback) pendingPlayback.started = true;
 
-        // The built-in player can take the list later, so playback is not held
-        // back by the extra requests.
-        if (wantPlaylist && !external) {
-          buildPlaylist(torrentData, file, link, 20000)
-            .then((list) => {
-              if (list.length > 1 && Lampa.Player && typeof Lampa.Player.playlist === 'function') {
-                Lampa.Player.playlist(list);
-              }
-            })
-            .catch((e) => LOG('Playlist build failed', e?.message || e));
-        }
+
 
         // Mark watched as early as possible after successful player start.
         // We still also mark on Player.callback; this early mark improves UX robustness.
@@ -4211,6 +4216,16 @@ try {
         ru: 'Адрес сервера плейлистов (сейчас Mac, потом Cloudflare). Пусто — плейлист не отдавать.',
         en: 'Playlist host (Mac now, Cloudflare later). Empty disables it.',
         uk: 'Адреса сервера плейлистів.'
+      },
+      torbox_playlist_preparing: {
+        ru: 'Готовим список серий…',
+        en: 'Preparing the episode list…',
+        uk: 'Готуємо список серій…'
+      },
+      torbox_playlist_progress: {
+        ru: 'Готовим список серий: {done} из {total}',
+        en: 'Preparing the episode list: {done} of {total}',
+        uk: 'Готуємо список серій: {done} з {total}'
       },
       torbox_settings_playlist_name: { ru: 'Плейлист сезона', en: 'Season playlist', uk: 'Плейлист сезону' },
       torbox_settings_playlist_desc: {
