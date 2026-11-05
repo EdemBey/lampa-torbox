@@ -2379,8 +2379,13 @@ try {
       '316', '318', '319', '321', '322', '324', '326', '328', '329', '330', '331'
     ].map((n) => `nexus-${n}.ceur.tb-cdn.st`);
     let liveCdnHost = '';
+    let liveCdnHostCheckedAt = 0;
+    const CDN_HOST_TTL_MS = 60 * 1000;
 
-    /** HEAD is a CORS-simple request and does not download the file. */
+    /**
+     * HEAD may be answered by an edge cache while GET already fails, so ask for
+     * one byte instead. The CDN allows this range request from Lampa's origin.
+     */
     const cdnHostAlive = async (host, sampleUrl) => {
       let target;
       try {
@@ -2393,7 +2398,8 @@ try {
       const timer = setTimeout(() => controller.abort(), 1200);
       try {
         const res = await fetch(target.href, {
-          method: 'HEAD',
+          method: 'GET',
+          headers: { Range: 'bytes=0-0' },
           cache: 'no-store',
           signal: controller.signal
         });
@@ -2428,7 +2434,11 @@ try {
         const finish = (host) => {
           if (done) return;
           done = true;
-          if (host) LOG('Live CDN host', host);
+          if (host) {
+            liveCdnHost = host;
+            liveCdnHostCheckedAt = Date.now();
+            LOG('Live CDN host', host);
+          }
           resolve(host);
         };
         const timer = setTimeout(() => finish(''), 1500);
@@ -2455,6 +2465,9 @@ try {
       }
     };
 
+    const cdnHostFresh = () =>
+      !!liveCdnHost && Date.now() - liveCdnHostCheckedAt < CDN_HOST_TTL_MS;
+
     const ensureLiveCdnUrl = async (url) => {
       if (!url) return url;
       try {
@@ -2462,22 +2475,19 @@ try {
       } catch (e) {
         return url;
       }
-      if (liveCdnHost) return rewriteCdnHost(url, liveCdnHost);
+      if (cdnHostFresh()) return rewriteCdnHost(url, liveCdnHost);
       const host = await pickLiveCdnHost([url]);
-      if (!host) return url;
-      liveCdnHost = host;
-      return rewriteCdnHost(url, host);
+      return host ? rewriteCdnHost(url, host) : url;
     };
 
     const ensureLivePlaylist = async (items) => {
       if (!Array.isArray(items) || !items.length) return items;
-      if (liveCdnHost) {
+      if (cdnHostFresh()) {
         return items.map((item) => ({ ...item, url: rewriteCdnHost(item.url, liveCdnHost) }));
       }
       const urls = items.map((item) => item.url).filter(Boolean);
       const host = await pickLiveCdnHost(urls);
       if (!host) return items;
-      liveCdnHost = host;
       return items.map((item) => ({ ...item, url: rewriteCdnHost(item.url, host) }));
     };
 
