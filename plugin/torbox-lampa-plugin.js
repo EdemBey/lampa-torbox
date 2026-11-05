@@ -113,6 +113,13 @@ try {
     },
   };
 
+  // The old local playlist server setting is gone; drop its stored value.
+  try {
+    safeStorage.removeItem('torbox_playlist_endpoint');
+  } catch {
+    /* ignore storage errors */
+  }
+
   const DebugTelemetry = {
     logs: [],
     lastError: null,
@@ -2388,25 +2395,6 @@ try {
         .filter(Boolean);
     };
 
-    const playlistEndpoint = () =>
-      String(Store.get('torbox_playlist_endpoint', 'http://192.168.1.26:7300') || '')
-        .replace(/\/+$/, '')
-        .trim();
-
-    /** Stores the list next to the plugin and returns a URL the player can open. */
-    const publishPlaylist = async (items) => {
-      const base = playlistEndpoint();
-      if (!base) return '';
-      const res = await fetch(`${base}/m3u`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ items })
-      });
-      if (!res.ok) throw new Error(`playlist endpoint ${res.status}`);
-      const json = await res.json();
-      return typeof json?.url === 'string' ? json.url : '';
-    };
-
     const playlistMode = () => {
       const mode = Store.get('torbox_playlist_mode', 'auto');
       return ['auto', 'on', 'off'].includes(mode) ? mode : 'auto';
@@ -4220,12 +4208,6 @@ try {
       torbox_back_to_seasons: { ru: 'К выбору сезона', en: 'Back to seasons', uk: 'До сезонів' },
       torbox_episodes_short: { ru: 'серий', en: 'episodes', uk: 'серій' },
       torbox_pack: { ru: 'сезон/сериал', en: 'season pack', uk: 'сезон/серіал' },
-      torbox_settings_endpoint_name: { ru: 'Playlist endpoint', en: 'Playlist endpoint', uk: 'Playlist endpoint' },
-      torbox_settings_endpoint_desc: {
-        ru: 'Адрес сервера плейлистов (сейчас Mac, потом Cloudflare). Пусто — плейлист не отдавать.',
-        en: 'Playlist host (Mac now, Cloudflare later). Empty disables it.',
-        uk: 'Адреса сервера плейлистів.'
-      },
       torbox_playlist_preparing: {
         ru: 'Готовим список серий…',
         en: 'Preparing the episode list…',
@@ -4544,15 +4526,6 @@ try {
           default: 'auto',
           get: () => Store.get('torbox_playlist_mode', 'auto'),
           set: (v) => Store.set('torbox_playlist_mode', ['auto', 'on', 'off'].includes(v) ? v : 'auto'),
-        },
-        {
-          key: 'torbox_playlist_endpoint',
-          name: translate('torbox_settings_endpoint_name'),
-          desc: translate('torbox_settings_endpoint_desc'),
-          type: 'input',
-          default: 'http://192.168.1.26:7300',
-          get: () => Store.get('torbox_playlist_endpoint', 'http://192.168.1.26:7300'),
-          set: (v) => Store.set('torbox_playlist_endpoint', String(v || '').trim()),
         },
         {
           key: 'torbox_api_key',
