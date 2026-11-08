@@ -84,6 +84,16 @@ localStorage.online_mod_narutobased_quality_proxy = 'https://r.jina.ai/'
 localStorage.online_mod_narutobased_quality_proxy = 'https://my.proxy/?url={url}'
 ```
 
+### Реклама Lampa
+
+Плагин помечает свои воспроизведения как `continue_play` и кладёт текущий
+элемент в `Lampa.PlayerPlaylist` перед `Player.play`. Из-за этого Lampa не
+запускает свой CUB-преролл для видео, открытого из online_mod.
+
+Это не отключает рекламу Lampa глобально и не убирает рекламу сторонних модов
+(например, `plugin_modss.js`) — только CUB-преролл на воспроизведении из
+online_mod.
+
 ## TorBox
 
 Поиск **по IMDb через Torrentio**, MaxVol/Jacred остаются вторым источником.

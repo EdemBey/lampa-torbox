@@ -4,6 +4,34 @@
 (function () {
     'use strict';
 
+    /**
+     * Start playback without Lampa's CUB preroll.
+     * Lampa skips preroll for playlist continuations, so mark the item as
+     * `continue_play` and put it into PlayerPlaylist before Player.play().
+     */
+    function playWithoutPreroll(first, playlist) {
+      if (!first) return;
+
+      first.continue_play = true;
+
+      try {
+        if (window.Lampa && Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.get === 'function') {
+          var list = Lampa.PlayerPlaylist.get();
+
+          if (Array.isArray(list)) {
+            list.length = 0;
+            list.push(first);
+          }
+        }
+      } catch (e) {}
+
+      Lampa.Player.play(first);
+
+      if (playlist && playlist.length && Lampa.Player && typeof Lampa.Player.playlist === 'function') {
+        Lampa.Player.playlist(playlist);
+      }
+    }
+
     function startsWith(str, searchString) {
       return str.lastIndexOf(searchString, 0) === 0;
     }
@@ -1118,7 +1146,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -1144,9 +1171,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -1569,7 +1596,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -1597,9 +1623,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -2547,7 +2573,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -2573,9 +2598,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -3787,8 +3812,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -4229,8 +4253,7 @@
 
               if (playlist.length > 1) first.playlist = playlist;
               if (options && options.runas) Lampa.Player.runas(options.runas);else if (lampa_player) Lampa.Player.runas('lampa');
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -4784,7 +4807,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -4810,9 +4832,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -5530,8 +5552,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -6104,8 +6125,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -6783,7 +6803,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -6809,9 +6828,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -7534,7 +7553,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -7560,9 +7578,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -8122,7 +8140,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -8148,9 +8165,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -8738,8 +8755,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -9423,8 +9439,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -9908,8 +9923,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -10354,7 +10368,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -10379,9 +10392,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -10823,8 +10836,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -11253,8 +11265,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -11829,7 +11840,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -11855,9 +11865,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -12537,7 +12547,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -12562,9 +12571,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -13034,7 +13043,6 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
-              Lampa.Player.play(first);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -13060,9 +13068,9 @@
                     playlist.push(cell);
                   }
                 });
-                Lampa.Player.playlist(playlist);
+                playWithoutPreroll(first, playlist);
               } else {
-                Lampa.Player.playlist([first]);
+                playWithoutPreroll(first, [first]);
               }
 
               if (viewed.indexOf(hash_file) == -1) {
@@ -13865,8 +13873,7 @@
               }
 
               if (playlist.length > 1) first.playlist = playlist;
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              playWithoutPreroll(first, playlist);
 
               if (viewed.indexOf(hash_file) == -1) {
                 viewed.push(hash_file);
@@ -14258,8 +14265,7 @@
         if (!found) pushCurrent();
         if (playlist.length > 1) first.playlist = playlist;
 
-        Lampa.Player.play(first);
-        Lampa.Player.playlist(playlist);
+        playWithoutPreroll(first, playlist);
       }
 
       function filtred() {
