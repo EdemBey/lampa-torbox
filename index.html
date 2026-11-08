@@ -130,7 +130,7 @@
           Поиск по IMDb через Torrentio, плюс MaxVol/Jacred. Прямое воспроизведение
           через TorBox, выбор серии и продолжение просмотра.
         </p>
-        <code class="url" id="url-torbox">https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ</code>
+        <code class="url" id="url-torbox">https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js</code>
         <div class="actions">
           <button data-copy="url-torbox">Скопировать ссылку</button>
           <a class="button secondary" href="plugin/torbox-lampa-plugin.js" target="_blank" rel="noreferrer">Открыть JS</a>
@@ -181,8 +181,11 @@
       <h2 class="section">TorBox</h2>
       <div class="panel">
         <p>
-          Нужен ключ TorBox (вводится в настройках плагина) и ключ Torrentio —
-          он передаётся в ссылке расширения как <code class="inline">?torrentio_key=...</code>.
+          Нужен один ключ — <strong>TorBox API key</strong>. Введите его в настройках
+          плагина: <strong>Настройки → Расширения → TorBox → API‑ключ</strong>.
+          Плагин сам использует его и для TorBox, и для Torrentio
+          (<code class="inline">torbox=&lt;key&gt;</code>), поэтому отдельный ключ
+          Torrentio и параметр <code class="inline">?torrentio_key=...</code> не нужны.
           Ключи не хранятся в репозитории.
         </p>
       </div>

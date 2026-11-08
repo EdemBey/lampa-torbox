@@ -26,17 +26,18 @@ https://edembey.github.io/lampa-torbox/plugin/online_mod.js
 ### TorBox
 
 ```
-https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
+https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js
 ```
 
-Ключ TorBox вводится в настройках плагина после установки.
+После установки откройте настройки плагина **TorBox** и вставьте **TorBox
+API‑ключ**. Параметр `?torrentio_key=...` в ссылке не нужен.
 
 Ссылки отдаются с GitHub Pages. Если Pages недоступен, те же файлы можно
 поставить через jsDelivr:
 
 ```
 https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/online_mod.js
-https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
+https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/torbox-lampa-plugin.js
 ```
 
 ## Naruto Based
@@ -98,13 +99,25 @@ localStorage.online_mod_narutobased_quality_proxy = 'https://my.proxy/?url={url}
    берутся из Cinemeta (`v3-cinemeta.strem.io`), последняя просмотренная серия
    помечена «Продолжить» и получает фокус. Кэш учитывает сезон и серию.
 
-### Ключи
+### Ключ
 
-Ключи не хранятся в репозитории.
+Нужен **один ключ — TorBox API key**. Он вводится в настройках плагина:
+**Настройки → Расширения → TorBox → API‑ключ**.
 
-- Torrentio: `?torrentio_key=...` в ссылке расширения,
-  `localStorage.torrentio_key` или пустая константа `TORRENTIO_KEY` в файле.
-- TorBox: вводится в настройках плагина, лежит в `localStorage` устройства.
+Ключ используется в двух местах:
+
+- для TorBox API (`createtorrent`, `mylist`, `requestdl`);
+- для Torrentio — плагин сам подставляет его как `torbox=<key>` в URL,
+  чтобы Torrentio возвращал готовые ссылки.
+
+`torrentio_key` — это **не отдельный ключ Torrentio**, а тот же самый
+TorBox-ключ. Параметр `?torrentio_key=...` в ссылке расширения оставлен только
+как необязательное переопределение (например, если ключ нельзя хранить в
+настройках). Обычно он не нужен.
+
+Дополнительно ключ можно переопределить через `localStorage.torrentio_key` или
+константу `TORRENTIO_KEY` в файле — для локальной сборки. Ключи не хранятся в
+репозитории.
 
 ## GitHub Pages
 

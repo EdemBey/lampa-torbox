@@ -26,9 +26,11 @@ try {
   // ───────────────────────────── Constants / Config ─────────────────────────────
   const VERSION = '51.2.14';
 
-  // Torrentio reads its TorBox key from the URL path. Keep it out of git:
-  // pass it as ?torrentio_key=... on the extension URL, set the localStorage
-  // key `torrentio_key`, or edit the constant below locally.
+  // Torrentio's TorBox integration expects the TorBox API key in the URL path
+  // (`/torbox=<key>/`). It is the same key as the plugin's "API key" setting,
+  // so `torrentioKey()` falls back to Config.apiKey. An explicit
+  // ?torrentio_key=..., localStorage.torrentio_key or the constant below can
+  // override it, but normally the settings key is enough.
   const TORRENTIO_KEY = '';
   const TORRENTIO_BASE = 'https://torrentio.strem.fun';
 
@@ -837,7 +839,7 @@ try {
 
     function torrentioKey() {
       return String(
-        Store.get('torrentio_key', '') || SCRIPT_KEY || TORRENTIO_KEY || ''
+        Store.get('torrentio_key', '') || SCRIPT_KEY || Config.apiKey || TORRENTIO_KEY || ''
       )
         .replace(/\s+/g, '')
         .trim();
