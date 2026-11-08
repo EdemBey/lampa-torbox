@@ -1,6 +1,7 @@
 //25.10.2026 - Fix
 //08.11.2026 - Added Naruto Based balancer (anime.home.kopenkin.tech)
 //08.11.2026 - Forward URL qualities to DDD for all balancers
+//08.11.2026 - DDD quality transport via X-DDD-Quality header
 
 (function () {
     'use strict';
@@ -27,6 +28,14 @@
      * URL-based quality options. Only plain URL entries are usable there;
      * `call`-based tracks stay inside Lampa.
      */
+    function attachQualityHeader(first) {
+      if (!first || !first.ddd_quality) return;
+
+      first.headers = Object.assign({}, first.headers || {}, {
+        'X-DDD-Quality': first.ddd_quality
+      });
+    }
+
     function attachExternalQualities(first) {
       if (!first || first.ddd_quality || !first.quality) return;
       if (!isExternalAndroidPlayer()) return;
@@ -85,6 +94,7 @@
 
       if (list.length > 1) {
         first.ddd_quality = JSON.stringify(list);
+        attachQualityHeader(first);
       }
     }
 
@@ -14528,6 +14538,7 @@
           }
 
           first.ddd_quality = JSON.stringify(dddQualities);
+          attachQualityHeader(first);
         }
         var playlist = [];
         var found = false;
@@ -16425,7 +16436,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-2';
+    var mod_version = '08.11.2026-3';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
