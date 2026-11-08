@@ -9,10 +9,81 @@
      * Lampa skips preroll for playlist continuations, so mark the item as
      * `continue_play` and put it into PlayerPlaylist before Player.play().
      */
+    function isExternalAndroidPlayer() {
+      return Boolean(
+        window.Lampa &&
+        Lampa.Platform &&
+        typeof Lampa.Platform.is === 'function' &&
+        Lampa.Platform.is('android') &&
+        Lampa.Storage &&
+        typeof Lampa.Storage.field === 'function' &&
+        Lampa.Storage.field('player') === 'android'
+      );
+    }
+
+    /**
+     * Attach Lampa's quality map to the Android intent so DDD can show
+     * URL-based quality options. Only plain URL entries are usable there;
+     * `call`-based tracks stay inside Lampa.
+     */
+    function attachExternalQualities(first) {
+      if (!first || first.ddd_quality || !first.quality) return;
+      if (!isExternalAndroidPlayer()) return;
+
+      var list = [];
+      var seen = {};
+
+      function add(name, url) {
+        if (!url) return;
+        url = String(url);
+
+        if (url.indexOf('http') !== 0) return;
+        if (seen[url]) return;
+
+        seen[url] = true;
+        list.push({
+          name: String(name || 'Quality').replace(/\u200B/g, ''),
+          url: url
+        });
+      }
+
+      if (Array.isArray(first.quality)) {
+        first.quality.forEach(function (item, index) {
+          if (typeof item === 'string') add('Quality ' + (index + 1), item);
+          else if (item && item.url) add(item.label || item.name || 'Quality ' + (index + 1), item.url);
+        });
+      } else {
+        for (var key in first.quality) {
+          if (!Object.prototype.hasOwnProperty.call(first.quality, key)) continue;
+
+          var value = first.quality[key];
+          var url = typeof value === 'string' ? value : value && value.url;
+          var name = value && typeof value === 'object' && value.label ? value.label : key;
+
+          add(name, url);
+        }
+      }
+
+      if (!list.length) return;
+
+      var hasCurrent = list.some(function (item) {
+        return item.url === first.url;
+      });
+
+      if (!hasCurrent && first.url && String(first.url).indexOf('http') === 0) {
+        list.unshift({ name: 'Auto', url: first.url });
+      }
+
+      if (list.length > 1) {
+        first.ddd_quality = JSON.stringify(list);
+      }
+    }
+
     function playWithoutPreroll(first, playlist) {
       if (!first) return;
 
       first.continue_play = true;
+      attachExternalQualities(first);
 
       try {
         if (window.Lampa && Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.get === 'function') {
@@ -14333,18 +14404,6 @@
         }
 
         return null;
-      }
-
-      function isExternalAndroidPlayer() {
-        return Boolean(
-          window.Lampa &&
-          Lampa.Platform &&
-          typeof Lampa.Platform.is === 'function' &&
-          Lampa.Platform.is('android') &&
-          Lampa.Storage &&
-          typeof Lampa.Storage.field === 'function' &&
-          Lampa.Storage.field('player') === 'android'
-        );
       }
 
       function applyBackgroundQuality(element, qualityMap, attempt) {
