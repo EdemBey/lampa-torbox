@@ -6,6 +6,7 @@
 //08.11.2026 - Prefer fast source providers, revert direct CDN
 //08.11.2026 - DDD quality list keeps 1080p and real lower qualities
 //08.11.2026 - Per-episode quality maps in Lampa player and DDD
+//08.11.2026 - Keep every signed quality URL (Dzen variants)
 
 (function () {
     'use strict';
@@ -14623,25 +14624,12 @@
       /**
        * Quality entries for an external player (DDD).
        *
-       * DDD deduplicates by full URL and keeps the first entry, so every label
-       * must point at its own file. Dzen serves one file for every label (only
-       * the signature changes), so we keep its best label and take lower
-       * qualities from providers that really have separate files (Allvideo, Mail).
+       * Every label must point at its own URL: DDD deduplicates by full URL and
+       * keeps the first entry. Quality labels of one provider can share a path
+       * (Dzen) — the variant is chosen by the signed query string, so the whole
+       * URL is the identity. Duplicate labels between providers are dropped:
+       * the faster provider always comes first.
        */
-      function fileIdentity(url) {
-        // Dzen signs every quality label separately, but it is the same file.
-        var marker = '/api/player/proxy?src=';
-        var pos = String(url || '').indexOf(marker);
-
-        if (pos !== -1) {
-          try {
-            url = decodeURIComponent(String(url).slice(pos + marker.length));
-          } catch (e) {}
-        }
-
-        return String(url || '').split('?')[0].replace(/\/+$/, '');
-      }
-
       function qualityOptionsFromPayload(payload) {
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
@@ -14658,7 +14646,6 @@
           candidates.push({
             name: (source.quality || 'auto') + '',
             url: src,
-            key: fileIdentity(src),
             rank: providerRank(source.provider),
             weight: qualityWeight(source.quality)
           });
@@ -14674,10 +14661,10 @@
         var covered = {};
 
         candidates.forEach(function (item) {
-          if (files[item.key]) return;
+          if (files[item.url]) return;
           if (covered[item.name]) return;
 
-          files[item.key] = true;
+          files[item.url] = true;
           covered[item.name] = true;
           options.push({ name: item.name, url: item.url });
         });
@@ -16786,7 +16773,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-8';
+    var mod_version = '08.11.2026-9';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
