@@ -14112,15 +14112,45 @@
 
           if (object.movie && object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
 
+          var external = isExternalAndroidPlayer();
           var cached = getCachedQuality(element);
-          startPlayback(element, [element], cached);
+          var playNow = function (qualityMap) {
+            startPlayback(element, [element], qualityMap, external);
+          };
 
-          if (!cached) {
+          if (external && !cached) {
+            try {
+              Lampa.Loading.start(function () {});
+            } catch (e) {}
+
             try {
               resolveQuality(element, function (qualityMap) {
-                applyBackgroundQuality(element, qualityMap);
-              }, function () {});
-            } catch (e) {}
+                try {
+                  Lampa.Loading.stop();
+                } catch (e) {}
+                playNow(qualityMap);
+              }, function () {
+                try {
+                  Lampa.Loading.stop();
+                } catch (e) {}
+                playNow(null);
+              });
+            } catch (e) {
+              try {
+                Lampa.Loading.stop();
+              } catch (e2) {}
+              playNow(null);
+            }
+          } else {
+            playNow(cached);
+
+            if (!external && !cached) {
+              try {
+                resolveQuality(element, function (qualityMap) {
+                  applyBackgroundQuality(element, qualityMap);
+                }, function () {});
+              } catch (e) {}
+            }
           }
         };
 
@@ -14305,6 +14335,18 @@
         return null;
       }
 
+      function isExternalAndroidPlayer() {
+        return Boolean(
+          window.Lampa &&
+          Lampa.Platform &&
+          typeof Lampa.Platform.is === 'function' &&
+          Lampa.Platform.is('android') &&
+          Lampa.Storage &&
+          typeof Lampa.Storage.field === 'function' &&
+          Lampa.Storage.field('player') === 'android'
+        );
+      }
+
       function applyBackgroundQuality(element, qualityMap, attempt) {
         if (!qualityMap) return;
 
@@ -14390,10 +14432,11 @@
         }, null, options);
       }
 
-      function startPlayback(element, items, qualityMap) {
+      function startPlayback(element, items, qualityMap, external) {
         var extra = getFile(element);
+        var autoUrl = component.getDefaultQuality(extra.quality, extra.file);
         var quality = qualityMap ? component.renameQualityMap(qualityMap) : component.renameQualityMap(extra.quality);
-        var url = qualityMap ? pickBestQuality(qualityMap) || component.getDefaultQuality(extra.quality, extra.file) : component.getDefaultQuality(extra.quality, extra.file);
+        var url = qualityMap ? pickBestQuality(qualityMap) || autoUrl : autoUrl;
         var first = {
           url: url,
           quality: quality,
@@ -14402,6 +14445,22 @@
           slug: element.slug,
           language: element.language
         };
+
+        if (external) {
+          var dddQualities = [{ name: 'Auto', url: autoUrl }];
+
+          if (qualityMap) {
+            for (var qualityName in qualityMap) {
+              if (!Object.prototype.hasOwnProperty.call(qualityMap, qualityName)) continue;
+              if (String(qualityName).toLowerCase() === 'auto') continue;
+              dddQualities.push({ name: qualityName, url: qualityMap[qualityName] });
+            }
+
+            first.quality = qualityMap;
+          }
+
+          first.ddd_quality = JSON.stringify(dddQualities);
+        }
         var playlist = [];
         var found = false;
         var pushCurrent = function () {
@@ -14523,24 +14582,58 @@
             element._playing = true;
             playingInProgress = true;
 
+            var external = isExternalAndroidPlayer();
             var cached = getCachedQuality(element);
-            startPlayback(element, items, cached);
 
-            element._playing = false;
-            playingInProgress = false;
+            var markViewed = function () {
+              if (viewed.indexOf(hash_file) === -1) {
+                viewed.push(hash_file);
+                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                Lampa.Storage.set('online_view', viewed);
+              }
+            };
 
-            if (viewed.indexOf(hash_file) === -1) {
-              viewed.push(hash_file);
-              item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-              Lampa.Storage.set('online_view', viewed);
-            }
+            var finish = function (qualityMap) {
+              element._playing = false;
+              playingInProgress = false;
 
-            if (!cached) {
+              startPlayback(element, items, qualityMap, external);
+              markViewed();
+
+              if (!external && !qualityMap) {
+                try {
+                  resolveQuality(element, function (resolved) {
+                    applyBackgroundQuality(element, resolved);
+                  }, function () {});
+                } catch (e) {}
+              }
+            };
+
+            if (external && !cached) {
+              try {
+                Lampa.Loading.start(function () {});
+              } catch (e) {}
+
               try {
                 resolveQuality(element, function (qualityMap) {
-                  applyBackgroundQuality(element, qualityMap);
-                }, function () {});
-              } catch (e) {}
+                  try {
+                    Lampa.Loading.stop();
+                  } catch (e) {}
+                  finish(qualityMap);
+                }, function () {
+                  try {
+                    Lampa.Loading.stop();
+                  } catch (e) {}
+                  finish(null);
+                });
+              } catch (e) {
+                try {
+                  Lampa.Loading.stop();
+                } catch (e2) {}
+                finish(null);
+              }
+            } else {
+              finish(cached);
             }
           });
 
