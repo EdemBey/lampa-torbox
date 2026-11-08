@@ -1,78 +1,140 @@
-# lampa-torbox
+# Lampa plugins
 
-Плагин TorBox для Lampa с поиском **по IMDb через Torrentio**.
-MaxVol/Jacred остались вторым источником.
+Расширения для [Lampa](https://lampa.mx):
+
+- **online_mod + Naruto Based** — онлайн-источники с балансером аниме-сайта
+  `anime.home.kopenkin.tech`;
+- **TorBox** — торренты через TorBox с поиском по IMDb через Torrentio.
+
+Репозиторий исторически называется `lampa-torbox`, но теперь здесь лежат оба
+плагина.
 
 ## Установка
 
-Ссылка для Lampa (jsDelivr, отдаёт `application/javascript`):
+Lampa → **Настройки** → **Расширения** → **Добавить расширение** → вставить
+ссылку → сохранить.
+
+### online_mod + Naruto Based
 
 ```
+https://edembey.github.io/lampa-torbox/plugin/online_mod.js
+```
+
+После установки откройте фильм или сериал → **Онлайн** → в фильтре источников
+выберите **Naruto Based**.
+
+### TorBox
+
+```
+https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
+```
+
+Ключ TorBox вводится в настройках плагина после установки.
+
+Ссылки отдаются с GitHub Pages. Если Pages недоступен, те же файлы можно
+поставить через jsDelivr:
+
+```
+https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/online_mod.js
 https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ
 ```
 
-Lampa → Настройки → Расширения → Добавить расширение → вставить ссылку.
-После этого вписать TorBox API-ключ в настройках плагина.
+## Naruto Based
 
-Для жёсткой привязки к коммиту используйте `@<sha>` вместо `@master`.
+Балансер встроен в `online_mod` и появляется в списке источников рядом с
+HDrezka, Kodik, CDNVideoHub и другими. Отдельной кнопки в карточке нет.
 
-## Что изменено
+Что делает:
+
+1. Ищет тайтл по названию через `/api/catalog?q=...`.
+2. Показывает совпадения, сезоны и серии из `/api/series/<slug>`.
+3. Переключатель **Субтитры / Озвучка**.
+4. Запускает поток через `/api/lampa/play/<slug>?language=sub|dub`
+   (302 на `/api/player/proxy`, поддержка Range).
+5. Строит плейлист по сериям выбранного сезона.
+6. Учитывает последнюю озвучку сайта (`naruto_based_language`) и прогресс
+   просмотра в общем timeline-ключе сайта.
+
+### Выбор качества
+
+Качества берутся из `/api/player/based`. Плагин сначала пробует прямой запрос.
+Если у эндпоинта нет CORS, используется резервный прокси `https://r.jina.ai/`
+(медленнее и с лимитом запросов), а при его недоступности играет авто-качество
+через `/api/lampa/play`.
+
+Чтобы выбор качества работал быстро, владельцу сайта достаточно добавить:
+
+```http
+Access-Control-Allow-Origin: *
+```
+
+на `/api/player/based` (или на весь `/api/player/*`).
+
+Настройки в `localStorage`:
+
+```js
+// Адрес сайта
+localStorage.online_mod_narutobased_site = 'https://anime.home.kopenkin.tech'
+
+// Прокси для /api/player/based. Пустая строка — не использовать Jina.
+localStorage.online_mod_narutobased_quality_proxy = 'https://r.jina.ai/'
+
+// Свой прокси с подстановкой URL
+localStorage.online_mod_narutobased_quality_proxy = 'https://my.proxy/?url={url}'
+```
+
+## TorBox
+
+Поиск **по IMDb через Torrentio**, MaxVol/Jacred остаются вторым источником.
 
 1. **Torrentio по IMDb.** `/stream/movie/<imdb>.json` или
    `/stream/series/<imdb>:<s>:<e>.json` — поиск не зависит от названия.
 2. **Комбинирование.** Torrentio и MaxVol/Jacred опрашиваются параллельно,
    результаты склеиваются и дедуплицируются по `infoHash`; Torrentio побеждает
    при совпадении, потому что только он отдаёт готовую ссылку.
-3. **Прямое воспроизведение.** Если Torrentio (с ключом TorBox) вернул `url`,
+3. **Прямое воспроизведение.** Если Torrentio с ключом TorBox вернул `url`,
    плагин играет сразу, без `createtorrent → mylist → requestdl`.
 4. **Сначала серия.** Для сериалов открывается выбор серии: кадры и названия
    берутся из Cinemeta (`v3-cinemeta.strem.io`), последняя просмотренная серия
    помечена «Продолжить» и получает фокус. Кэш учитывает сезон и серию.
-   Навигация: торренты → серии сезона → сезоны → выход (кнопка «назад» в
-   фильтре и системный Back). Над списком торрентов показывается
-   `Сезон N · Серия M — название`.
 
-## Ключи
+### Ключи
 
 Ключи не хранятся в репозитории.
 
-- Torrentio: `?torrentio_key=...` в ссылке расширения, `localStorage.torrentio_key`
-  или пустая константа `TORRENTIO_KEY` в файле.
+- Torrentio: `?torrentio_key=...` в ссылке расширения,
+  `localStorage.torrentio_key` или пустая константа `TORRENTIO_KEY` в файле.
 - TorBox: вводится в настройках плагина, лежит в `localStorage` устройства.
 
-## Naruto Based в online_mod
+## GitHub Pages
 
-`plugin/online_mod.js` — копия
-[online_mod](https://nb557.github.io/plugins/online_mod.js) с добавленным
-балансером **Naruto Based** (`https://anime.home.kopenkin.tech`).
-В списке источников он появляется рядом с HDrezka, Kodik, CDNVideoHub и др.
+Сайт публикуется из корня ветки `master`:
 
-Установка:
+- `index.html` — страница с ссылками установки;
+- `.nojekyll` — отключает обработку Jekyll, чтобы файлы отдавались как есть;
+- `plugin/*.js` — сами плагины.
 
-```
-https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/online_mod.js
-```
+После пуша в `master` GitHub Pages пересобирает сайт автоматически.
+Проверить можно так:
 
-Что добавлено:
-
-1. Поиск по названию через `/api/catalog?q=...`.
-2. Сезоны и серии из `/api/series/<slug>`.
-3. Воспроизведение через `/api/lampa/play/<slug>?language=sub|dub`
-   (302 на `/api/player/proxy`, поддержка Range).
-4. Переключатель «Субтитры / Озвучка» и плейлист по сериям сезона.
-5. Учитывается последняя выбранная озвучка сайта (`naruto_based_language`).
-
-Сайт отдаёт `Access-Control-Allow-Origin: *` для API, поэтому сторонний
-прокси не нужен. Если адрес сайта изменится, его можно переопределить:
-
-```js
-localStorage.online_mod_narutobased_site = 'https://новый-адрес'
+```bash
+curl -I https://edembey.github.io/lampa-torbox/plugin/online_mod.js
+curl -s https://edembey.github.io/lampa-torbox/plugin/online_mod.js | grep narutobased
 ```
 
 ## Структура
 
 ```
-plugin/torbox-lampa-plugin.js   рабочая копия TorBox
+index.html                      страница GitHub Pages
+.nojekyll                       отключение Jekyll
 plugin/online_mod.js            online_mod + Naruto Based
-UPSTREAM.md                     откуда форки
+plugin/torbox-lampa-plugin.js   TorBox
+UPSTREAM.md                     откуда форки и что изменено
 ```
+
+## Upstream
+
+- TorBox: https://slonce70.github.io/addon_lampa_torbox/torbox-lampa-plugin.js
+- online_mod: https://nb557.github.io/plugins/online_mod.js
+
+Подробности и команды для сравнения с оригиналом — в `UPSTREAM.md`.

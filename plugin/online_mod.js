@@ -13949,6 +13949,9 @@
      */
     function narutobased(component, _object, config) {
       var network = new Lampa.Reguest();
+      var qualityResolver = new Lampa.Reguest();
+      var qualityCache = {};
+      var playingInProgress = false;
       var object = _object;
       var extract = null;
       var select_title = '';
@@ -14112,6 +14115,145 @@
         };
       }
 
+      function parseJsonText(text) {
+        if (text && typeof text === 'object') return text;
+        var str = String(text || '');
+        var start = str.indexOf('{');
+        var end = str.lastIndexOf('}');
+        if (start === -1 || end === -1 || end < start) throw new Error('No JSON in response');
+        return JSON.parse(str.slice(start, end + 1));
+      }
+
+      function qualityMapFromPayload(payload) {
+        var map = {};
+        var sources = (payload && payload.sources) || [];
+        if (!sources.length && payload && payload.src) {
+          sources = [{ quality: payload.quality, src: payload.src }];
+        }
+        sources.forEach(function (source) {
+          var key = (source.quality || 'auto') + '';
+          var src = (source.src || '') + '';
+          if (!src) return;
+          if (src.indexOf('//') === 0) src = 'https:' + src;
+          else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
+          if (!map[key]) map[key] = src;
+        });
+        return map;
+      }
+
+      function pickBestQuality(map) {
+        var best = '';
+        var bestValue = -1;
+        for (var key in map) {
+          if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+          var value = parseInt(key, 10);
+          if (isNaN(value)) value = 0;
+          if (value > bestValue) {
+            bestValue = value;
+            best = key;
+          }
+        }
+        return best ? map[best] : '';
+      }
+
+      function resolveQuality(element, success, fail) {
+        var slug = element.slug || '';
+        var cached = qualityCache[slug];
+        if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
+          success(cached.map);
+          return;
+        }
+
+        var mirrors = element.mirrors || [];
+        var seen = {};
+        var query = [];
+        mirrors.forEach(function (mirror) {
+          var key = mirror.sourceCode + ':' + mirror.token;
+          if (seen[key]) return;
+          seen[key] = true;
+          query.push('source=' + encodeURIComponent(key));
+        });
+
+        if (!query.length) {
+          fail();
+          return;
+        }
+
+        var url = site + '/api/player/based?' + query.join('&');
+        var options = { dataType: 'text' };
+        var done = false;
+        var finish = function (text) {
+          if (done) return;
+          done = true;
+          try {
+            var payload = payloadOf(parseJsonText(text));
+            var map = qualityMapFromPayload(payload);
+            if (!pickBestQuality(map)) throw new Error('No playable sources');
+            qualityCache[slug] = { time: Date.now(), map: map };
+            success(map);
+          } catch (e) {
+            fail();
+          }
+        };
+
+        qualityResolver.clear();
+        qualityResolver.timeout(1000 * 20);
+        qualityResolver.silent(url, finish, function () {
+          if (done) return;
+          var proxy = (Lampa.Storage.get('online_mod_narutobased_quality_proxy', 'https://r.jina.ai/') || '') + '';
+          if (!proxy) {
+            done = true;
+            fail();
+            return;
+          }
+          var proxied = proxy.indexOf('{url}') !== -1 ? proxy.replace('{url}', encodeURIComponent(url)) : proxy + encodeURIComponent(url);
+          qualityResolver.clear();
+          qualityResolver.timeout(1000 * 30);
+          qualityResolver.silent(proxied, finish, function () {
+            if (done) return;
+            done = true;
+            fail();
+          }, null, options);
+        }, null, options);
+      }
+
+      function startPlayback(element, items, qualityMap) {
+        var extra = getFile(element);
+        var quality = qualityMap ? component.renameQualityMap(qualityMap) : component.renameQualityMap(extra.quality);
+        var url = qualityMap ? pickBestQuality(qualityMap) || component.getDefaultQuality(extra.quality, extra.file) : component.getDefaultQuality(extra.quality, extra.file);
+        var first = {
+          url: url,
+          quality: quality,
+          timeline: element.timeline,
+          title: element.title
+        };
+        var playlist = [];
+        var found = false;
+
+        if (element.season) {
+          items.forEach(function (elem) {
+            if (elem === element) {
+              playlist.push(first);
+              found = true;
+              return;
+            }
+            var ex = getFile(elem);
+            playlist.push({
+              url: component.getDefaultQuality(ex.quality, ex.file),
+              quality: component.renameQualityMap(ex.quality),
+              timeline: elem.timeline,
+              title: elem.title
+            });
+          });
+        }
+
+        if (!found) playlist.push(first);
+        if (playlist.length > 1) first.playlist = playlist;
+
+        Lampa.Player.play(first);
+        Lampa.Player.playlist(playlist);
+      }
+
       function filtred() {
         if (!extract || !extract.series) return [];
         var seasons = extract.seasons || [];
@@ -14130,6 +14272,9 @@
           var number = String(episode.episodeNumber);
           if (seen[number]) return;
           seen[number] = true;
+          var mirrors = (episode.mirrors || []).filter(function (mirror) {
+            return playableMirror(mirror) && mirror.language === language;
+          });
           list.push({
             title: component.formatEpisodeTitle(multiple_seasons ? season_number : null, episode.episodeNumber, episode.title || ''),
             orig_title: seriesName(extract.series),
@@ -14138,6 +14283,10 @@
             season: season_number,
             episode: episode.episodeNumber,
             trackingKey: episode.trackingKey || episode.slug,
+            slug: episode.slug,
+            mirrors: mirrors.map(function (mirror) {
+              return { sourceCode: mirror.sourceCode, token: mirror.token };
+            }),
             media: [{
               label: 'auto',
               quality: 1080,
@@ -14175,44 +14324,44 @@
           }
 
           item.on('hover:enter', function () {
+            if (playingInProgress || element._playing) return;
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
             var extra = getFile(element);
 
-            if (extra.file) {
-              var playlist = [];
-              var first = {
-                url: component.getDefaultQuality(extra.quality, extra.file),
-                quality: component.renameQualityMap(extra.quality),
-                timeline: element.timeline,
-                title: element.title
-              };
+            if (!extra.file) {
+              Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+              return;
+            }
 
-              if (element.season) {
-                items.forEach(function (elem) {
-                  var ex = getFile(elem);
-                  playlist.push({
-                    url: component.getDefaultQuality(ex.quality, ex.file),
-                    quality: component.renameQualityMap(ex.quality),
-                    timeline: elem.timeline,
-                    title: elem.title
-                  });
-                });
-              } else {
-                playlist.push(first);
-              }
+            element._playing = true;
+            playingInProgress = true;
 
-              if (playlist.length > 1) first.playlist = playlist;
+            var done = function (qualityMap) {
+              element._playing = false;
+              playingInProgress = false;
+              try {
+                Lampa.Loading.stop();
+              } catch (e) {}
 
-              Lampa.Player.play(first);
-              Lampa.Player.playlist(playlist);
+              startPlayback(element, items, qualityMap);
 
               if (viewed.indexOf(hash_file) === -1) {
                 viewed.push(hash_file);
                 item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
                 Lampa.Storage.set('online_view', viewed);
               }
-            } else {
-              Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+            };
+
+            try {
+              Lampa.Loading.start(function () {});
+            } catch (e) {}
+
+            try {
+              resolveQuality(element, done, function () {
+                done(null);
+              });
+            } catch (e) {
+              done(null);
             }
           });
 
@@ -14380,6 +14529,8 @@
 
       this.destroy = function () {
         network.clear();
+        qualityResolver.clear();
+        qualityCache = {};
         extract = null;
       };
     }

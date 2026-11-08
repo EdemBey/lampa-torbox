@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lampa plugins — TorBox и Naruto Based</title>
+  <meta name="description" content="Расширения для Lampa: TorBox и online_mod с балансером Naruto Based.">
+  <style>
+    :root {
+      --bg: #0b0d12;
+      --panel: #141821;
+      --panel-2: #1a1f2b;
+      --border: #2a3140;
+      --text: #e8edf7;
+      --muted: #9aa6bb;
+      --accent: #7c9cff;
+      --accent-2: #52d6a3;
+      --warn: #f5c26b;
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(900px 500px at 15% -10%, rgba(124, 156, 255, .18), transparent 60%),
+        radial-gradient(700px 400px at 100% 0%, rgba(82, 214, 163, .12), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Arial, sans-serif;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    main { width: min(1040px, calc(100% - 2rem)); margin: 0 auto; padding: 4rem 0 5rem; }
+    header { margin-bottom: 2.5rem; }
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .35rem .7rem; border: 1px solid var(--border); border-radius: 999px;
+      color: var(--muted); font-size: .82rem; letter-spacing: .04em; text-transform: uppercase;
+      background: rgba(255,255,255,.02);
+    }
+    h1 { margin: 1rem 0 .75rem; font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.1; letter-spacing: -.03em; }
+    .lead { margin: 0; max-width: 760px; color: var(--muted); font-size: 1.08rem; }
+    .cards { display: grid; gap: 1.1rem; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin: 2.5rem 0; }
+    .card {
+      display: flex; flex-direction: column; gap: 1rem;
+      padding: 1.4rem; border: 1px solid var(--border); border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(255,255,255,.035), transparent 70%), var(--panel);
+      box-shadow: 0 18px 50px rgba(0,0,0,.28);
+    }
+    .card h2 { margin: 0; font-size: 1.2rem; letter-spacing: -.01em; }
+    .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+    .badge {
+      display: inline-block; width: fit-content; padding: .2rem .55rem; border-radius: 999px;
+      background: rgba(82, 214, 163, .12); color: var(--accent-2); font-size: .76rem; font-weight: 700;
+      letter-spacing: .05em; text-transform: uppercase;
+    }
+    .badge--blue { background: rgba(124,156,255,.13); color: var(--accent); }
+    .url {
+      display: block; padding: .85rem .95rem; border: 1px solid var(--border); border-radius: 12px;
+      background: #0a0c11; color: #cfe0ff; font: .82rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere; user-select: all;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: auto; }
+    button, .button {
+      appearance: none; border: 0; cursor: pointer; border-radius: 12px;
+      padding: .72rem 1rem; font: inherit; font-weight: 650;
+      background: var(--accent); color: #07101f; transition: transform .08s ease, filter .2s ease;
+    }
+    button:hover, .button:hover { filter: brightness(1.08); text-decoration: none; }
+    button:active, .button:active { transform: translateY(1px); }
+    button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    section { margin: 2.4rem 0; }
+    h2.section { font-size: 1.35rem; margin: 0 0 .9rem; letter-spacing: -.02em; }
+    .panel {
+      padding: 1.25rem 1.35rem; border: 1px solid var(--border); border-radius: var(--radius);
+      background: rgba(20,24,33,.72);
+    }
+    ol, ul { margin: .6rem 0 0; padding-left: 1.3rem; color: var(--muted); }
+    li + li { margin-top: .4rem; }
+    code.inline {
+      padding: .12rem .38rem; border-radius: 6px; background: #0a0c11; border: 1px solid var(--border);
+      font: .86em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #d6e4ff;
+    }
+    .note {
+      display: flex; gap: .75rem; padding: .95rem 1rem; border-radius: 14px;
+      border: 1px solid rgba(245, 194, 107, .25); background: rgba(245, 194, 107, .07); color: #f3dfb4;
+      font-size: .93rem;
+    }
+    .note strong { color: var(--warn); }
+    footer { margin-top: 3rem; padding-top: 1.2rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .9rem; }
+    @media (max-width: 520px) {
+      main { padding-top: 2.2rem; }
+      .card { padding: 1.1rem; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="eyebrow">GitHub Pages · Lampa extensions</span>
+      <h1>Плагины для Lampa</h1>
+      <p class="lead">
+        TorBox и online_mod с балансером <strong>Naruto Based</strong>. Ссылки ниже можно
+        вставить в Lampa как расширения — они отдаются прямо с этого сайта.
+      </p>
+    </header>
+
+    <div class="cards">
+      <article class="card">
+        <span class="badge">online_mod + Naruto Based</span>
+        <h2>Онлайн-источники</h2>
+        <p>
+          Онлайн-мод с HDrezka, Kodik, CDNVideoHub и другими балансерами.
+          В фильтре источников добавлен <strong>Naruto Based</strong> —
+          аниме с сайта anime.home.kopenkin.tech.
+        </p>
+        <code class="url" id="url-online">https://edembey.github.io/lampa-torbox/plugin/online_mod.js</code>
+        <div class="actions">
+          <button data-copy="url-online">Скопировать ссылку</button>
+          <a class="button secondary" href="plugin/online_mod.js" target="_blank" rel="noreferrer">Открыть JS</a>
+        </div>
+      </article>
+
+      <article class="card">
+        <span class="badge badge--blue">TorBox</span>
+        <h2>Торренты через TorBox</h2>
+        <p>
+          Поиск по IMDb через Torrentio, плюс MaxVol/Jacred. Прямое воспроизведение
+          через TorBox, выбор серии и продолжение просмотра.
+        </p>
+        <code class="url" id="url-torbox">https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js?torrentio_key=ТВОЙ_КЛЮЧ</code>
+        <div class="actions">
+          <button data-copy="url-torbox">Скопировать ссылку</button>
+          <a class="button secondary" href="plugin/torbox-lampa-plugin.js" target="_blank" rel="noreferrer">Открыть JS</a>
+        </div>
+      </article>
+    </div>
+
+    <section>
+      <h2 class="section">Как установить</h2>
+      <div class="panel">
+        <ol>
+          <li>Откройте Lampa → <strong>Настройки</strong> → <strong>Расширения</strong>.</li>
+          <li>Нажмите <strong>Добавить расширение</strong>.</li>
+          <li>Вставьте ссылку на нужный плагин и сохраните.</li>
+          <li>Вернитесь в карточку фильма или сериала — в списке «Смотреть» появится источник.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section">Naruto Based</h2>
+      <div class="panel">
+        <p>
+          Балансер внутри online_mod. Откройте фильм или сериал → <strong>Онлайн</strong> →
+          фильтр источников → <strong>Naruto Based</strong>. Плагин ищет тайтл на сайте,
+          показывает сезоны и серии, а затем запускает поток через
+          <code class="inline">/api/lampa/play/&lt;slug&gt;?language=sub|dub</code>.
+        </p>
+        <p>
+          Качество берётся из <code class="inline">/api/player/based</code>. Если сайт
+          отдаёт для него CORS, плагин ходит напрямую. Если нет — используется
+          резервный прокси <code class="inline">r.jina.ai</code> (медленнее).
+          Адрес можно переопределить:
+          <code class="inline">localStorage.online_mod_narutobased_quality_proxy</code>.
+        </p>
+        <div class="note">
+          <div>
+            <strong>Совет:</strong> чтобы выбор качества был быстрым, попросите владельца
+            сайта добавить <code class="inline">Access-Control-Allow-Origin: *</code>
+            на <code class="inline">/api/player/based</code> (или на весь
+            <code class="inline">/api/player/*</code>).
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 class="section">TorBox</h2>
+      <div class="panel">
+        <p>
+          Нужен ключ TorBox (вводится в настройках плагина) и ключ Torrentio —
+          он передаётся в ссылке расширения как <code class="inline">?torrentio_key=...</code>.
+          Ключи не хранятся в репозитории.
+        </p>
+      </div>
+    </section>
+
+    <footer>
+      Исходники и изменения:
+      <a href="https://github.com/EdemBey/lampa-torbox" target="_blank" rel="noreferrer">github.com/EdemBey/lampa-torbox</a>.
+      Плагины не содержат собственных серверов и используют публичные API.
+    </footer>
+  </main>
+
+  <script>
+    document.querySelectorAll('[data-copy]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var label = button.textContent;
+        var node = document.getElementById(button.getAttribute('data-copy'));
+        var text = node ? node.textContent.trim() : '';
+
+        function done(ok) {
+          button.textContent = ok ? 'Скопировано' : 'Не удалось';
+          setTimeout(function () { button.textContent = label; }, 1500);
+        }
+
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        } else {
+          done(false);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
