@@ -1,5 +1,6 @@
 //25.10.2026 - Fix
 //08.11.2026 - Added Naruto Based balancer (anime.home.kopenkin.tech)
+//08.11.2026 - Forward URL qualities to DDD for all balancers
 
 (function () {
     'use strict';
@@ -33,12 +34,19 @@
       var list = [];
       var seen = {};
 
-      function add(name, url) {
-        if (!url) return;
-        url = String(url);
+      function normalize(url) {
+        if (!url) return '';
+        url = String(url).trim();
 
-        if (url.indexOf('http') !== 0) return;
-        if (seen[url]) return;
+        if (url.indexOf('//') === 0) return 'https:' + url;
+        if (url.indexOf('http') !== 0) return '';
+
+        return url;
+      }
+
+      function add(name, url) {
+        url = normalize(url);
+        if (!url || seen[url]) return;
 
         seen[url] = true;
         list.push({
@@ -50,28 +58,29 @@
       if (Array.isArray(first.quality)) {
         first.quality.forEach(function (item, index) {
           if (typeof item === 'string') add('Quality ' + (index + 1), item);
-          else if (item && item.url) add(item.label || item.name || 'Quality ' + (index + 1), item.url);
+          else if (item) add(item.label || item.name || 'Quality ' + (index + 1), item.url || item.file);
         });
       } else {
         for (var key in first.quality) {
           if (!Object.prototype.hasOwnProperty.call(first.quality, key)) continue;
 
           var value = first.quality[key];
-          var url = typeof value === 'string' ? value : value && value.url;
+          var url = typeof value === 'string' ? value : value && (value.url || value.file);
           var name = value && typeof value === 'object' && value.label ? value.label : key;
 
           add(name, url);
         }
       }
 
+      var currentUrl = normalize(first.url);
       if (!list.length) return;
 
       var hasCurrent = list.some(function (item) {
-        return item.url === first.url;
+        return item.url === currentUrl;
       });
 
-      if (!hasCurrent && first.url && String(first.url).indexOf('http') === 0) {
-        list.unshift({ name: 'Auto', url: first.url });
+      if (!hasCurrent && currentUrl) {
+        list.unshift({ name: 'Auto', url: currentUrl });
       }
 
       if (list.length > 1) {
@@ -16416,7 +16425,7 @@
       };
     }
 
-    var mod_version = '08.11.2026';
+    var mod_version = '08.11.2026-2';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
