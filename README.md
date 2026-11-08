@@ -40,9 +40,39 @@ Lampa → Настройки → Расширения → Добавить ра�
   или пустая константа `TORRENTIO_KEY` в файле.
 - TorBox: вводится в настройках плагина, лежит в `localStorage` устройства.
 
+## Naruto Based в online_mod
+
+`plugin/online_mod.js` — копия
+[online_mod](https://nb557.github.io/plugins/online_mod.js) с добавленным
+балансером **Naruto Based** (`https://anime.home.kopenkin.tech`).
+В списке источников он появляется рядом с HDrezka, Kodik, CDNVideoHub и др.
+
+Установка:
+
+```
+https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/online_mod.js
+```
+
+Что добавлено:
+
+1. Поиск по названию через `/api/catalog?q=...`.
+2. Сезоны и серии из `/api/series/<slug>`.
+3. Воспроизведение через `/api/lampa/play/<slug>?language=sub|dub`
+   (302 на `/api/player/proxy`, поддержка Range).
+4. Переключатель «Субтитры / Озвучка» и плейлист по сериям сезона.
+5. Учитывается последняя выбранная озвучка сайта (`naruto_based_language`).
+
+Сайт отдаёт `Access-Control-Allow-Origin: *` для API, поэтому сторонний
+прокси не нужен. Если адрес сайта изменится, его можно переопределить:
+
+```js
+localStorage.online_mod_narutobased_site = 'https://новый-адрес'
+```
+
 ## Структура
 
 ```
-plugin/torbox-lampa-plugin.js   рабочая копия
-UPSTREAM.md                     откуда форк
+plugin/torbox-lampa-plugin.js   рабочая копия TorBox
+plugin/online_mod.js            online_mod + Naruto Based
+UPSTREAM.md                     откуда форки
 ```
