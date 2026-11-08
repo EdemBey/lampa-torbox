@@ -7,6 +7,7 @@
 //08.11.2026 - DDD quality list keeps 1080p and real lower qualities
 //08.11.2026 - Per-episode quality maps in Lampa player and DDD
 //08.11.2026 - Keep every signed quality URL (Dzen variants)
+//08.11.2026 - Solve Anubis proof-of-work for HDrezka mirrors
 
 (function () {
     'use strict';
@@ -2306,19 +2307,19 @@
         url = component.fixLink(url, ref);
         network.clear();
         network.timeout(10000);
-        network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (str) {
-          extractData(str);
+        anubisFetch(network, component.proxyLink(url, prox, prox_enc, 'enc2t'), false, {
+          dataType: 'text',
+          withCredentials: logged_in,
+          headers: headers
+        }, function (res) {
+          extractData(typeof res.body === 'string' ? res.body : '');
 
           if (extract.film_id) {
             getEpisodes(success);
           } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
-        }, false, {
-          dataType: 'text',
-          withCredentials: logged_in,
-          headers: headers
-        });
+        }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
       }
 
       function success() {
@@ -2968,6 +2969,291 @@
       });
     }
 
+    /**
+     * Anubis — proof-of-work anti-bot on HDrezka mirrors.
+     *
+     * Mirrors answer protected routes (film pages, /ajax/login/) with a small
+     * HTML page containing a SHA-256 challenge. The plugin solves it, passes
+     * the challenge and stores the auth cookie, after which the site behaves
+     * like in a normal browser.
+     */
+    function anubisSha256Hex(ascii) {
+      function rightRotate(value, amount) {
+        return (value >>> amount) | (value << (32 - amount));
+      }
+
+      function zeros(count) {
+        var s = '';
+        while (s.length < count) s += '0';
+        return s;
+      }
+
+      var mathPow = Math.pow;
+      var maxWord = mathPow(2, 32);
+      var lengthProperty = 'length';
+      var i, j;
+      var result = '';
+      var words = [];
+      var asciiBitLength = ascii[lengthProperty] * 8;
+      var hash = anubisSha256Hex.h = anubisSha256Hex.h || [];
+      var k = anubisSha256Hex.k = anubisSha256Hex.k || [];
+      var primeCounter = k[lengthProperty];
+      var isComposite = {};
+
+      for (var candidate = 2; primeCounter < 64; candidate++) {
+        if (!isComposite[candidate]) {
+          for (i = 0; i < 313; i += candidate) isComposite[i] = candidate;
+          hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+          k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+        }
+      }
+
+      ascii += '\x80';
+      while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+
+      for (i = 0; i < ascii[lengthProperty]; i++) {
+        j = ascii.charCodeAt(i);
+        if (j >> 8) return '';
+        words[i >> 2] |= j << ((3 - i) % 4) * 8;
+      }
+
+      words[words[lengthProperty]] = (asciiBitLength / maxWord) | 0;
+      words[words[lengthProperty]] = asciiBitLength;
+
+      for (j = 0; j < words[lengthProperty];) {
+        var w = words.slice(j, j += 16);
+        var oldHash = hash;
+
+        hash = hash.slice(0, 8);
+
+        for (i = 0; i < 64; i++) {
+          var w15 = w[i - 15];
+          var w2 = w[i - 2];
+          var a = hash[0];
+          var e = hash[4];
+          var temp1 = hash[7]
+            + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
+            + ((e & hash[5]) ^ ((~e) & hash[6]))
+            + k[i]
+            + (w[i] = (i < 16) ? w[i] : (
+              w[i - 16]
+              + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
+              + w[i - 7]
+              + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
+            ) | 0);
+          var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
+            + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+
+          hash = [(temp1 + temp2) | 0].concat(hash);
+          hash[4] = (hash[4] + temp1) | 0;
+        }
+
+        for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+      }
+
+      for (i = 0; i < 8; i++) {
+        for (j = 3; j + 1; j--) {
+          var b = (hash[i] >> (j * 8)) & 255;
+          result += ((b < 16) ? 0 : '') + b.toString(16);
+        }
+      }
+
+      return result;
+    }
+
+    function anubisJson(html, id) {
+      var match = String(html || '').match(new RegExp('<script id="' + id + '"[^>]*>([\\s\\S]*?)<\\/script>'));
+
+      if (!match) return null;
+
+      try {
+        return JSON.parse(match[1].replace(/<\/?[^>]+>/g, '').trim());
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function anubisParseChallenge(html) {
+      if (typeof html !== 'string' || html.indexOf('anubis_challenge') === -1) return null;
+
+      var data = anubisJson(html, 'anubis_challenge');
+      if (!data || !data.challenge || !data.challenge.id || !data.challenge.randomData) return null;
+
+      var rules = data.rules || {};
+      var difficulty = parseInt(rules.difficulty != null ? rules.difficulty : data.challenge.difficulty, 10);
+      if (!isFinite(difficulty) || difficulty < 0) return null;
+
+      var basePrefix = anubisJson(html, 'anubis_base_prefix');
+      if (typeof basePrefix !== 'string') basePrefix = '';
+
+      return {
+        id: data.challenge.id,
+        randomData: data.challenge.randomData,
+        difficulty: difficulty,
+        basePrefix: basePrefix
+      };
+    }
+
+    function anubisSetCookies(headers) {
+      var list = headers && (headers['set-cookie'] || headers['Set-Cookie']);
+      if (!list) return [];
+      if (typeof list === 'string') return [list];
+      return list;
+    }
+
+    function anubisCookieFromHeaders(headers, part) {
+      var list = anubisSetCookies(headers);
+
+      for (var i = 0; i < list.length; i++) {
+        var line = String(list[i]);
+        if (line.indexOf(part) === -1) continue;
+        if (/Max-Age=0\b/.test(line)) continue;
+        return line.split(';')[0];
+      }
+
+      return '';
+    }
+
+    function anubisStoreCookie(line, headersObj) {
+      if (!line) return;
+
+      var name = line.split('=')[0];
+      var base = (headersObj && headersObj.Cookie) || Lampa.Storage.get('online_mod_rezka2_cookie', '') || '';
+      var parts = String(base).split(';');
+      var kept = [];
+
+      for (var i = 0; i < parts.length; i++) {
+        var part = parts[i].replace(/^\s+|\s+$/g, '');
+        if (!part) continue;
+
+        var key = part.split('=')[0];
+        if (key === name) continue;
+        if (name.indexOf('techaro.lol-anubis-auth') === 0 && key.indexOf('techaro.lol-anubis-auth') === 0) continue;
+
+        kept.push(part);
+      }
+
+      kept.push(line);
+
+      var merged = kept.join('; ');
+      if (headersObj) headersObj.Cookie = merged;
+      Lampa.Storage.set('online_mod_rezka2_cookie', merged);
+    }
+
+    function anubisSolve(challenge) {
+      var data = challenge.randomData;
+      var difficulty = challenge.difficulty;
+      var bytes = Math.floor(difficulty / 2);
+      var odd = difficulty % 2;
+      var zerosPrefix = '';
+      var started = Date.now();
+      var nonce = 0;
+      var limit = 6000000;
+      var hash = '';
+
+      while (zerosPrefix.length < bytes * 2) zerosPrefix += '0';
+
+      while (nonce < limit) {
+        hash = anubisSha256Hex(data + nonce);
+
+        if (hash.slice(0, bytes * 2) === zerosPrefix && (!odd || hash.charAt(bytes * 2) === '0')) {
+          break;
+        }
+
+        nonce++;
+      }
+
+      return {
+        hash: hash,
+        nonce: nonce,
+        elapsed: Date.now() - started
+      };
+    }
+
+    function anubisPass(network, requestedUrl, response, challenge, headers, success, error) {
+      var verification = anubisCookieFromHeaders(response.headers, 'techaro.lol-anubis-cookie-verification');
+      var solved = anubisSolve(challenge);
+      var origin = (String(requestedUrl).match(/^https?:\/\/[^\/]+/) || [''])[0];
+      var passUrl = origin + (challenge.basePrefix || '') + '/.within.website/x/cmd/anubis/api/pass-challenge'
+        + '?id=' + encodeURIComponent(challenge.id)
+        + '&response=' + encodeURIComponent(solved.hash)
+        + '&nonce=' + solved.nonce
+        + '&redir=' + encodeURIComponent(requestedUrl)
+        + '&elapsedTime=' + solved.elapsed;
+
+      var passHeaders = {};
+      for (var key in headers) {
+        if (Object.prototype.hasOwnProperty.call(headers, key)) passHeaders[key] = headers[key];
+      }
+
+      var cookie = (headers && headers.Cookie) || Lampa.Storage.get('online_mod_rezka2_cookie', '') || '';
+      if (verification) cookie = cookie ? verification + '; ' + cookie : verification;
+      if (cookie) passHeaders.Cookie = cookie;
+
+      network.clear();
+      network.timeout(15000);
+      network['native'](passUrl, function (res) {
+        var auth = anubisCookieFromHeaders((res && res.headers) || {}, 'techaro.lol-anubis-auth');
+        if (auth) anubisStoreCookie(auth, headers);
+        success(!!auth);
+      }, function () {
+        if (error) error();
+      }, false, {
+        dataType: 'text',
+        headers: passHeaders,
+        returnHeaders: true
+      });
+    }
+
+    /**
+     * Request wrapper: sends the request, and when the answer is an Anubis
+     * challenge, solves it and repeats the same request once.
+     */
+    function anubisFetch(network, url, postdata, options, success, error, allow) {
+      options = options || {};
+
+      var headers = options.headers || {};
+      var retried = false;
+
+      function normalize(res) {
+        if (res && typeof res === 'object' && res.body !== undefined) {
+          return { status: res.status || 0, headers: res.headers || {}, body: res.body };
+        }
+        if (res && typeof res === 'object' && (res.status !== undefined || res.headers !== undefined)) {
+          return { status: res.status || 0, headers: res.headers || {}, body: res };
+        }
+        return { status: 0, headers: {}, body: res };
+      }
+
+      function request() {
+        var opts = {};
+        for (var key in options) {
+          if (Object.prototype.hasOwnProperty.call(options, key)) opts[key] = options[key];
+        }
+
+        if (allow) opts.returnHeaders = true;
+
+        network['native'](url, function (res) {
+          var normalized = normalize(res);
+          var challenge = allow && !retried ? anubisParseChallenge(normalized.body) : null;
+
+          if (!challenge) {
+            success(normalized);
+            return;
+          }
+
+          retried = true;
+          anubisPass(network, url, normalized, challenge, headers, function () {
+            request();
+          }, function () {
+            success(normalized);
+          });
+        }, error, postdata, opts);
+      }
+
+      request();
+    }
+
     function rezka2FillCookie(success, error) {
       var prox = Utils.proxy('rezka2');
       var prox_enc = '';
@@ -2998,11 +3284,13 @@
       postdata += '&login_not_save=0';
       network$3.clear();
       network$3.timeout(8000);
-      network$3["native"](Utils.proxyLink(url, prox, prox_enc, 'enc2t'), function (json) {
+      anubisFetch(network$3, Utils.proxyLink(url, prox, prox_enc, 'enc2t'), postdata, {
+        headers: headers
+      }, function (json) {
         var cookie = '';
         var values = {};
         var sid = '';
-        var body = json && json.body || {};
+        var body = json && json.body !== undefined ? json.body : json || {};
         body = typeof body === 'string' ? Lampa.Arrays.decodeJson(body, {}) : body;
 
         if (!body.success) {
@@ -3045,9 +3333,11 @@
 
           network$3.clear();
           network$3.timeout(8000);
-          network$3["native"](Utils.proxyLink(host + '/', prox, prox_enc2, 'enc2t'), function (str) {
-            var json = typeof str === 'string' ? Lampa.Arrays.decodeJson(str, {}) : str;
-            var body = (json && json.body || '').replace(/\n/g, '');
+          anubisFetch(network$3, Utils.proxyLink(host + '/', prox, prox_enc2, 'enc2t'), false, {
+            dataType: 'text',
+            headers: headers
+          }, function (json) {
+            var body = (json && typeof json.body === 'string' ? json.body : '').replace(/\n/g, '');
             var error_form = body.match(/(<div class="error-code">[^<]*<div>[^<]*<\/div>[^<]*<\/div>)\s*(<div class="error-title">[^<]*<\/div>)/);
 
             if (error_form) {
@@ -3165,21 +3455,14 @@
             if (success) success();
           }, function (a, c) {
             if (success) success();
-          }, false, {
-            dataType: 'text',
-            headers: headers,
-            returnHeaders: returnHeaders
-          });
+          }, returnHeaders && !prox);
         } else {
           if (error) error();
         }
       }, function (a, c) {
         Lampa.Noty.show(network$3.errorDecode(a, c));
         if (error) error();
-      }, postdata, {
-        headers: headers,
-        returnHeaders: returnHeaders
-      });
+      }, returnHeaders && !prox);
     }
 
     rezka2.initSettings = function (show_all) {
@@ -16773,7 +17056,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-9';
+    var mod_version = '08.11.2026-10';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
