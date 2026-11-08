@@ -31,9 +31,19 @@
     function attachQualityHeader(first) {
       if (!first || !first.ddd_quality) return;
 
-      first.headers = Object.assign({}, first.headers || {}, {
-        'X-DDD-Quality': first.ddd_quality
-      });
+      var headers = {};
+      var existing = first.headers;
+
+      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        headers = Object.assign({}, existing);
+      } else if (Array.isArray(existing)) {
+        for (var i = 0; i + 1 < existing.length; i += 2) {
+          headers[existing[i]] = existing[i + 1];
+        }
+      }
+
+      headers['X-DDD-Quality'] = first.ddd_quality;
+      first.headers = headers;
     }
 
     function attachExternalQualities(first) {
@@ -16436,7 +16446,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-3';
+    var mod_version = '08.11.2026-4';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
