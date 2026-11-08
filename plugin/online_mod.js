@@ -14038,6 +14038,147 @@
         };
       }
 
+      function episodeShowName(episode) {
+        return (russian() && episode.showTitleRussian) || episode.showTitleEnglish || episode.showTitleRomaji || episode.showTitle || select_title;
+      }
+
+      function episodeDisplayTitle(episode) {
+        var show = episodeShowName(episode);
+        var number = episode.episodeNumber;
+        var title = episode.title ? ' — ' + episode.title : '';
+        var label = russian() ? 'Серия' : 'Episode';
+        return show + (number != null ? ' · ' + label + ' ' + number : '') + title;
+      }
+
+      function episodeCard(episode) {
+        var year = '';
+        if (episode.releasedAt) {
+          var date = new Date(episode.releasedAt);
+          if (!isNaN(date.getTime())) year = String(date.getFullYear());
+        }
+        return {
+          id: episode.slug,
+          slug: episode.slug,
+          episode: episode,
+          title: episodeDisplayTitle(episode),
+          orig_title: episode.title || episodeShowName(episode),
+          year: year,
+          seasons_count: 1,
+          episodes_count: 1
+        };
+      }
+
+      function playEpisodeDirect(episode) {
+        var languages = languagesOf(episode);
+        var noSources = russian() ? 'У этой серии нет доступных источников' : 'No playable sources for this episode';
+
+        if (!languages.length) {
+          Lampa.Noty.show(noSources);
+          return;
+        }
+
+        var start = function (language) {
+          var mirrors = (episode.mirrors || []).filter(function (mirror) {
+            return playableMirror(mirror) && mirror.language === language;
+          });
+
+          if (!mirrors.length) {
+            Lampa.Noty.show(noSources);
+            return;
+          }
+
+          var element = {
+            title: episodeDisplayTitle(episode),
+            orig_title: episode.title || episodeShowName(episode),
+            quality: 'auto',
+            info: ' / ' + languageLabel(language),
+            season: 0,
+            episode: episode.episodeNumber,
+            trackingKey: episode.trackingKey || episode.slug,
+            slug: episode.slug,
+            language: language,
+            mirrors: mirrors.map(function (mirror) {
+              return { sourceCode: mirror.sourceCode, token: mirror.token };
+            }),
+            media: [{
+              label: 'auto',
+              quality: 1080,
+              file: playUrl(episode, language)
+            }]
+          };
+
+          element.timeline = Lampa.Timeline.view(Lampa.Utils.hash('naruto-based:' + (episode.trackingKey || episode.slug)));
+          Lampa.Storage.set('naruto_based_language', language);
+
+          if (object.movie && object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+
+          var play = function (qualityMap) {
+            startPlayback(element, [element], qualityMap);
+          };
+
+          try {
+            Lampa.Loading.start(function () {});
+          } catch (e) {}
+
+          try {
+            resolveQuality(element, function (qualityMap) {
+              try {
+                Lampa.Loading.stop();
+              } catch (e) {}
+              play(qualityMap);
+            }, function () {
+              try {
+                Lampa.Loading.stop();
+              } catch (e) {}
+              play(null);
+            });
+          } catch (e) {
+            play(null);
+          }
+        };
+
+        if (languages.length === 1) {
+          start(languages[0]);
+          return;
+        }
+
+        var preferred = Lampa.Storage.get('naruto_based_language', 'sub');
+        if (languages.indexOf(preferred) === -1) preferred = languages[0];
+
+        Lampa.Select.show({
+          title: episodeDisplayTitle(episode),
+          items: languages.map(function (language) {
+            return { title: languageLabel(language), language: language };
+          }),
+          onSelect: function (item) {
+            start(item.language);
+          }
+        });
+      }
+
+      function displayEpisodes(episodes) {
+        var seen = {};
+        var cards = episodes.filter(function (episode) {
+          var key = String(episode.slug);
+          if (seen[key]) return false;
+          seen[key] = true;
+          return true;
+        }).map(episodeCard);
+
+        if (!cards.length) {
+          component.emptyForQuery(select_title);
+          return;
+        }
+
+        if (cards.length === 1) {
+          playEpisodeDirect(cards[0].episode);
+          return;
+        }
+
+        component.similars(cards);
+        component.loading(false);
+      }
+
       function normalizeEpisodes() {
         var seen = {};
         return (extract.episodes || []).filter(function (episode) {
@@ -14446,6 +14587,11 @@
         object = _object;
         select_title = object.search || object.movie.title || object.movie.name || '';
 
+        if (data && data[0] && data[0].episode) {
+          playEpisodeDirect(data[0].episode);
+          return;
+        }
+
         if (data && data[0] && data[0].slug) {
           getSeries(data[0].slug);
           return;
@@ -14492,11 +14638,19 @@
           network.silent(url, function (json) {
             var payload = payloadOf(json);
             var cards = ((payload && payload.series) || []).map(toCard);
+
             if (cards.length) {
               display(cards);
-            } else {
-              tryNext(index + 1);
+              return;
             }
+
+            var episodes = (payload && payload.episodes) || [];
+            if (episodes.length) {
+              displayEpisodes(episodes);
+              return;
+            }
+
+            tryNext(index + 1);
           }, function (a, c) {
             component.empty(network.errorDecode(a, c));
           });
