@@ -9,6 +9,7 @@
 //08.11.2026 - Keep every signed quality URL (Dzen variants)
 //08.11.2026 - Solve Anubis proof-of-work for HDrezka mirrors
 //08.11.2026 - HDrezka login through native bridge (no CORS)
+//08.11.2026 - Keep Anubis cookie when saving login cookies
 
 (function () {
     'use strict';
@@ -3367,6 +3368,15 @@
         var body = json && json.body !== undefined ? json.body : json || {};
         body = typeof body === 'string' ? Lampa.Arrays.decodeJson(body, {}) : body;
 
+        // Keep cookies we already have (first of all the Anubis auth cookie),
+        // otherwise a successful login would drop them.
+        String(Lampa.Storage.get('online_mod_rezka2_cookie', '') + '').split(';').forEach(function (part) {
+          part = part.replace(/^\s+|\s+$/g, '');
+          var eq = part.indexOf('=');
+          if (eq === -1) return;
+          values[part.slice(0, eq)] = part.slice(eq + 1);
+        });
+
         if (!body.success) {
           if (body.message) Lampa.Noty.show(body.message);
           if (error) error();
@@ -3383,19 +3393,20 @@
               if (parts[1] === 'deleted') delete values[parts[0]];else values[parts[0]] = parts[1] || '';
             }
           });
-          sid = values['PHPSESSID'];
-          delete values['PHPSESSID'];
-          var cookies = [];
-
-          for (var name in values) {
-            cookies.push(name + '=' + values[name]);
-          }
-
-          cookie = cookies.join('; ');
         }
 
-        if (cookie) {
-          Lampa.Storage.set('online_mod_rezka2_cookie', cookie);
+        sid = values['PHPSESSID'] || sid;
+        delete values['PHPSESSID'];
+        var cookies = [];
+
+        for (var name in values) {
+          cookies.push(name + '=' + values[name]);
+        }
+
+        cookie = cookies.join('; ');
+
+        if (cookie || sid) {
+          if (cookie) Lampa.Storage.set('online_mod_rezka2_cookie', cookie);
           if (cookie.indexOf('PHPSESSID=') == -1) cookie = 'PHPSESSID=' + (sid || Utils.randomId(26)) + (cookie ? '; ' + cookie : '');
           var prox_enc2 = prox_enc;
 
@@ -17130,7 +17141,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-11';
+    var mod_version = '08.11.2026-12';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
