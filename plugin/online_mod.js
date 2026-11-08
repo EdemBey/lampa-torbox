@@ -2,7 +2,8 @@
 //08.11.2026 - Added Naruto Based balancer (anime.home.kopenkin.tech)
 //08.11.2026 - Forward URL qualities to DDD for all balancers
 //08.11.2026 - DDD quality transport via X-DDD-Quality header
-//08.11.2026 - Direct CDN URLs, lazy playlist resolution, HDrezka mirror
+//08.11.2026 - Lazy playlist resolution, HDrezka mirror
+//08.11.2026 - Prefer fast source providers, revert direct CDN
 
 (function () {
     'use strict';
@@ -106,85 +107,6 @@
       if (list.length > 1) {
         first.ddd_quality = JSON.stringify(list);
         attachQualityHeader(first);
-      }
-    }
-
-    function unwrapProxyUrl(url) {
-      if (!url) return url;
-
-      var marker = '/api/player/proxy?src=';
-      var pos = url.indexOf(marker);
-
-      if (pos === -1) return url;
-
-      var encoded = url.slice(pos + marker.length);
-      var direct = '';
-
-      try {
-        direct = decodeURIComponent(encoded);
-      } catch (e) {
-        return url;
-      }
-
-      // Keep the site proxy for cleartext sources (mixed content on HTTPS pages).
-      if (direct.indexOf('https://') !== 0) return url;
-
-      return direct;
-    }
-
-    function directCdnEnabled() {
-      try {
-        return String(Lampa.Storage.get('online_mod_direct_cdn', '1')) !== '0';
-      } catch (e) {
-        return true;
-      }
-    }
-
-    function resolveAutoDirect(url, callback) {
-      if (!directCdnEnabled() || !url || url.indexOf('/api/lampa/play') === -1 || typeof fetch !== 'function') {
-        callback(url);
-        return;
-      }
-
-      var finished = false;
-      var controller = null;
-      var timer = setTimeout(function () { finish(url); }, 5000);
-
-      function finish(result) {
-        if (finished) return;
-
-        finished = true;
-        clearTimeout(timer);
-
-        try {
-          if (controller) controller.abort();
-        } catch (e) {}
-
-        callback(result);
-      }
-
-      try {
-        controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      } catch (e) {}
-
-      try {
-        fetch(url, {
-          redirect: 'follow',
-          cache: 'no-store',
-          signal: controller ? controller.signal : undefined
-        }).then(function (response) {
-          var finalUrl = response && response.url ? response.url : url;
-
-          try {
-            if (response && response.body && response.body.cancel) response.body.cancel();
-          } catch (e) {}
-
-          finish(unwrapProxyUrl(finalUrl));
-        }).catch(function () {
-          finish(url);
-        });
-      } catch (e) {
-        finish(url);
       }
     }
 
@@ -14590,21 +14512,52 @@
         return JSON.parse(str.slice(start, end + 1));
       }
 
+      // Fastest/reliable providers first. Anything unknown sorts before Mail.
+      var providerPriority = ['dzen', 'allvideo', 'vk', 'ok', 'plvideo', 'sibnet', 'myvi', 'ustore', 'mail', 'youtube'];
+
+      function providerRank(provider) {
+        var name = String(provider || '').toLowerCase();
+        for (var i = 0; i < providerPriority.length; i++) {
+          if (name.indexOf(providerPriority[i]) !== -1) return i;
+        }
+        return providerPriority.length - 1;
+      }
+
+      function qualityWeight(quality) {
+        var value = parseInt(quality, 10);
+        return isNaN(value) ? 0 : value;
+      }
+
       function qualityMapFromPayload(payload) {
-        var map = {};
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
           sources = [{ quality: payload.quality, src: payload.src }];
         }
+
+        var candidates = [];
+
         sources.forEach(function (source) {
-          var key = (source.quality || 'auto') + '';
           var src = (source.src || '') + '';
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
-          src = unwrapProxyUrl(src);
-          if (!map[key]) map[key] = src;
+          candidates.push({
+            key: (source.quality || 'auto') + '',
+            src: src,
+            rank: providerRank(source.provider)
+          });
         });
+
+        // Same quality from several providers: keep the preferred provider.
+        candidates.sort(function (a, b) {
+          return qualityWeight(b.key) - qualityWeight(a.key) || a.rank - b.rank;
+        });
+
+        var map = {};
+        candidates.forEach(function (item) {
+          if (!map[item.key]) map[item.key] = item.src;
+        });
+
         return map;
       }
 
@@ -14722,8 +14675,9 @@
         }, null, options);
       }
 
-      function startPlaybackNow(element, items, qualityMap, external, autoUrl) {
+      function startPlayback(element, items, qualityMap, external) {
         var extra = getFile(element);
+        var autoUrl = component.getDefaultQuality(extra.quality, extra.file);
         var quality = qualityMap ? component.renameQualityMap(qualityMap) : component.renameQualityMap(extra.quality);
         var url = qualityMap ? pickBestQuality(qualityMap) || autoUrl : autoUrl;
         var first = {
@@ -14736,7 +14690,7 @@
         };
 
         if (external) {
-          var dddQualities = [{ name: 'Auto', url: autoUrl }];
+          var dddQualities = [{ name: 'Auto', url: url }];
 
           if (qualityMap) {
             for (var qualityName in qualityMap) {
@@ -14787,20 +14741,6 @@
         if (playlist.length > 1) first.playlist = playlist;
 
         playWithoutPreroll(first, playlist);
-      }
-
-      function startPlayback(element, items, qualityMap, external) {
-        var extra = getFile(element);
-        var autoUrl = component.getDefaultQuality(extra.quality, extra.file);
-
-        if (!qualityMap && autoUrl.indexOf('/api/lampa/play') !== -1) {
-          resolveAutoDirect(autoUrl, function (directUrl) {
-            startPlaybackNow(element, items, qualityMap, external, directUrl);
-          });
-          return;
-        }
-
-        startPlaybackNow(element, items, qualityMap, external, autoUrl);
       }
 
       function filtred() {
@@ -16661,7 +16601,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-5';
+    var mod_version = '08.11.2026-6';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
