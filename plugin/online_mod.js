@@ -8,6 +8,7 @@
 //08.11.2026 - Per-episode quality maps in Lampa player and DDD
 //08.11.2026 - Keep every signed quality URL (Dzen variants)
 //08.11.2026 - Solve Anubis proof-of-work for HDrezka mirrors
+//08.11.2026 - HDrezka login through native bridge (no CORS)
 
 (function () {
     'use strict';
@@ -2907,66 +2908,139 @@
       var postdata = 'login_name=' + encodeURIComponent(Lampa.Storage.get('online_mod_rezka2_name', ''));
       postdata += '&login_password=' + encodeURIComponent(Lampa.Storage.get('online_mod_rezka2_password', ''));
       postdata += '&login_not_save=0';
-      network$3.clear();
-      network$3.timeout(8000);
-      network$3.silent(url, function (json) {
+
+      var android = Lampa.Platform.is('android');
+      var native = android && Utils.checkAndroidVersion(339);
+      var headers = android ? { 'User-Agent': Utils.baseUserAgent() } : {};
+      var cookie = Lampa.Storage.get('online_mod_rezka2_cookie', '') + '';
+      if (cookie) headers.Cookie = cookie;
+
+      var storeCookies = function (res) {
+        var list = anubisSetCookies(res && res.headers);
+
+        for (var i = 0; i < list.length; i++) {
+          var raw = String(list[i]);
+          var line = raw.split(';')[0];
+
+          if (!line || line.indexOf('=') === -1) continue;
+          if (/Max-Age=0\b/.test(raw)) continue;
+
+          anubisStoreCookie(line, headers);
+        }
+      };
+
+      var checkPage = function (body) {
+        body = (body || '').replace(/\n/g, '');
+        var error_form = body.match(/(<div class="error-code">[^<]*<div>[^<]*<\/div>[^<]*<\/div>)\s*(<div class="error-title">[^<]*<\/div>)/);
+
+        if (error_form) {
+          Lampa.Noty.show(error_form[0]);
+          if (error) error();
+          return;
+        }
+
+        var verify_form = body.match(/<span>MIRROR<\/span>.*<button type="submit" onclick="\$\.cookie(\([^)]*\))/);
+
+        if (verify_form) {
+          Lampa.Noty.show(Lampa.Lang.translate('online_mod_unsupported_mirror') + ' HDrezka');
+          rezka2Logout(error, error);
+          return;
+        }
+
+        if (success) success();
+      };
+
+      var handle = function (res) {
+        var raw = res && res.body !== undefined ? res.body : res;
+        var json = typeof raw === 'string' ? Lampa.Arrays.decodeJson(raw, {}) : raw;
+
         if (json && (json.success || json.message == 'Уже авторизован на сайте. Необходимо обновить страницу!')) {
           Lampa.Storage.set('online_mod_rezka2_status', 'true');
+          storeCookies(res);
+
           network$3.clear();
           network$3.timeout(8000);
-          network$3.silent(host + '/', function (str) {
-            str = (str || '').replace(/\n/g, '');
-            var error_form = str.match(/(<div class="error-code">[^<]*<div>[^<]*<\/div>[^<]*<\/div>)\s*(<div class="error-title">[^<]*<\/div>)/);
 
-            if (error_form) {
-              Lampa.Noty.show(error_form[0]);
-              if (error) error();
-              return;
-            }
-
-            var verify_form = str.match(/<span>MIRROR<\/span>.*<button type="submit" onclick="\$\.cookie(\([^)]*\))/);
-
-            if (verify_form) {
-              Lampa.Noty.show(Lampa.Lang.translate('online_mod_unsupported_mirror') + ' HDrezka');
-              rezka2Logout(error, error);
-              return;
-            }
-
-            if (success) success();
-          }, function (a, c) {
-            if (success) success();
-          }, false, {
-            dataType: 'text',
-            withCredentials: true
-          });
+          if (native) {
+            anubisFetch(network$3, host + '/', false, {
+              dataType: 'text',
+              headers: headers
+            }, function (page) {
+              storeCookies(page);
+              checkPage(typeof page.body === 'string' ? page.body : '');
+            }, function () {
+              if (success) success();
+            }, true);
+          } else {
+            network$3.silent(host + '/', checkPage, function (a, c) {
+              if (success) success();
+            }, false, {
+              dataType: 'text',
+              withCredentials: true
+            });
+          }
         } else {
           Lampa.Storage.set('online_mod_rezka2_status', 'false');
           if (json && json.message) Lampa.Noty.show(json.message);
           if (error) error();
         }
-      }, function (a, c) {
-        Lampa.Noty.show(network$3.errorDecode(a, c));
-        if (error) error();
-      }, postdata, {
-        withCredentials: true
-      });
+      };
+
+      network$3.clear();
+      network$3.timeout(8000);
+
+      if (native) {
+        anubisFetch(network$3, url, postdata, {
+          headers: headers
+        }, handle, function (a, c) {
+          Lampa.Noty.show(network$3.errorDecode(a, c));
+          if (error) error();
+        }, true);
+      } else {
+        network$3.silent(url, handle, function (a, c) {
+          Lampa.Noty.show(network$3.errorDecode(a, c));
+          if (error) error();
+        }, postdata, {
+          withCredentials: true
+        });
+      }
     }
 
     function rezka2Logout(success, error) {
       var url = Utils.rezka2Mirror() + '/logout/';
+      var android = Lampa.Platform.is('android');
+      var native = android && Utils.checkAndroidVersion(339);
+      var headers = android ? { 'User-Agent': Utils.baseUserAgent() } : {};
+      var cookie = Lampa.Storage.get('online_mod_rezka2_cookie', '') + '';
+      if (cookie) headers.Cookie = cookie;
+
       network$3.clear();
       network$3.timeout(8000);
-      network$3.silent(url, function (str) {
+
+      var done = function () {
         Lampa.Storage.set('online_mod_rezka2_status', 'false');
         if (success) success();
-      }, function (a, c) {
-        Lampa.Storage.set('online_mod_rezka2_status', 'false');
-        Lampa.Noty.show(network$3.errorDecode(a, c));
-        if (error) error();
-      }, false, {
-        dataType: 'text',
-        withCredentials: true
-      });
+      };
+
+      if (native) {
+        anubisFetch(network$3, url, false, {
+          dataType: 'text',
+          headers: headers
+        }, done, function (a, c) {
+          Lampa.Storage.set('online_mod_rezka2_status', 'false');
+          Lampa.Noty.show(network$3.errorDecode(a, c));
+          if (error) error();
+        }, true);
+      } else {
+        network$3.silent(url, done, function (a, c) {
+          Lampa.Storage.set('online_mod_rezka2_status', 'false');
+          Lampa.Noty.show(network$3.errorDecode(a, c));
+          if (error) error();
+        }, false, {
+          dataType: 'text',
+          withCredentials: true
+        });
+      }
     }
 
     /**
@@ -17056,7 +17130,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-10';
+    var mod_version = '08.11.2026-11';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
