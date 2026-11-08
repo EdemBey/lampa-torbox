@@ -14229,11 +14229,19 @@
         };
         var playlist = [];
         var found = false;
+        var pushCurrent = function () {
+          playlist.push({
+            url: first.url,
+            quality: first.quality,
+            timeline: first.timeline,
+            title: first.title
+          });
+        };
 
         if (element.season) {
           items.forEach(function (elem) {
             if (elem === element) {
-              playlist.push(first);
+              pushCurrent();
               found = true;
               return;
             }
@@ -14247,7 +14255,7 @@
           });
         }
 
-        if (!found) playlist.push(first);
+        if (!found) pushCurrent();
         if (playlist.length > 1) first.playlist = playlist;
 
         Lampa.Player.play(first);
