@@ -10,6 +10,7 @@
 //08.11.2026 - Solve Anubis proof-of-work for HDrezka mirrors
 //08.11.2026 - HDrezka login through native bridge (no CORS)
 //08.11.2026 - Keep Anubis cookie when saving login cookies
+//08.11.2026 - HDrezka uses OkHttp user agent (Anubis whitelist)
 
 (function () {
     'use strict';
@@ -434,6 +435,21 @@
       return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36';
     }
 
+    /**
+     * HDrezka's Anubis only challenges browser user agents. The official app
+     * and OkHttp clients pass without a challenge, so requests are made with
+     * an OkHttp UA. Can be overridden from settings/storage.
+     */
+    function rezka2UserAgent() {
+      var custom = '';
+
+      try {
+        custom = (Lampa.Storage.get('online_mod_rezka2_user_agent', '') || '') + '';
+      } catch (e) {}
+
+      return custom || 'okhttp/4.12.0';
+    }
+
     function vcdnToken() {
       return atob('YXBpX3Rva2VuPQ==') + (isDebug() ? decodeSecret([42, 24, 18, 6, 10, 127, 48, 34, 74, 110, 54, 50, 47, 44, 6, 127, 9, 65, 55, 97, 27, 45, 2, 67, 36, 114, 1, 56, 68, 16, 24, 27]) : decodeSecret([122, 92, 10, 26, 78, 79, 1, 6, 117, 106, 55, 3, 83, 27, 92, 18, 107, 24, 66, 44, 20, 58, 9, 58, 106, 19, 91, 53, 123, 49, 115, 88], atob('RnVja0x1bWV4')));
     }
@@ -715,6 +731,7 @@
       filmixToken: filmixToken,
       filmixUserAgent: filmixUserAgent,
       baseUserAgent: baseUserAgent,
+      rezka2UserAgent: rezka2UserAgent,
       vcdnToken: vcdnToken,
       setMyIp: setMyIp,
       getMyIp: getMyIp,
@@ -1941,7 +1958,7 @@
       var host = prox && !proxy_mirror ? Utils.rezka2Host() : Utils.rezka2Mirror();
       var ref = host + '/';
       var logged_in = !(prox || Lampa.Platform.is('android'));
-      var user_agent = Utils.baseUserAgent();
+      var user_agent = Utils.rezka2UserAgent();
       var headers = Lampa.Platform.is('android') ? {
         'Origin': host,
         'Referer': ref,
@@ -2912,7 +2929,7 @@
 
       var android = Lampa.Platform.is('android');
       var native = android && Utils.checkAndroidVersion(339);
-      var headers = android ? { 'User-Agent': Utils.baseUserAgent() } : {};
+      var headers = android ? { 'User-Agent': Utils.rezka2UserAgent() } : {};
       var cookie = Lampa.Storage.get('online_mod_rezka2_cookie', '') + '';
       if (cookie) headers.Cookie = cookie;
 
@@ -3011,7 +3028,7 @@
       var url = Utils.rezka2Mirror() + '/logout/';
       var android = Lampa.Platform.is('android');
       var native = android && Utils.checkAndroidVersion(339);
-      var headers = android ? { 'User-Agent': Utils.baseUserAgent() } : {};
+      var headers = android ? { 'User-Agent': Utils.rezka2UserAgent() } : {};
       var cookie = Lampa.Storage.get('online_mod_rezka2_cookie', '') + '';
       if (cookie) headers.Cookie = cookie;
 
@@ -3342,7 +3359,7 @@
         return;
       }
 
-      var user_agent = Utils.baseUserAgent();
+      var user_agent = Utils.rezka2UserAgent();
       var headers = Lampa.Platform.is('android') ? {
         'User-Agent': user_agent
       } : {};
@@ -17141,7 +17158,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-12';
+    var mod_version = '08.11.2026-13';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;

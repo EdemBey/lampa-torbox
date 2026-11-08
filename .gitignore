@@ -3,3 +3,26 @@ node_modules/
 *.log
 keys.local.*
 upstream/
+
+# Local binaries and archives (APKs, builds, downloads)
+*.apk
+*.aab
+*.apks
+*.xapk
+*.ipa
+*.dmg
+*.iso
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# Editor / OS junk
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
