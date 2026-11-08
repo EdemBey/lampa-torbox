@@ -14112,28 +14112,15 @@
 
           if (object.movie && object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
 
-          var play = function (qualityMap) {
-            startPlayback(element, [element], qualityMap);
-          };
+          var cached = getCachedQuality(element);
+          startPlayback(element, [element], cached);
 
-          try {
-            Lampa.Loading.start(function () {});
-          } catch (e) {}
-
-          try {
-            resolveQuality(element, function (qualityMap) {
-              try {
-                Lampa.Loading.stop();
-              } catch (e) {}
-              play(qualityMap);
-            }, function () {
-              try {
-                Lampa.Loading.stop();
-              } catch (e) {}
-              play(null);
-            });
-          } catch (e) {
-            play(null);
+          if (!cached) {
+            try {
+              resolveQuality(element, function (qualityMap) {
+                applyBackgroundQuality(element, qualityMap);
+              }, function () {});
+            } catch (e) {}
           }
         };
 
@@ -14304,8 +14291,46 @@
         return best ? map[best] : '';
       }
 
+      function qualityCacheKey(element) {
+        return (element.slug || '') + ':' + (element.language || '');
+      }
+
+      function getCachedQuality(element) {
+        var cached = qualityCache[qualityCacheKey(element)];
+
+        if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
+          return cached.map;
+        }
+
+        return null;
+      }
+
+      function applyBackgroundQuality(element, qualityMap, attempt) {
+        if (!qualityMap) return;
+
+        attempt = attempt || 0;
+
+        var opened = Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened();
+        var active = opened && typeof Lampa.Player.playdata === 'function' ? Lampa.Player.playdata() : null;
+
+        if (!opened || !active) {
+          if (attempt < 6) {
+            setTimeout(function () {
+              applyBackgroundQuality(element, qualityMap, attempt + 1);
+            }, 500);
+          }
+          return;
+        }
+
+        if (active.slug !== element.slug || active.language !== element.language) return;
+
+        if (Lampa.PlayerPanel && typeof Lampa.PlayerPanel.quality === 'function') {
+          Lampa.PlayerPanel.quality(component.renameQualityMap(qualityMap), active.url);
+        }
+      }
+
       function resolveQuality(element, success, fail) {
-        var cacheKey = (element.slug || '') + ':' + (element.language || '');
+        var cacheKey = qualityCacheKey(element);
         var cached = qualityCache[cacheKey];
         if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
           success(cached.map);
@@ -14373,7 +14398,9 @@
           url: url,
           quality: quality,
           timeline: element.timeline,
-          title: element.title
+          title: element.title,
+          slug: element.slug,
+          language: element.language
         };
         var playlist = [];
         var found = false;
@@ -14382,7 +14409,9 @@
             url: first.url,
             quality: first.quality,
             timeline: first.timeline,
-            title: first.title
+            title: first.title,
+            slug: first.slug,
+            language: first.language
           });
         };
 
@@ -14398,7 +14427,9 @@
               url: component.getDefaultQuality(ex.quality, ex.file),
               quality: component.renameQualityMap(ex.quality),
               timeline: elem.timeline,
-              title: elem.title
+              title: elem.title,
+              slug: elem.slug,
+              language: elem.language
             });
           });
         }
@@ -14492,32 +14523,24 @@
             element._playing = true;
             playingInProgress = true;
 
-            var done = function (qualityMap) {
-              element._playing = false;
-              playingInProgress = false;
+            var cached = getCachedQuality(element);
+            startPlayback(element, items, cached);
+
+            element._playing = false;
+            playingInProgress = false;
+
+            if (viewed.indexOf(hash_file) === -1) {
+              viewed.push(hash_file);
+              item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+              Lampa.Storage.set('online_view', viewed);
+            }
+
+            if (!cached) {
               try {
-                Lampa.Loading.stop();
+                resolveQuality(element, function (qualityMap) {
+                  applyBackgroundQuality(element, qualityMap);
+                }, function () {});
               } catch (e) {}
-
-              startPlayback(element, items, qualityMap);
-
-              if (viewed.indexOf(hash_file) === -1) {
-                viewed.push(hash_file);
-                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-                Lampa.Storage.set('online_view', viewed);
-              }
-            };
-
-            try {
-              Lampa.Loading.start(function () {});
-            } catch (e) {}
-
-            try {
-              resolveQuality(element, done, function () {
-                done(null);
-              });
-            } catch (e) {
-              done(null);
             }
           });
 
