@@ -5,6 +5,7 @@
 //08.11.2026 - Lazy playlist resolution, HDrezka mirror
 //08.11.2026 - Prefer fast source providers, revert direct CDN
 //08.11.2026 - DDD quality list keeps 1080p and real lower qualities
+//08.11.2026 - Per-episode quality maps in Lampa player and DDD
 
 (function () {
     'use strict';
@@ -215,6 +216,41 @@
       next();
     }
 
+    /**
+     * Per-episode source descriptors for the external player. Lampa's Android
+     * bridge forwards only URLs in `video_list`, so this is the only channel
+     * that can carry quality data for every playlist item.
+     */
+    function attachQualitySources(first, playlist) {
+      if (!first || !playlist || !playlist.length) return;
+
+      var sources = {};
+      var count = 0;
+
+      playlist.forEach(function (item, index) {
+        if (!item || !item.qualitySourceUrl) return;
+
+        sources[String(index)] = item.qualitySourceUrl;
+        count++;
+      });
+
+      if (!count) return;
+
+      var headers = {};
+      var existing = first.headers;
+
+      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        headers = Object.assign({}, existing);
+      } else if (Array.isArray(existing)) {
+        for (var i = 0; i + 1 < existing.length; i += 2) {
+          headers[existing[i]] = existing[i + 1];
+        }
+      }
+
+      headers['X-DDD-Quality-Sources'] = JSON.stringify(sources);
+      first.headers = headers;
+    }
+
     function startPlayer(first, playlist) {
       if (!first) return;
 
@@ -222,6 +258,7 @@
       attachExternalQualities(first);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
+        attachQualitySources(first, playlist);
         first.playlist = sanitizePlaylist(first, playlist);
       }
 
@@ -14237,6 +14274,27 @@
         return site + '/api/lampa/play/' + encodeURIComponent(episode.slug) + '?language=' + encodeURIComponent(language);
       }
 
+      /**
+       * URL that returns the source list for one episode. Cheap to build: it
+       * only packs the mirror tokens, no network request is made here.
+       */
+      function basedUrl(mirrors) {
+        var seen = {};
+        var query = [];
+
+        (mirrors || []).forEach(function (mirror) {
+          if (!mirror || !mirror.sourceCode) return;
+
+          var key = mirror.sourceCode + ':' + mirror.token;
+          if (seen[key]) return;
+
+          seen[key] = true;
+          query.push('source=' + encodeURIComponent(key));
+        });
+
+        return query.length ? site + '/api/player/based?' + query.join('&') : '';
+      }
+
       function inSeason(episode, season) {
         if (!season) return true;
         if (episode.seasonSlug === season.slug) return true;
@@ -14690,7 +14748,7 @@
         }
       }
 
-      function resolveQuality(element, success, fail) {
+      function resolveQuality(element, success, fail, fast) {
         var cacheKey = qualityCacheKey(element);
         var cached = qualityCache[cacheKey];
         if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
@@ -14734,6 +14792,13 @@
         qualityResolver.timeout(1000 * 20);
         qualityResolver.silent(url, finish, function () {
           if (done) return;
+
+          if (fast) {
+            done = true;
+            fail();
+            return;
+          }
+
           var proxy = (Lampa.Storage.get('online_mod_narutobased_quality_proxy', 'https://r.jina.ai/') || '') + '';
           if (!proxy) {
             done = true;
@@ -14799,6 +14864,7 @@
           playlist.push({
             url: first.url,
             quality: first.quality,
+            qualitySourceUrl: basedUrl(element.mirrors),
             timeline: first.timeline,
             title: first.title,
             slug: first.slug,
@@ -14813,15 +14879,46 @@
               found = true;
               return;
             }
+
             var ex = getFile(elem);
-            playlist.push({
-              url: component.getDefaultQuality(ex.quality, ex.file),
-              quality: component.renameQualityMap(ex.quality),
+            var fallbackUrl = component.getDefaultQuality(ex.quality, ex.file);
+            var qualitySourceUrl = basedUrl(elem.mirrors);
+
+            if (external) {
+              playlist.push({
+                url: fallbackUrl,
+                quality: component.renameQualityMap(ex.quality),
+                qualitySourceUrl: qualitySourceUrl,
+                timeline: elem.timeline,
+                title: elem.title,
+                slug: elem.slug,
+                language: elem.language
+              });
+              return;
+            }
+
+            // Lampa's own player needs a real quality map per item, otherwise
+            // the panel shows no quality options for the next episode.
+            var cell = {
+              url: function url(call) {
+                resolveQuality(elem, function (map) {
+                  cell.url = component.getDefaultQuality(map, fallbackUrl) || fallbackUrl;
+                  cell.quality = component.renameQualityMap(map);
+                  call();
+                }, function () {
+                  cell.url = fallbackUrl;
+                  call();
+                }, true);
+              },
+              quality: {},
+              qualitySourceUrl: qualitySourceUrl,
               timeline: elem.timeline,
               title: elem.title,
               slug: elem.slug,
               language: elem.language
-            });
+            };
+
+            playlist.push(cell);
           });
         }
 
@@ -16689,7 +16786,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-7';
+    var mod_version = '08.11.2026-8';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
