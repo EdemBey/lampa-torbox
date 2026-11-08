@@ -2,6 +2,7 @@
 //08.11.2026 - Added Naruto Based balancer (anime.home.kopenkin.tech)
 //08.11.2026 - Forward URL qualities to DDD for all balancers
 //08.11.2026 - DDD quality transport via X-DDD-Quality header
+//08.11.2026 - Direct CDN URLs, lazy playlist resolution, HDrezka mirror
 
 (function () {
     'use strict';
@@ -108,11 +109,198 @@
       }
     }
 
-    function playWithoutPreroll(first, playlist) {
+    function unwrapProxyUrl(url) {
+      if (!url) return url;
+
+      var marker = '/api/player/proxy?src=';
+      var pos = url.indexOf(marker);
+
+      if (pos === -1) return url;
+
+      var encoded = url.slice(pos + marker.length);
+      var direct = '';
+
+      try {
+        direct = decodeURIComponent(encoded);
+      } catch (e) {
+        return url;
+      }
+
+      // Keep the site proxy for cleartext sources (mixed content on HTTPS pages).
+      if (direct.indexOf('https://') !== 0) return url;
+
+      return direct;
+    }
+
+    function directCdnEnabled() {
+      try {
+        return String(Lampa.Storage.get('online_mod_direct_cdn', '1')) !== '0';
+      } catch (e) {
+        return true;
+      }
+    }
+
+    function resolveAutoDirect(url, callback) {
+      if (!directCdnEnabled() || !url || url.indexOf('/api/lampa/play') === -1 || typeof fetch !== 'function') {
+        callback(url);
+        return;
+      }
+
+      var finished = false;
+      var controller = null;
+      var timer = setTimeout(function () { finish(url); }, 5000);
+
+      function finish(result) {
+        if (finished) return;
+
+        finished = true;
+        clearTimeout(timer);
+
+        try {
+          if (controller) controller.abort();
+        } catch (e) {}
+
+        callback(result);
+      }
+
+      try {
+        controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      } catch (e) {}
+
+      try {
+        fetch(url, {
+          redirect: 'follow',
+          cache: 'no-store',
+          signal: controller ? controller.signal : undefined
+        }).then(function (response) {
+          var finalUrl = response && response.url ? response.url : url;
+
+          try {
+            if (response && response.body && response.body.cancel) response.body.cancel();
+          } catch (e) {}
+
+          finish(unwrapProxyUrl(finalUrl));
+        }).catch(function () {
+          finish(url);
+        });
+      } catch (e) {
+        finish(url);
+      }
+    }
+
+    function sanitizePlaylist(first, playlist) {
+      return playlist.map(function (item) {
+        if (item === first) {
+          return { url: first.url, title: first.title, timeline: first.timeline };
+        }
+
+        return { url: item.url, title: item.title, timeline: item.timeline };
+      }).filter(function (item) {
+        return item.url;
+      });
+    }
+
+    function resolveLazyPlaylist(playlist, callback) {
+      var lazy = [];
+
+      playlist.forEach(function (item) {
+        if (item && typeof item.url === 'function') lazy.push(item);
+      });
+
+      if (!lazy.length) {
+        callback(playlist);
+        return;
+      }
+
+      var limit = Math.min(lazy.length, 120);
+      var index = 0;
+      var done = 0;
+      var cancelled = false;
+      var finished = false;
+
+      function update() {
+        try {
+          $('.loading-layer .loading-layer__text').text('Подготовка плейлиста: ' + done + ' / ' + limit);
+        } catch (e) {}
+      }
+
+      function doneLoading() {
+        try {
+          Lampa.Loading.stop();
+        } catch (e) {}
+      }
+
+      function finish() {
+        if (finished) return;
+
+        finished = true;
+        doneLoading();
+
+        callback(playlist.filter(function (item) {
+          return item && typeof item.url === 'string' && item.url;
+        }));
+      }
+
+      function next() {
+        if (cancelled || index >= limit) {
+          finish();
+          return;
+        }
+
+        var item = lazy[index++];
+        var called = false;
+        var timer = setTimeout(function () {
+          if (called) return;
+
+          called = true;
+          item.url = '';
+          done++;
+          update();
+          next();
+        }, 15000);
+
+        update();
+
+        try {
+          item.url(function () {
+            if (called) return;
+
+            called = true;
+            clearTimeout(timer);
+            done++;
+            update();
+            next();
+          });
+        } catch (e) {
+          if (!called) {
+            called = true;
+            clearTimeout(timer);
+            item.url = '';
+            done++;
+            next();
+          }
+        }
+      }
+
+      try {
+        Lampa.Loading.start(function () {
+          cancelled = true;
+        });
+      } catch (e) {}
+
+      update();
+      next();
+    }
+
+    function startPlayer(first, playlist) {
       if (!first) return;
 
       first.continue_play = true;
       attachExternalQualities(first);
+
+      if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
+        first.playlist = sanitizePlaylist(first, playlist);
+      }
 
       try {
         if (window.Lampa && Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.get === 'function') {
@@ -130,6 +318,19 @@
       if (playlist && playlist.length && Lampa.Player && typeof Lampa.Player.playlist === 'function') {
         Lampa.Player.playlist(playlist);
       }
+    }
+
+    function playWithoutPreroll(first, playlist) {
+      if (!first) return;
+
+      if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
+        resolveLazyPlaylist(playlist, function (resolved) {
+          startPlayer(first, resolved);
+        });
+        return;
+      }
+
+      startPlayer(first, playlist);
     }
 
     function startsWith(str, searchString) {
@@ -219,7 +420,7 @@
 
     function rezka2Mirror() {
       var url = Lampa.Storage.get('online_mod_rezka2_mirror', '') + '';
-      if (!url) return 'https://kvk.zone';
+      if (!url || url.indexOf('kvk.zone') !== -1) return 'https://rezka.ag';
       if (url.indexOf('://') == -1) url = 'https://' + url;
       if (url.charAt(url.length - 1) === '/') url = url.substring(0, url.length - 1);
       return url;
@@ -1838,7 +2039,7 @@
         var anubis_form = str.match(/<script id="anubis_challenge"/);
 
         if (anubis_form) {
-          error_message = Lampa.Lang.translate('online_mod_unsupported_mirror') + ' HDrezka';
+          error_message = Lampa.Lang.translate('online_mod_anubis_required');
           return;
         }
 
@@ -14401,6 +14602,7 @@
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
+          src = unwrapProxyUrl(src);
           if (!map[key]) map[key] = src;
         });
         return map;
@@ -14520,9 +14722,8 @@
         }, null, options);
       }
 
-      function startPlayback(element, items, qualityMap, external) {
+      function startPlaybackNow(element, items, qualityMap, external, autoUrl) {
         var extra = getFile(element);
-        var autoUrl = component.getDefaultQuality(extra.quality, extra.file);
         var quality = qualityMap ? component.renameQualityMap(qualityMap) : component.renameQualityMap(extra.quality);
         var url = qualityMap ? pickBestQuality(qualityMap) || autoUrl : autoUrl;
         var first = {
@@ -14586,6 +14787,20 @@
         if (playlist.length > 1) first.playlist = playlist;
 
         playWithoutPreroll(first, playlist);
+      }
+
+      function startPlayback(element, items, qualityMap, external) {
+        var extra = getFile(element);
+        var autoUrl = component.getDefaultQuality(extra.quality, extra.file);
+
+        if (!qualityMap && autoUrl.indexOf('/api/lampa/play') !== -1) {
+          resolveAutoDirect(autoUrl, function (directUrl) {
+            startPlaybackNow(element, items, qualityMap, external, directUrl);
+          });
+          return;
+        }
+
+        startPlaybackNow(element, items, qualityMap, external, autoUrl);
       }
 
       function filtred() {
@@ -16446,7 +16661,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-4';
+    var mod_version = '08.11.2026-5';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -16876,6 +17091,13 @@
           be: 'Непадтрымоўванае люстэрка',
           en: 'Unsupported mirror',
           zh: '不支持的镜子'
+        },
+        online_mod_anubis_required: {
+          ru: 'Зеркало HDrezka под анти-ботом. Вставьте cookie в настройках HDrezka',
+          uk: 'Дзеркало HDrezka під анти-ботом. Вставте cookie в налаштуваннях HDrezka',
+          be: 'Люстэрка HDrezka пад анты-ботам. Уставіце cookie ў наладах HDrezka',
+          en: 'HDrezka mirror is behind an anti-bot check. Paste a cookie in HDrezka settings',
+          zh: 'HDrezka 镜像受反机器人保护。请在 HDrezka 设置中粘贴 cookie'
         },
         online_mod_secret_password: {
           ru: 'Секретный пароль',
