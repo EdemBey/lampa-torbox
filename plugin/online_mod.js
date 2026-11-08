@@ -4,6 +4,7 @@
 //08.11.2026 - DDD quality transport via X-DDD-Quality header
 //08.11.2026 - Lazy playlist resolution, HDrezka mirror
 //08.11.2026 - Prefer fast source providers, revert direct CDN
+//08.11.2026 - DDD quality list keeps 1080p and real lower qualities
 
 (function () {
     'use strict';
@@ -14561,6 +14562,81 @@
         return map;
       }
 
+      /**
+       * Quality entries for an external player (DDD).
+       *
+       * DDD deduplicates by full URL and keeps the first entry, so every label
+       * must point at its own file. Dzen serves one file for every label (only
+       * the signature changes), so we keep its best label and take lower
+       * qualities from providers that really have separate files (Allvideo, Mail).
+       */
+      function fileIdentity(url) {
+        // Dzen signs every quality label separately, but it is the same file.
+        var marker = '/api/player/proxy?src=';
+        var pos = String(url || '').indexOf(marker);
+
+        if (pos !== -1) {
+          try {
+            url = decodeURIComponent(String(url).slice(pos + marker.length));
+          } catch (e) {}
+        }
+
+        return String(url || '').split('?')[0].replace(/\/+$/, '');
+      }
+
+      function qualityOptionsFromPayload(payload) {
+        var sources = (payload && payload.sources) || [];
+        if (!sources.length && payload && payload.src) {
+          sources = [{ quality: payload.quality, src: payload.src, provider: payload.provider }];
+        }
+
+        var candidates = [];
+
+        sources.forEach(function (source) {
+          var src = (source.src || '') + '';
+          if (!src) return;
+          if (src.indexOf('//') === 0) src = 'https:' + src;
+          else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
+          candidates.push({
+            name: (source.quality || 'auto') + '',
+            url: src,
+            key: fileIdentity(src),
+            rank: providerRank(source.provider),
+            weight: qualityWeight(source.quality)
+          });
+        });
+
+        // Preferred provider first, best quality within it.
+        candidates.sort(function (a, b) {
+          return a.rank - b.rank || b.weight - a.weight;
+        });
+
+        var options = [];
+        var files = {};
+        var covered = {};
+
+        candidates.forEach(function (item) {
+          if (files[item.key]) return;
+          if (covered[item.name]) return;
+
+          files[item.key] = true;
+          covered[item.name] = true;
+          options.push({ name: item.name, url: item.url });
+        });
+
+        return options;
+      }
+
+      function getCachedOptions(element) {
+        var cached = qualityCache[qualityCacheKey(element)];
+
+        if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
+          return cached.options || null;
+        }
+
+        return null;
+      }
+
       function pickBestQuality(map) {
         var best = '';
         var bestValue = -1;
@@ -14647,7 +14723,7 @@
             var payload = payloadOf(parseJsonText(text));
             var map = qualityMapFromPayload(payload);
             if (!pickBestQuality(map)) throw new Error('No playable sources');
-            qualityCache[cacheKey] = { time: Date.now(), map: map };
+            qualityCache[cacheKey] = { time: Date.now(), map: map, options: qualityOptionsFromPayload(payload) };
             success(map);
           } catch (e) {
             fail();
@@ -14690,17 +14766,29 @@
         };
 
         if (external) {
-          var dddQualities = [{ name: 'Auto', url: url }];
+          var dddQualities = [{ name: 'Auto', url: autoUrl }];
+          var used = {};
+          used[autoUrl] = true;
 
-          if (qualityMap) {
+          var listed = getCachedOptions(element);
+
+          if (!listed && qualityMap) {
+            // Fallback when only the plain quality map is available.
+            listed = [];
             for (var qualityName in qualityMap) {
               if (!Object.prototype.hasOwnProperty.call(qualityMap, qualityName)) continue;
               if (String(qualityName).toLowerCase() === 'auto') continue;
-              dddQualities.push({ name: qualityName, url: qualityMap[qualityName] });
+              listed.push({ name: qualityName, url: qualityMap[qualityName] });
             }
-
-            first.quality = qualityMap;
           }
+
+          (listed || []).forEach(function (option) {
+            if (!option || !option.url || used[option.url]) return;
+            used[option.url] = true;
+            dddQualities.push({ name: option.name, url: option.url });
+          });
+
+          if (qualityMap) first.quality = qualityMap;
 
           first.ddd_quality = JSON.stringify(dddQualities);
           attachQualityHeader(first);
@@ -16601,7 +16689,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-6';
+    var mod_version = '08.11.2026-7';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
