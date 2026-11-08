@@ -14157,8 +14157,8 @@
       }
 
       function resolveQuality(element, success, fail) {
-        var slug = element.slug || '';
-        var cached = qualityCache[slug];
+        var cacheKey = (element.slug || '') + ':' + (element.language || '');
+        var cached = qualityCache[cacheKey];
         if (cached && Date.now() - cached.time < 5 * 60 * 1000) {
           success(cached.map);
           return;
@@ -14189,7 +14189,7 @@
             var payload = payloadOf(parseJsonText(text));
             var map = qualityMapFromPayload(payload);
             if (!pickBestQuality(map)) throw new Error('No playable sources');
-            qualityCache[slug] = { time: Date.now(), map: map };
+            qualityCache[cacheKey] = { time: Date.now(), map: map };
             success(map);
           } catch (e) {
             fail();
@@ -14292,6 +14292,7 @@
             episode: episode.episodeNumber,
             trackingKey: episode.trackingKey || episode.slug,
             slug: episode.slug,
+            language: language,
             mirrors: mirrors.map(function (mirror) {
               return { sourceCode: mirror.sourceCode, token: mirror.token };
             }),
