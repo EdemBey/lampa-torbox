@@ -11,6 +11,7 @@
 //08.11.2026 - HDrezka login through native bridge (no CORS)
 //08.11.2026 - Keep Anubis cookie when saving login cookies
 //08.11.2026 - HDrezka uses OkHttp user agent (Anubis whitelist)
+//09.11.2026 - Show our balancers in MODS's (modss.tv) source list
 
 (function () {
     'use strict';
@@ -15951,6 +15952,10 @@
         return s.name;
       }); // шаловливые ручки
 
+      if (object.balancer && filter_sources.indexOf(object.balancer) !== -1) {
+        balanser = object.balancer;
+      }
+
       if (filter_sources.indexOf(balanser) == -1) {
         balanser = default_balanser;
 
@@ -17158,7 +17163,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-13';
+    var mod_version = '08.11.2026-14';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -17786,7 +17791,143 @@
       });
     }
 
-    function loadOnline(object) {
+    /**
+     * Modss integration: when the MODS's online screen is open, prepend our
+     * balancers to its source list. Selection opens our own online_mod screen
+     * with that balancer preselected.
+     *
+     * Nothing here touches filters of other screens: everything is gated by
+     * `Lampa.Activity.active().component === 'modss_online'`, so without the
+     * modss.tv plugin the behaviour is exactly the same as before.
+     */
+    function isModssScreen() {
+      try {
+        var active = Lampa.Activity && typeof Lampa.Activity.active === 'function' ? Lampa.Activity.active() : null;
+        return !!(active && active.component === 'modss_online');
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function modssFindBalancer(name) {
+      for (var i = 0; i < Balancers.length; i++) {
+        if (Balancers[i] && Balancers[i].name === name) return Balancers[i];
+      }
+      return null;
+    }
+
+    function modssPrependSources(items) {
+      var rest = [];
+      var ours = [];
+      var used = {};
+      var existing = {};
+      var preferred = ['narutobased', 'rezka2'];
+
+      if (items && items.forEach) {
+        items.forEach(function (item) {
+          if (!item) return;
+
+          if (item.online_mod) return;
+          rest.push(item);
+          if (item.source) existing[item.source] = true;
+        });
+      }
+
+      var add = function (source) {
+        if (!source || source.disabled || used[source.name] || existing[source.name]) return;
+
+        used[source.name] = true;
+        ours.push({
+          title: source.title,
+          source: 'online_mod_' + source.name,
+          online_mod: source.name
+        });
+      };
+
+      preferred.forEach(function (name) {
+        add(modssFindBalancer(name));
+      });
+
+      Balancers.forEach(add);
+
+      return ours.concat(rest);
+    }
+
+    function modssWrapOnSelect(filter) {
+      if (!filter || typeof filter.onSelect !== 'function' || filter.onSelect.__online_mod) return;
+
+      var original = filter.onSelect;
+
+      filter.onSelect = function (type, a, b) {
+        if (type === 'sort' && a && a.online_mod) {
+          try {
+            if (Lampa.Select && typeof Lampa.Select.close === 'function') Lampa.Select.close();
+          } catch (e) {}
+
+          try {
+            var active = Lampa.Activity.active() || {};
+            var card = active.movie || active.card;
+
+            if (card) loadOnline(card, a.online_mod);
+          } catch (e) {}
+
+          return;
+        }
+
+        return original.apply(this, arguments);
+      };
+
+      filter.onSelect.__online_mod = true;
+    }
+
+    function modssPatchFilter(filter) {
+      if (!filter || filter.__online_mod_patched) return;
+
+      filter.__online_mod_patched = true;
+
+      var originalSet = filter.set;
+
+      filter.set = function (type, items) {
+        if (type === 'sort' && isModssScreen()) {
+          items = modssPrependSources(items);
+          modssWrapOnSelect(filter);
+        }
+
+        return originalSet.call(this, type, items);
+      };
+
+      var originalShow = filter.show;
+
+      if (typeof originalShow === 'function') {
+        filter.show = function (title, type) {
+          if (type === 'sort' && isModssScreen()) modssWrapOnSelect(filter);
+          return originalShow.apply(this, arguments);
+        };
+      }
+    }
+
+    function initModssIntegration() {
+      if (!window.Lampa || typeof Lampa.Filter !== 'function' || Lampa.Filter.__online_mod) return;
+
+      var OriginalFilter = Lampa.Filter;
+
+      function ModssFilter() {
+        var args = Array.prototype.slice.call(arguments);
+        var instance = new (Function.prototype.bind.apply(OriginalFilter, [null].concat(args)))();
+
+        try {
+          modssPatchFilter(instance);
+        } catch (e) {}
+
+        return instance;
+      }
+
+      ModssFilter.prototype = OriginalFilter.prototype;
+      ModssFilter.__online_mod = true;
+      Lampa.Filter = ModssFilter;
+    }
+
+    function loadOnline(object, balancer) {
       if (online_loading) return;
       online_loading = true;
       Utils.setMyIp('');
@@ -17803,6 +17944,7 @@
             search_one: object.title,
             search_two: object.original_title,
             movie: object,
+            balancer: balancer || undefined,
             page: 1
           });
         });
@@ -17814,6 +17956,7 @@
       Lampa.Component.add('online_mod', component); //то же самое
 
       resetTemplates();
+      initModssIntegration();
       var manifest = {
         type: 'video',
         version: mod_version,
