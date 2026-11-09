@@ -12,6 +12,7 @@
 //08.11.2026 - Keep Anubis cookie when saving login cookies
 //08.11.2026 - HDrezka uses OkHttp user agent (Anubis whitelist)
 //09.11.2026 - Show our balancers in MODS's (modss.tv) source list
+//09.11.2026 - Keep MODS sources visible in our source list
 
 (function () {
     'use strict';
@@ -16003,6 +16004,11 @@
               sources[balanser].filter(type, a, b);
             }
           } else if (type == 'sort') {
+            if (a && a.modss) {
+              jumpToModss(a.source);
+              return;
+            }
+
             _this2.changeBalanser(a.source);
           }
         };
@@ -16026,6 +16032,25 @@
         this.search();
         setTimeout(this.closeFilter, 10);
       };
+
+      function jumpToModss(source) {
+        try {
+          var last = Lampa.Storage.cache('online_last_balanser', 3000, {});
+          last[object.movie.id] = source;
+          Lampa.Storage.set('online_last_balanser', last);
+          Lampa.Storage.set('priority_balanser', source);
+        } catch (e) {}
+
+        Lampa.Activity.replace({
+          component: 'modss_online',
+          title: "MODS's",
+          movie: object.movie,
+          search: object.search,
+          search_one: object.search_one,
+          search_two: object.search_two,
+          page: 1
+        });
+      }
 
       this.updateQualityFilter = function () {
         var preferably = forcedQuality;
@@ -16859,13 +16884,33 @@
         this.updateQualityFilter();
         select.push(qualityFilter);
         filter.set('filter', select);
-        filter.set('sort', obj_filter_sources.map(function (e) {
+        var sort_items = obj_filter_sources.map(function (e) {
           return {
             source: e.name,
             title: e.title,
             selected: e.name === balanser
           };
-        }));
+        });
+
+        if (object.modssSources && object.modssSources.length) {
+          var own_names = {};
+
+          obj_filter_sources.forEach(function (s) {
+            own_names[s.name] = true;
+          });
+
+          object.modssSources.forEach(function (s) {
+            if (!s || !s.source || own_names[s.source]) return;
+
+            sort_items.push({
+              title: s.title,
+              source: s.source,
+              modss: true
+            });
+          });
+        }
+
+        filter.set('sort', sort_items);
         this.selected(filter_items);
       };
       /**
@@ -17163,7 +17208,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-14';
+    var mod_version = '08.11.2026-15';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -17800,6 +17845,8 @@
      * `Lampa.Activity.active().component === 'modss_online'`, so without the
      * modss.tv plugin the behaviour is exactly the same as before.
      */
+    var modssSourcesSnapshot = [];
+
     function isModssScreen() {
       try {
         var active = Lampa.Activity && typeof Lampa.Activity.active === 'function' ? Lampa.Activity.active() : null;
@@ -17832,6 +17879,15 @@
           if (item.source) existing[item.source] = true;
         });
       }
+
+      modssSourcesSnapshot = rest.map(function (item) {
+        return {
+          source: item.source,
+          title: String(item.title || item.source || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+        };
+      }).filter(function (item) {
+        return item.source && item.title;
+      });
 
       var add = function (source) {
         if (!source || source.disabled || used[source.name] || existing[source.name]) return;
@@ -17945,6 +18001,7 @@
             search_two: object.original_title,
             movie: object,
             balancer: balancer || undefined,
+            modssSources: balancer ? modssSourcesSnapshot.slice() : undefined,
             page: 1
           });
         });
