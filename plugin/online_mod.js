@@ -13,6 +13,7 @@
 //08.11.2026 - HDrezka uses OkHttp user agent (Anubis whitelist)
 //09.11.2026 - Show our balancers in MODS's (modss.tv) source list
 //09.11.2026 - Keep MODS sources visible in our source list
+//09.11.2026 - Switch MODS sources through its own component, lock VIP items
 
 (function () {
     'use strict';
@@ -16005,6 +16006,11 @@
             }
           } else if (type == 'sort') {
             if (a && a.modss) {
+              if (a.vip) {
+                Lampa.Noty.show(Lampa.Lang.translate('online_mod_modss_vip'));
+                return;
+              }
+
               jumpToModss(a.source);
               return;
             }
@@ -16034,22 +16040,37 @@
       };
 
       function jumpToModss(source) {
+        var target = null;
+
         try {
-          var last = Lampa.Storage.cache('online_last_balanser', 3000, {});
-          last[object.movie.id] = source;
-          Lampa.Storage.set('online_last_balanser', last);
-          Lampa.Storage.set('priority_balanser', source);
+          var all = Lampa.Activity.all();
+
+          for (var i = all.length - 1; i >= 0; i--) {
+            if (all[i] && all[i].component === 'modss_online' && all[i].activity && all[i].activity.component) {
+              target = all[i];
+              break;
+            }
+          }
         } catch (e) {}
 
-        Lampa.Activity.replace({
-          component: 'modss_online',
-          title: "MODS's",
-          movie: object.movie,
-          search: object.search,
-          search_one: object.search_one,
-          search_two: object.search_two,
-          page: 1
-        });
+        try {
+          if (typeof Lampa.Activity.backward === 'function') Lampa.Activity.backward();
+          else Lampa.Activity.back();
+        } catch (e) {
+          try {
+            Lampa.Activity.back();
+          } catch (e2) {}
+        }
+
+        if (!target) return;
+
+        // Let the Modss component switch its own source: it keeps its list,
+        // icons, VIP checks and choice state untouched.
+        setTimeout(function () {
+          try {
+            target.activity.component.changeBalanser(source);
+          } catch (e) {}
+        }, 400);
       }
 
       this.updateQualityFilter = function () {
@@ -16903,9 +16924,10 @@
             if (!s || !s.source || own_names[s.source]) return;
 
             sort_items.push({
-              title: s.title,
+              title: s.rawTitle || s.title,
               source: s.source,
-              modss: true
+              modss: true,
+              vip: s.vip === true
             });
           });
         }
@@ -17208,7 +17230,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-15';
+    var mod_version = '08.11.2026-16';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -17632,6 +17654,13 @@
           en: 'Authorization required',
           zh: '需要授权'
         },
+        online_mod_modss_vip: {
+          ru: 'Доступно только в MODS\'s VIP',
+          uk: 'Доступно лише в MODS\'s VIP',
+          be: 'Даступна толькі ў MODS\'s VIP',
+          en: 'Available in MODS\'s VIP only',
+          zh: '仅在 MODS\'s VIP 中可用'
+        },
         online_mod_unsupported_mirror: {
           ru: 'Неподдерживаемое зеркало',
           uk: 'Непідтримуване дзеркало',
@@ -17883,7 +17912,9 @@
       modssSourcesSnapshot = rest.map(function (item) {
         return {
           source: item.source,
-          title: String(item.title || item.source || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+          rawTitle: item.title || item.source || '',
+          title: String(item.title || item.source || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(),
+          vip: item.ghost === true
         };
       }).filter(function (item) {
         return item.source && item.title;
