@@ -17,6 +17,7 @@
 //12.11.2026 - HDrezka: robust voice list parsing (CRLF, alternate markup)
 //12.11.2026 - Unwrap the Android bridge JSON envelope (HDrezka voices)
 //12.11.2026 - HDrezka: strip HTML from quality labels (1080p Ultra)
+//12.11.2026 - HDrezka: drop Premium placeholder qualities, refuse premium-only voices
 
 (function () {
     'use strict';
@@ -2647,22 +2648,14 @@
 
             if (items && items.length) {
               file = items[0].file;
-              var premium_content = json.premium_content || false;
-              var prev_file = '';
               quality = {};
               items.forEach(function (item) {
-                if (item.label !== '1080p Ultra') {
-                  if (prev_file !== '' && prev_file !== item.file) premium_content = false;
-                  prev_file = item.file;
-                }
-
                 quality[item.label] = item.file;
               });
-
-              if (premium_content) {
-                error('Перевод доступен только с HDrezka Premium');
-                return;
-              }
+            } else if (video && component.parsePlaylist(video).length) {
+              // Every quality was the Premium placeholder
+              error('Перевод доступен только с HDrezka Premium');
+              return;
             }
 
             if (file) {
@@ -2766,9 +2759,11 @@
             return {
               label: item.label,
               quality: int_quality,
+              key: videoKey(link),
               file: proxyStream(link)
             };
           });
+          items = dropPremiumStubs(items);
           items.sort(function (a, b) {
             if (b.quality > a.quality) return 1;
             if (b.quality < a.quality) return -1;
@@ -2780,6 +2775,28 @@
         } catch (e) {}
 
         return [];
+      }
+
+      // Without Premium, HDrezka points premium qualities (and every quality of
+      // a premium-only voice) at one shared placeholder video.
+      var PREMIUM_STUB_DIR = '/1/5/3/6/4/2/4/';
+
+      function videoKey(link) {
+        return (link || '').replace(/^[a-z]+:\/\/[^\/]+\/[^\/]*:[^\/]*:[^\/]*/i, '').replace(/:hls:manifest\.m3u8$/i, '');
+      }
+
+      function dropPremiumStubs(items) {
+        var labels = {};
+        items.forEach(function (item) {
+          if (!item.key) return;
+          labels[item.key] = labels[item.key] || {};
+          labels[item.key][item.label] = true;
+        });
+        return items.filter(function (item) {
+          if (!item.key) return true;
+          if (item.key.indexOf(PREMIUM_STUB_DIR) === 0) return false;
+          return Object.keys(labels[item.key]).length < 2;
+        });
       }
 
       function parseSubtitles(str) {
@@ -17274,7 +17291,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-4';
+    var mod_version = '12.11.2026-5';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
