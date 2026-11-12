@@ -18,6 +18,7 @@
 //12.11.2026 - Unwrap the Android bridge JSON envelope (HDrezka voices)
 //12.11.2026 - HDrezka: strip HTML from quality labels (1080p Ultra)
 //12.11.2026 - HDrezka: drop Premium placeholder qualities, refuse premium-only voices
+//12.11.2026 - HDrezka: hide b-prem_translator voices
 
 (function () {
     'use strict';
@@ -2429,20 +2430,35 @@
           });
         };
 
+        var voice_els = [];
+
         if (voices) {
           $('[data-translator_id]', $('<div>' + voices[1] + '</div>')).each(function () {
-            pushVoice(this);
+            voice_els.push(this);
           });
         }
 
-        if (!extract.voice.length) {
+        if (!voice_els.length) {
           // Markup without the usual <ul id="translators-list">: pick any
           // element that carries a translator id.
           var items = str.match(/<(li|a|option|div|span)\b[^>]*\bdata-translator_id=["']?\d+[^>]*>.*?<\/\1>/g) || [];
           items.forEach(function (html) {
-            pushVoice($('<div>' + html + '</div>').children()[0]);
+            voice_els.push($('<div>' + html + '</div>').children()[0]);
           });
         }
+
+        // Premium-only voices (b-prem_translator) play a placeholder without
+        // HDrezka Premium. The list repeats every voice, so collect the marks
+        // from all copies before skipping.
+        var prem_ids = {};
+        voice_els.forEach(function (el) {
+          if ($(el).hasClass('b-prem_translator') || $(el).parent().hasClass('b-prem_translator')) {
+            prem_ids[$(el).attr('data-translator_id')] = true;
+          }
+        });
+        voice_els.forEach(function (el) {
+          if (!prem_ids[$(el).attr('data-translator_id')]) pushVoice(el);
+        });
 
         if (!extract.voice.length && defVoice) {
           extract.voice.push(defVoice);
@@ -17292,7 +17308,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-6';
+    var mod_version = '12.11.2026-7';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
