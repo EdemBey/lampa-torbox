@@ -19,6 +19,7 @@
 //12.11.2026 - HDrezka: strip HTML from quality labels (1080p Ultra)
 //12.11.2026 - HDrezka: drop Premium placeholder qualities, refuse premium-only voices
 //12.11.2026 - HDrezka: hide b-prem_translator voices (setting to show them)
+//12.11.2026 - DDD: inline per-episode qualities for resolved playlists (HDrezka)
 
 (function () {
     'use strict';
@@ -63,9 +64,12 @@
       first.headers = headers;
     }
 
-    function attachExternalQualities(first) {
-      if (!first || first.ddd_quality || !first.quality) return;
-      if (!isExternalAndroidPlayer()) return;
+    /**
+     * Lampa quality map of one item -> DDD list [{name, url}], `Auto` being
+     * the item's own URL when the map does not contain it.
+     */
+    function buildQualityList(item) {
+      if (!item || !item.quality) return [];
 
       var list = [];
       var seen = {};
@@ -91,16 +95,16 @@
         });
       }
 
-      if (Array.isArray(first.quality)) {
-        first.quality.forEach(function (item, index) {
-          if (typeof item === 'string') add('Quality ' + (index + 1), item);
-          else if (item) add(item.label || item.name || 'Quality ' + (index + 1), item.url || item.file);
+      if (Array.isArray(item.quality)) {
+        item.quality.forEach(function (entry, index) {
+          if (typeof entry === 'string') add('Quality ' + (index + 1), entry);
+          else if (entry) add(entry.label || entry.name || 'Quality ' + (index + 1), entry.url || entry.file);
         });
       } else {
-        for (var key in first.quality) {
-          if (!Object.prototype.hasOwnProperty.call(first.quality, key)) continue;
+        for (var key in item.quality) {
+          if (!Object.prototype.hasOwnProperty.call(item.quality, key)) continue;
 
-          var value = first.quality[key];
+          var value = item.quality[key];
           var url = typeof value === 'string' ? value : value && (value.url || value.file);
           var name = value && typeof value === 'object' && value.label ? value.label : key;
 
@@ -108,16 +112,25 @@
         }
       }
 
-      var currentUrl = normalize(first.url);
-      if (!list.length) return;
+      var currentUrl = normalize(typeof item.url === 'string' ? item.url : '');
+      if (!list.length) return list;
 
-      var hasCurrent = list.some(function (item) {
-        return item.url === currentUrl;
+      var hasCurrent = list.some(function (entry) {
+        return entry.url === currentUrl;
       });
 
       if (!hasCurrent && currentUrl) {
         list.unshift({ name: 'Auto', url: currentUrl });
       }
+
+      return list;
+    }
+
+    function attachExternalQualities(first) {
+      if (!first || first.ddd_quality || !first.quality) return;
+      if (!isExternalAndroidPlayer()) return;
+
+      var list = buildQualityList(first);
 
       if (list.length > 1) {
         first.ddd_quality = JSON.stringify(list);
@@ -232,7 +245,8 @@
     /**
      * Per-episode source descriptors for the external player. Lampa's Android
      * bridge forwards only URLs in `video_list`, so this is the only channel
-     * that can carry quality data for every playlist item.
+     * that can carry quality data for every playlist item. A value is either
+     * a descriptor URL or an inline [{name, url}] list.
      */
     function attachQualitySources(first, playlist) {
       if (!first || !playlist || !playlist.length) return;
@@ -241,10 +255,22 @@
       var count = 0;
 
       playlist.forEach(function (item, index) {
-        if (!item || !item.qualitySourceUrl) return;
+        if (!item) return;
 
-        sources[String(index)] = item.qualitySourceUrl;
-        count++;
+        if (item.qualitySourceUrl) {
+          sources[String(index)] = item.qualitySourceUrl;
+          count++;
+          return;
+        }
+
+        // Already resolved items (e.g. HDrezka) carry their quality map:
+        // send it inline instead of a descriptor URL.
+        var list = buildQualityList(item);
+
+        if (list.length > 1) {
+          sources[String(index)] = list;
+          count++;
+        }
       });
 
       if (!count) return;
@@ -17320,7 +17346,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-8';
+    var mod_version = '12.11.2026-9';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
