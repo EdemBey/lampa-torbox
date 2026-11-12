@@ -18,7 +18,7 @@
 //12.11.2026 - Unwrap the Android bridge JSON envelope (HDrezka voices)
 //12.11.2026 - HDrezka: strip HTML from quality labels (1080p Ultra)
 //12.11.2026 - HDrezka: drop Premium placeholder qualities, refuse premium-only voices
-//12.11.2026 - HDrezka: hide b-prem_translator voices
+//12.11.2026 - HDrezka: hide b-prem_translator voices (setting to show them)
 
 (function () {
     'use strict';
@@ -1962,6 +1962,7 @@
       var rezka2_prx_ukr = '//' + (Lampa.Storage.field('online_mod_rezka2_prx_ukr') || 'prx.ukrtelcdn.net') + '/';
       var use_stream_proxy = Lampa.Storage.field('online_mod_use_stream_proxy') === true;
       var rezka2_fix_stream = Lampa.Storage.field('online_mod_rezka2_fix_stream') === true;
+      var show_premium = Lampa.Storage.field('online_mod_rezka2_show_premium') === true;
       var prox = component.proxy('rezka2');
       var host = prox && !proxy_mirror ? Utils.rezka2Host() : Utils.rezka2Mirror();
       var ref = host + '/';
@@ -2448,10 +2449,10 @@
         }
 
         // Premium-only voices (b-prem_translator) play a placeholder without
-        // HDrezka Premium. The list repeats every voice, so collect the marks
+        // HDrezka Premium, so they are hidden unless the setting allows them. The list repeats every voice, so collect the marks
         // from all copies before skipping.
         var prem_ids = {};
-        voice_els.forEach(function (el) {
+        if (!show_premium) voice_els.forEach(function (el) {
           if ($(el).hasClass('b-prem_translator') || $(el).parent().hasClass('b-prem_translator')) {
             prem_ids[$(el).attr('data-translator_id')] = true;
           }
@@ -3849,6 +3850,17 @@
       }
 
       {
+        Lampa.SettingsApi.addParam({
+          component: component_name,
+          param: {
+            name: 'online_mod_rezka2_show_premium',
+            type: 'trigger',
+            "default": false
+          },
+          field: {
+            name: Lampa.Lang.translate('online_mod_rezka2_show_premium')
+          }
+        });
         Lampa.SettingsApi.addParam({
           component: component_name,
           param: {
@@ -17308,7 +17320,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-7';
+    var mod_version = '12.11.2026-8';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -17675,6 +17687,13 @@
           be: 'Запоўніць кукі для HDrezka',
           en: 'Fill cookie for HDrezka',
           zh: '为HDrezka填充Cookie'
+        },
+        online_mod_rezka2_show_premium: {
+          ru: 'Показывать премиум-озвучки',
+          uk: 'Показувати преміум-озвучки',
+          be: 'Паказваць прэміум-агучкі',
+          en: 'Show Premium voices',
+          zh: '显示高级配音'
         },
         online_mod_rezka2_fix_stream: {
           ru: 'Фикс видеопотока для HDrezka',
