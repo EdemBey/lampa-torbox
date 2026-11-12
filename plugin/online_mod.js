@@ -15,6 +15,7 @@
 //09.11.2026 - Keep MODS sources visible in our source list
 //09.11.2026 - Switch MODS sources through its own component, lock VIP items
 //12.11.2026 - HDrezka: robust voice list parsing (CRLF, alternate markup)
+//12.11.2026 - Unescape JSON-escaped bodies from the Android bridge (HDrezka voices)
 
 (function () {
     'use strict';
@@ -3351,9 +3352,26 @@
       var headers = options.headers || {};
       var retried = false;
 
+      // With returnHeaders the Android bridge hands the body back still
+      // JSON-escaped (\" and \/), which breaks every attribute regex.
+      function unescapeBody(body) {
+        if (typeof body !== 'string') return body;
+
+        var text = body;
+        if (text.length > 1 && text.charAt(0) === '"' && text.charAt(text.length - 1) === '"') text = text.slice(1, -1);
+        if (text.indexOf('\\"') === -1 || /(^|[^\\])"/.test(text)) return body;
+
+        try {
+          var parsed = JSON.parse('"' + text + '"');
+          if (typeof parsed === 'string') return parsed;
+        } catch (e) {}
+
+        return text.replace(/\\(["\/\\])/g, '$1');
+      }
+
       function normalize(res) {
         if (res && typeof res === 'object' && res.body !== undefined) {
-          return { status: res.status || 0, headers: res.headers || {}, body: res.body };
+          return { status: res.status || 0, headers: res.headers || {}, body: unescapeBody(res.body) };
         }
         if (res && typeof res === 'object' && (res.status !== undefined || res.headers !== undefined)) {
           return { status: res.status || 0, headers: res.headers || {}, body: res };
@@ -17271,7 +17289,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-1';
+    var mod_version = '12.11.2026-2';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
