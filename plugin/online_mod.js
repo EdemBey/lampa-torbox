@@ -2344,6 +2344,9 @@
             var dbg_title = (dbg_body.match(/<title>([^<]*)/) || ['', ''])[1];
             var dbg_tl = dbg_body.indexOf('translators-list');
             var dbg = [
+              'ver=' + mod_version,
+              'uq=' + (function () { var m = /(^|[^\\])"/.exec(dbg_body); return m ? m.index + ':' + dbg_body.slice(Math.max(0, m.index - 80), m.index + 80) : 'none'; })(),
+              'bs=' + (dbg_body.match(/\\\\/g) || []).length + ',nl=' + (dbg_body.match(/\n/g) || []).length + ',lit_n=' + (dbg_body.match(/\\n/g) || []).length,
               'type=' + typeof res.body,
               'keys=' + (res && typeof res === 'object' ? Object.keys(res).join(',') : ''),
               'status=' + res.status,
