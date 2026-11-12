@@ -14,6 +14,7 @@
 //09.11.2026 - Show our balancers in MODS's (modss.tv) source list
 //09.11.2026 - Keep MODS sources visible in our source list
 //09.11.2026 - Switch MODS sources through its own component, lock VIP items
+//12.11.2026 - HDrezka: robust voice list parsing (CRLF, alternate markup)
 
 (function () {
     'use strict';
@@ -2065,7 +2066,7 @@
           network.clear();
           network.timeout(10000);
           network["native"](component.proxyLink(url, prox, prox_enc, prox_enc, 'enc2t'), function (str) {
-            str = (str || '').replace(/\n/g, '');
+            str = (str || '').replace(/[\r\n]/g, '');
             checkErrorForm(str);
             var links = str.match(/<div class="b-content__inline_item-link">\s*<a [^>]*>[^<]*<\/a>\s*<div>[^<]*<\/div>\s*<\/div>/g);
             var have_more = !!str.match(/<a [^>]*>\s*<span class="b-navigation__next\b/);
@@ -2244,7 +2245,7 @@
           network.clear();
           network.timeout(10000);
           network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (str) {
-            str = (str || '').replace(/\n/g, '');
+            str = (str || '').replace(/[\r\n]/g, '');
             checkErrorForm(str);
             var links = str.match(/<li><a href=.*?<\/li>/g);
             var have_more = str.indexOf('<a class="b-search__live_all"') !== -1;
@@ -2256,7 +2257,7 @@
             }
 
             if (a.status == 403 && a.responseText) {
-              var str = (a.responseText || '').replace(/\n/g, '');
+              var str = (a.responseText || '').replace(/[\r\n]/g, '');
               checkErrorForm(str);
             }
 
@@ -2363,7 +2364,7 @@
         extract.is_series = false;
         extract.film_id = '';
         extract.favs = '';
-        str = (str || '').replace(/\n/g, '');
+        str = (str || '').replace(/[\r\n]/g, '');
         checkErrorForm(str);
         var translation = str.match(/<h2>В переводе<\/h2>:<\/td>\s*(<td>.*?<\/td>)/);
         var cdnSeries = str.match(/\.initCDNSeriesEvents\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,/);
@@ -2404,23 +2405,39 @@
           };
         }
 
-        var voices = str.match(/(<ul id="translators-list".*?<\/ul>)/);
+        var voices = str.match(/(<ul\b[^>]*\bid=["']translators-list["'].*?<\/ul>)/);
+        var voice_ids = {};
+
+        var pushVoice = function pushVoice(el) {
+          var id = $(el).attr('data-translator_id');
+          if (!id || voice_ids[id]) return;
+          voice_ids[id] = true;
+          var title = ($(el).attr('title') || $(el).text() || '').trim();
+          $('img', el).each(function () {
+            var lang = ($(this).attr('title') || $(this).attr('alt') || '').trim();
+            if (lang && title.indexOf(lang) == -1) title += ' (' + lang + ')';
+          });
+          extract.voice.push({
+            name: title || devVoiceName,
+            id: id,
+            is_camrip: $(el).attr('data-camrip'),
+            is_ads: $(el).attr('data-ads'),
+            is_director: $(el).attr('data-director')
+          });
+        };
 
         if (voices) {
-          var select = $(voices[1]);
-          $('.b-translator__item', select).each(function () {
-            var title = ($(this).attr('title') || $(this).text() || '').trim();
-            $('img', this).each(function () {
-              var lang = ($(this).attr('title') || $(this).attr('alt') || '').trim();
-              if (lang && title.indexOf(lang) == -1) title += ' (' + lang + ')';
-            });
-            extract.voice.push({
-              name: title,
-              id: $(this).attr('data-translator_id'),
-              is_camrip: $(this).attr('data-camrip'),
-              is_ads: $(this).attr('data-ads'),
-              is_director: $(this).attr('data-director')
-            });
+          $('[data-translator_id]', $('<div>' + voices[1] + '</div>')).each(function () {
+            pushVoice(this);
+          });
+        }
+
+        if (!extract.voice.length) {
+          // Markup without the usual <ul id="translators-list">: pick any
+          // element that carries a translator id.
+          var items = str.match(/<(li|a|option|div|span)\b[^>]*\bdata-translator_id=["']?\d+[^>]*>.*?<\/\1>/g) || [];
+          items.forEach(function (html) {
+            pushVoice($('<div>' + html + '</div>').children()[0]);
           });
         }
 
@@ -17230,7 +17247,7 @@
       };
     }
 
-    var mod_version = '08.11.2026-16';
+    var mod_version = '12.11.2026-1';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
