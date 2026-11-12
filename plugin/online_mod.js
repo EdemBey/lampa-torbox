@@ -2780,6 +2780,7 @@
       // Without Premium, HDrezka points premium qualities (and every quality of
       // a premium-only voice) at one shared placeholder video.
       var PREMIUM_STUB_DIR = '/1/5/3/6/4/2/4/';
+      var PREMIUM_STUB_FILE = /\/zrkms\.mp4$/i;
 
       function videoKey(link) {
         return (link || '').replace(/^[a-z]+:\/\/[^\/]+\/[^\/]*:[^\/]*:[^\/]*/i, '').replace(/:hls:manifest\.m3u8$/i, '');
@@ -2794,7 +2795,7 @@
         });
         return items.filter(function (item) {
           if (!item.key) return true;
-          if (item.key.indexOf(PREMIUM_STUB_DIR) === 0) return false;
+          if (item.key.indexOf(PREMIUM_STUB_DIR) === 0 || PREMIUM_STUB_FILE.test(item.key)) return false;
           return Object.keys(labels[item.key]).length < 2;
         });
       }
@@ -17291,7 +17292,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-5';
+    var mod_version = '12.11.2026-6';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
