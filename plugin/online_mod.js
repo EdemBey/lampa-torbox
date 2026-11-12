@@ -2337,6 +2337,30 @@
         }, function (res) {
           extractData(typeof res.body === 'string' ? res.body : '');
 
+          // TEMP DEBUG: summary of the page lands in logcat (LampaHttp.RB)
+          try {
+            var dbg_body = typeof res.body === 'string' ? res.body : '';
+            var dbg_title = (dbg_body.match(/<title>([^<]*)/) || ['', ''])[1];
+            var dbg_tl = dbg_body.indexOf('translators-list');
+            var dbg = [
+              'type=' + typeof res.body,
+              'keys=' + (res && typeof res === 'object' ? Object.keys(res).join(',') : ''),
+              'status=' + res.status,
+              'len=' + dbg_body.length,
+              'tl=' + dbg_tl,
+              'tid=' + (dbg_body.match(/data-translator_id/g) || []).length,
+              'voices=' + extract.voice.length,
+              'series=' + extract.is_series,
+              'film=' + extract.film_id,
+              'perevod=' + (dbg_body.indexOf('В переводе') !== -1),
+              'login=' + (String(headers.Cookie || '').indexOf('dle_user_id') !== -1),
+              'title=' + dbg_title.slice(0, 60),
+              'cdn=' + (dbg_body.match(/initCDN\w+\([^{]{0,120}/) || [''])[0],
+              'around=' + (dbg_tl !== -1 ? dbg_body.slice(dbg_tl - 200, dbg_tl + 400) : dbg_body.slice(0, 300))
+            ].join('|');
+            new Lampa.Reguest()["native"]('http://127.0.0.1:9/online_mod_debug?' + encodeURIComponent(dbg), function () {}, function () {}, false, { dataType: 'text' });
+          } catch (e) {}
+
           if (extract.film_id) {
             getEpisodes(success);
           } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
