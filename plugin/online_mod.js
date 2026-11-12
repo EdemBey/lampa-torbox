@@ -20,6 +20,7 @@
 //12.11.2026 - HDrezka: drop Premium placeholder qualities, refuse premium-only voices
 //12.11.2026 - HDrezka: hide b-prem_translator voices (setting to show them)
 //12.11.2026 - DDD: inline per-episode qualities for resolved playlists (HDrezka)
+//12.11.2026 - DDD: stable item keys and Lampa positions for per-episode resume
 
 (function () {
     'use strict';
@@ -290,6 +291,53 @@
       first.headers = headers;
     }
 
+    function setDddHeader(first, name, value) {
+      var headers = {};
+      var existing = first.headers;
+
+      if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+        headers = Object.assign({}, existing);
+      } else if (Array.isArray(existing)) {
+        for (var i = 0; i + 1 < existing.length; i += 2) {
+          headers[existing[i]] = existing[i + 1];
+        }
+      }
+
+      headers[name] = value;
+      first.headers = headers;
+    }
+
+    /**
+     * Resume data for DDD: a stable key per item (signed CDN links change on
+     * every request, so DDD cannot remember positions by URL) and the
+     * position Lampa's timeline already knows.
+     */
+    function attachResumeData(first, playlist) {
+      var keys = {};
+      var positions = {};
+      var have_keys = false;
+      var have_positions = false;
+
+      playlist.forEach(function (item, index) {
+        if (!item) return;
+
+        if (item.ddd_key) {
+          keys[String(index)] = item.ddd_key;
+          have_keys = true;
+        }
+
+        var view = item.timeline;
+
+        if (view && view.time > 5 && !(view.percent >= 95)) {
+          positions[String(index)] = Math.round(view.time * 1000);
+          have_positions = true;
+        }
+      });
+
+      if (have_keys) setDddHeader(first, 'X-DDD-Item-Keys', JSON.stringify(keys));
+      if (have_positions) setDddHeader(first, 'X-DDD-Positions', JSON.stringify(positions));
+    }
+
     function startPlayer(first, playlist) {
       if (!first) return;
 
@@ -298,7 +346,10 @@
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
+        attachResumeData(first, playlist);
         first.playlist = sanitizePlaylist(first, playlist);
+      } else if (isExternalAndroidPlayer()) {
+        attachResumeData(first, [first]);
       }
 
       try {
@@ -2905,6 +2956,13 @@
        */
 
 
+      // Stable id of an episode/voice for DDD's resume (stream links are signed)
+      function dddKey(element) {
+        var media = element.media || {};
+        if (element.season) return ['rezka', extract.film_id, media.translator_id, media.season_id, media.episode_id].join(':');
+        return ['rezka', extract.film_id, media.id, media.is_director || 0].join(':');
+      }
+
       function append(items) {
         component.reset();
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
@@ -2938,6 +2996,7 @@
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
                 timeline: element.timeline,
+                ddd_key: dddKey(element),
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
 
@@ -2960,6 +3019,7 @@
                         });
                       },
                       timeline: elem.timeline,
+                      ddd_key: dddKey(elem),
                       title: elem.title
                     };
                     playlist.push(cell);
@@ -17346,7 +17406,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-9';
+    var mod_version = '12.11.2026-10';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
