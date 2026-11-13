@@ -127,6 +127,7 @@ try {
     lastError: null,
     parserAttempts: [],
     selectedParser: null,
+    torrentio: null,
   };
 
   const pushDebugLog = (level, args) => {
@@ -871,10 +872,24 @@ try {
       }
       const json = await res.json();
       const streams = Array.isArray(json?.streams) ? json.streams : [];
+      // A bad or expired TorBox key comes back as a single "TB error" stream
+      // without infoHash. Surface its text instead of silently showing nothing.
+      const tbError = streams.find((s) => !s?.infoHash && /TB error/i.test(String(s?.name || '')));
+      DebugTelemetry.torrentio = {
+        status: res.status,
+        streams: streams.length,
+        error: tbError ? String(tbError.title || 'TB error') : '',
+      };
+      if (tbError) {
+        throw { type: 'api', message: `Torrentio: ${Utils.escapeHtml(String(tbError.title || 'TB error'))}` };
+      }
       const out = new Map();
 
       streams.forEach((s) => {
-        const hash = String(s?.infoHash || '').toLowerCase();
+        // With a TorBox key Torrentio sends resolve URLs and may omit infoHash;
+        // the torrent hash is then in behaviorHints.bingeGroup ("torrentio|<hash>").
+        const bingeHash = String(s?.behaviorHints?.bingeGroup || '').match(/torrentio\|([a-f0-9]{40})/i);
+        const hash = String(s?.infoHash || (bingeHash && bingeHash[1]) || '').toLowerCase();
         if (!/^[a-f0-9]{40}$/.test(hash)) return;
         const title = String(s.title || s.name || '');
         const entry = {
@@ -916,6 +931,7 @@ try {
       const [tio, parsers] = await Promise.all([
         searchTorrentio(movie, signal).catch((e) => {
           LOG('Torrentio failed', e?.message || e);
+          if (e && e.type === 'api' && e.message) Lampa.Noty.show(e.message);
           return new Map();
         }),
         searchParsers(movie, signal).catch((e) => ({
@@ -1515,6 +1531,12 @@ try {
       ];
       if (DebugTelemetry.selectedParser?.name) {
         lines.push(`parser: ${DebugTelemetry.selectedParser.name} (${DebugTelemetry.selectedParser.valid_count || 0})`);
+      }
+      const tio = DebugTelemetry.torrentio;
+      if (tio) {
+        lines.push(
+          `torrentio: HTTP ${tio.status}, streams ${tio.streams}${tio.error ? `, error: ${tio.error}` : ''}`
+        );
       }
       debugOverlayEl.text(lines.join('\n'));
     };
@@ -3824,6 +3846,7 @@ try {
       const signal = abort.signal;
       DebugTelemetry.parserAttempts = [];
       DebugTelemetry.selectedParser = null;
+      DebugTelemetry.torrentio = null;
 
       this.activity.loader(true);
       reset();
