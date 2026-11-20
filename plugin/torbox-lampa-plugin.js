@@ -886,10 +886,14 @@ try {
       const out = new Map();
 
       streams.forEach((s) => {
-        // With a TorBox key Torrentio sends resolve URLs and may omit infoHash;
-        // the torrent hash is then in behaviorHints.bingeGroup ("torrentio|<hash>").
+        // With a TorBox key Torrentio sends only a resolve URL: infoHash and
+        // fileIdx are stripped, and bingeGroup carries the hash only for packs.
+        // The hash is in the URL: /resolve/<moch>/<key>/<hash>/<file>/<idx|undefined>/<file>
+        const resolve = String(s?.url || '').match(/\/resolve\/[^/]+\/[^/]*\/([a-f0-9]{40})/i);
         const bingeHash = String(s?.behaviorHints?.bingeGroup || '').match(/torrentio\|([a-f0-9]{40})/i);
-        const hash = String(s?.infoHash || (bingeHash && bingeHash[1]) || '').toLowerCase();
+        const hash = String(
+          s?.infoHash || (bingeHash && bingeHash[1]) || (resolve && resolve[1]) || ''
+        ).toLowerCase();
         if (!/^[a-f0-9]{40}$/.test(hash)) return;
         const title = String(s.title || s.name || '');
         const entry = {
