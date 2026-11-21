@@ -131,7 +131,7 @@ async function proxyHls(req, res, q, base) {
     const body = rewritePlaylist(await up.text(), u, origin, base);
     return send(res, up.status, body, 'application/vnd.apple.mpegurl');
   }
-  const out = { 'Access-Control-Allow-Origin': '*', 'Content-Type': type || 'application/octet-stream' };
+  const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': type || 'application/octet-stream' };
   for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
   res.writeHead(up.status, out);
   if (!up.body) return res.end();
@@ -139,7 +139,7 @@ async function proxyHls(req, res, q, base) {
 }
 
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': type, 'Access-Control-Allow-Origin': '*' });
+  res.writeHead(status, { 'Content-Type': type, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' });
   res.end(body);
 }
 
@@ -147,6 +147,17 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const q = url.searchParams;
   const base = `http://${req.headers.host}`;
+  if (url.pathname !== '/hls') console.log(new Date().toISOString().slice(11, 19), req.method, url.pathname, req.headers.origin || '');
+  if (req.method === 'OPTIONS') {
+    // Chrome asks before a public page (lampa.mx) may call a LAN address.
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': req.headers['access-control-request-headers'] || '*',
+      'Access-Control-Allow-Private-Network': 'true',
+    });
+    return res.end();
+  }
   try {
     if (url.pathname === '/frame') {
       const src = q.get('src');
