@@ -64,6 +64,7 @@ async function capture(iframe) {
     ws.send(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
   let done, qualities = null;
+  const masterIds = new Map();
   const found = new Promise(r => { done = r; });
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
@@ -74,8 +75,10 @@ async function capture(iframe) {
       call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid);
       call('Runtime.runIfWaitingForDebugger', {}, sid);
     } else if (m.method === 'Network.requestWillBeSent') {
-      const u = m.params.request.url;
-      if (/\/master\.m3u8(\?|$)/.test(u)) done(u);
+      // The player probes several edges; some answer 403, so remember the url and wait for a 200.
+      if (/\/master\.m3u8(\?|$)/.test(m.params.request.url)) masterIds.set(m.params.requestId, m.params.request.url);
+    } else if (m.method === 'Network.responseReceived' && masterIds.has(m.params.requestId) && m.params.response.status === 200) {
+      done(masterIds.get(m.params.requestId));
     } else if (m.method === 'Network.responseReceived' && /\/bnsi\//.test(m.params.response.url)) {
       call('Network.getResponseBody', { requestId: m.params.requestId }, m.sessionId).then(r => {
         if (r && r.body) qualities = r.body;
