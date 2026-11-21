@@ -83,10 +83,12 @@ async function capture(iframe) {
     await call('Page.navigate', { url: `http://127.0.0.1:${PORT}/frame?src=${encodeURIComponent(iframe)}` }, sessionId);
     const master = await Promise.race([found, sleep(25000).then(() => null)]);
     if (!master) return null;
+    for (let i = 0; i < 20 && !qualities; i++) await sleep(100);
     const origin = new URL(iframe).origin;
     let map = null;
     try {
       const src = JSON.parse(qualities).hlsSource || [];
+      console.log('qualities', Object.keys((src[0] || {}).quality || {}).join(','));
       const first = src.find(x => x['default']) || src[0] || {};
       map = {};
       for (const [label, links] of Object.entries(first.quality || {})) {
@@ -206,7 +208,8 @@ http.createServer(async (req, res) => {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       const s = await streamFor(src);
       if (!s) return send(res, 502, 'no stream');
-      const want = q.get('q');
+      const labels = Object.keys(s.map || {}).sort((a, b) => (+b || 0) - (+a || 0));
+      const want = q.get('q') || labels[0];
       const pick = want && s.map && s.map[want] ? s.map[want] : null;
       const target = pick ? pick.url : s.master;
       res.writeHead(302, { Location: hlsUrl(base, s.origin, target), 'Access-Control-Allow-Origin': '*' });
