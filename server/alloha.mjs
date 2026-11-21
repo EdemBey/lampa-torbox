@@ -43,8 +43,17 @@ function isAllowedIframe(u) {
   } catch { return false; }
 }
 
+// Alloha bans for hammering: never start two captures closer than 5s apart.
+let lastCaptureAt = 0;
+async function captureSlot() {
+  const wait = lastCaptureAt + 5000 - Date.now();
+  if (wait > 0) await sleep(wait);
+  lastCaptureAt = Date.now();
+}
+
 // Opens the player page inside an iframe and waits for its master.m3u8 request.
 async function capture(iframe) {
+  await captureSlot();
   const ws = new WebSocket(await browserWs());
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -109,6 +118,7 @@ const TTL = 4 * 60 * 1000;
 const inflight = new Map();
 // /hls only fetches CDN hosts a real player session pointed us to, so it is not an open proxy.
 const cdnHosts = new Set();
+let lastClearAt = 0;
 async function streamFor(iframe) {
   const hit = cache.get(iframe);
   if (hit && Date.now() - hit.t < TTL) return hit.v;
@@ -158,7 +168,12 @@ async function proxyHls(req, res, q, base) {
     const body = rewritePlaylist(await up.text(), u, origin, base);
     return send(res, up.status, body, 'application/vnd.apple.mpegurl');
   }
-  if (up.status === 403) cache.clear();
+  // A 403 means the signed link died; drop the cache, but at most once a minute so a
+  // broken episode cannot turn into a capture storm.
+  if (up.status === 403 && Date.now() - lastClearAt > 60000) {
+    cache.clear();
+    lastClearAt = Date.now();
+  }
   const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': type || 'application/octet-stream' };
   for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
   res.writeHead(up.status, out);
