@@ -178,7 +178,7 @@ http.createServer(async (req, res) => {
       const up = await fetch(src, { headers: { Referer: 'https://onomovie.ru/', 'User-Agent': UA } });
       return send(res, up.status, await up.text(), 'text/html; charset=utf-8');
     }
-    if (url.pathname === '/stream') {
+    if (url.pathname === '/stream' || url.pathname === '/stream.m3u8') {
       const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       const s = await streamFor(src);

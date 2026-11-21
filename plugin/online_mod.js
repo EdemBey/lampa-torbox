@@ -13733,7 +13733,7 @@
         if (!(element.media && extract.iframe)) return error();
         var url = extract.iframe.replace(/&(translation|season|episode)=[^&]*/g, '') + '&translation=' + element.media.id_translation;
         if (element.season) url += '&season=' + element.season + '&episode=' + element.episode;
-        element.stream = server + '/stream?url=' + encodeURIComponent(url);
+        element.stream = server + '/stream.m3u8?url=' + encodeURIComponent(url);
         element.qualitys = false;
         element.subtitles = false;
         call(element);
