@@ -59,9 +59,11 @@ async function capture(iframe, q) {
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
   const waiters = new Map();
+  // Chrome can die mid-flight; without a timeout a single call would hang the request forever.
   const call = (method, params = {}, sessionId) => new Promise(res => {
     const n = ++id;
-    waiters.set(n, res);
+    const timer = setTimeout(() => { waiters.delete(n); res({}); }, 10000);
+    waiters.set(n, v => { clearTimeout(timer); res(v); });
     ws.send(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
   let done, qualities = null;
@@ -118,6 +120,48 @@ async function capture(iframe, q) {
   }
 }
 
+
+const cdnHeaders = s => ({ Origin: s.origin, Referer: s.origin + '/', 'User-Agent': UA });
+
+// The token lives in the path and dies after a few minutes, but everything after it is
+// stable, so the player can hold token-free urls and we resolve the token per request.
+async function variantOf(s) {
+  if (s.variant) return s.variant;
+  const r = await fetch(s.master, { headers: cdnHeaders(s) });
+  const body = await r.text();
+  if (!r.ok || !body.includes('#EXTM3U')) return null;
+  const line = body.split('\n').find(l => l && !l.startsWith('#'));
+  if (!line) return null;
+  const url = new URL(line.trim(), s.master).href;
+  s.variant = { url, base: url.slice(0, url.lastIndexOf('/') + 1) };
+  return s.variant;
+}
+
+const relOf = u => {
+  const x = new URL(u);
+  return x.pathname.split('/').slice(3).join('/') + x.search;
+};
+
+async function playlistFor(src, q, base) {
+  let s = await streamFor(src, q);
+  let v = s && await variantOf(s);
+  if (!v) {
+    s = await streamFor(src, q, true);
+    v = s && await variantOf(s);
+  }
+  if (!v) return null;
+  const r = await fetch(v.url, { headers: cdnHeaders(s) });
+  const text = await r.text();
+  if (!r.ok || !text.includes('#EXTM3U')) return null;
+  const seg = abs => `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q || '')}&r=${encodeURIComponent(relOf(new URL(abs, v.url)))}`;
+  return text.split('\n').map(line => {
+    const l = line.trim();
+    if (!l) return line;
+    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (m, u) => `URI="${seg(u)}"`);
+    return seg(l);
+  }).join('\n');
+}
+
 // shortcut: in-memory cache, stale entries dropped only when hit again, fine for one household
 const cache = new Map();
 const TTL = 4 * 60 * 1000;
@@ -125,8 +169,9 @@ const inflight = new Map();
 // /hls only fetches CDN hosts a real player session pointed us to, so it is not an open proxy.
 const cdnHosts = new Set();
 let lastClearAt = 0;
-async function streamFor(iframe, q) {
+async function streamFor(iframe, q, force) {
   const key = iframe + '|' + (q || '');
+  if (force) { cache.delete(key); inflight.delete(key); }
   const hit = cache.get(key);
   if (hit && Date.now() - hit.t < TTL) return hit.v;
   if (hit) cache.delete(key);
@@ -225,26 +270,49 @@ http.createServer(async (req, res) => {
       const fileList = body.match(/ fileList = JSON\.parse\('(\{.*\})'\);/);
       return send(res, up.status, fileList ? fileList[1] : '{}', 'application/json; charset=utf-8');
     }
-    if (url.pathname === '/stream' || url.pathname === '/stream.m3u8') {
+    if (url.pathname === '/play.m3u8' || url.pathname === '/stream.m3u8') {
       const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const s = await streamFor(src);
-      if (!s) return send(res, 502, 'no stream');
-      const labels = Object.keys(s.map || {}).sort((a, b) => (+b || 0) - (+a || 0));
-      const want = q.get('q') || labels[0];
-      const pick = want && s.map && s.map[want] ? s.map[want] : null;
-      const target = pick ? pick.url : s.master;
-      res.writeHead(302, { Location: hlsUrl(base, s.origin, target), 'Access-Control-Allow-Origin': '*' });
-      return res.end();
+      const body = await playlistFor(src, q.get('q'), base);
+      if (!body) console.log('playlist fail', src.slice(-40));
+      if (!body) return send(res, 502, 'no stream');
+      return send(res, 200, body, 'application/vnd.apple.mpegurl');
+    }
+    if (url.pathname === '/s') {
+      const src = q.get('url');
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      const rel = q.get('r') || '';
+      if (!rel || rel.includes('..')) return send(res, 400, 'bad path');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const s = await streamFor(src, q.get('q'), attempt > 0);
+        const v = s && await variantOf(s);
+        if (!v) continue;
+        const ac = new AbortController();
+        res.on('close', () => ac.abort());
+        const up = await fetch(v.base + rel, { headers: cdnHeaders(s), signal: ac.signal });
+        if (up.status !== 200 && up.status !== 206) console.log('seg', up.status, rel.slice(0, 50));
+        if (up.status === 403 && !attempt) continue;
+        const out = { 'Access-Control-Allow-Origin': '*', 'Content-Type': up.headers.get('content-type') || 'application/octet-stream' };
+        for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
+        res.writeHead(up.status, out);
+        if (!up.body) return res.end();
+        return Readable.fromWeb(up.body).on('error', () => res.destroy()).pipe(res);
+      }
+      return send(res, 502, 'no segment');
+    }
+    if (url.pathname === '/map') {
+      const src = q.get('url');
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      const s = await streamFor(src, q.get('q'));
+      return send(res, 200, JSON.stringify(s && s.map || {}), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/qualities') {
       const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const s = await streamFor(src);
-      if (!s) return send(res, 502, 'no stream');
+      // Answer right away: a capture takes ~20s and Cloudflare drops the request long before that.
       const out = {};
-      for (const [label, q2] of Object.entries(s.map || {})) {
-        out[label + 'p'] = `${base}/stream.m3u8?q=${encodeURIComponent(label)}&url=${encodeURIComponent(src)}`;
+      for (const label of ['360', '480', '720', '1080']) {
+        out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       }
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
