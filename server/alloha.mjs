@@ -3,6 +3,7 @@
 // and this server proxies the HLS with that Origin. Run: node server/alloha.mjs
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import http2 from 'node:http2';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -68,20 +69,33 @@ async function capture(iframe, q) {
   });
   let done, qualities = null;
   const masterIds = new Map();
+  const extra = {};
+  const kids = [];
   const found = new Promise(r => { done = r; });
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
-    if (m.id && waiters.has(m.id)) { waiters.get(m.id)(m.result || {}); waiters.delete(m.id); return; }
+    if (m.id && waiters.has(m.id)) { waiters.get(m.id)(m.result || (m.error ? { error: m.error } : {})); waiters.delete(m.id); return; }
     if (m.method === 'Target.attachedToTarget') {
       const sid = m.params.sessionId;
+      kids.push(sid);
       // The player asks for the quality saved in its own localStorage, so set it before the app boots.
       if (q) call('Page.addScriptToEvaluateOnNewDocument', { source: `try{var k='allplay',o=JSON.parse(localStorage.getItem(k)||'{}');o.quality=${Number(q)};localStorage.setItem(k,JSON.stringify(o))}catch(e){}` }, sid);
       call('Network.enable', {}, sid);
       call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid);
       call('Runtime.runIfWaitingForDebugger', {}, sid);
     } else if (m.method === 'Network.requestWillBeSent') {
-      // The player probes several edges; some answer 403, so remember the url and wait for a 200.
-      if (/\/master\.m3u8(\?|$)/.test(m.params.request.url)) masterIds.set(m.params.requestId, m.params.request.url);
+      const u = m.params.request.url;
+      const h = m.params.request.headers || {};
+      // The CDN wants the player's own tokens on every media request.
+      if (/userplay\.live|play-revers\.live/.test(u)) {
+        if (!globalThis.__logged) { globalThis.__logged = 1; console.log('cdn headers:', Object.keys(h).join(',')); }
+        for (const [k, v] of Object.entries(h)) {
+          if (/^(host|connection|content-length|origin|referer|accept-encoding|cookie)$/i.test(k)) continue;
+          extra[k] = v;
+        }
+        if (!extra.__logged) { extra.__logged = 1; console.log('cdn headers:', Object.keys(h).join(',')); }
+      }
+      if (/\/master\.m3u8(\?|$)/.test(u)) masterIds.set(m.params.requestId, u);
     } else if (m.method === 'Network.responseReceived' && masterIds.has(m.params.requestId) && m.params.response.status === 200) {
       done(masterIds.get(m.params.requestId));
     } else if (m.method === 'Network.responseReceived' && /\/bnsi\//.test(m.params.response.url)) {
@@ -91,14 +105,23 @@ async function capture(iframe, q) {
     }
   };
   ws.onclose = () => { for (const r of waiters.values()) r({}); done(null); };
-  let targetId;
+  let targetId, s;
   try {
     ({ targetId } = await call('Target.createTarget', { url: 'about:blank' }));
     const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
     await call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
     await call('Network.enable', {}, sessionId);
     await call('Page.navigate', { url: `http://127.0.0.1:${PORT}/frame?src=${encodeURIComponent(iframe)}` }, sessionId);
-    const master = await Promise.race([found, sleep(25000).then(() => null)]);
+    let master = await Promise.race([found, sleep(25000).then(() => null)]);
+    if (!master) {
+      // The player's own CDN request can be refused while /bnsi still answered, so fall back to its links.
+      try {
+        const src = JSON.parse(qualities).hlsSource || [];
+        const first = src.find(x => x['default']) || src[0] || {};
+        const link = String(Object.values(first.quality || {})[0] || '').split(' or ')[0];
+        if (link) master = link;
+      } catch (e) {}
+    }
     if (!master) return null;
     for (let i = 0; i < 20 && !qualities; i++) await sleep(100);
     const origin = new URL(iframe).origin;
@@ -113,23 +136,47 @@ async function capture(iframe, q) {
         if (link) map[label] = { url: link, origin };
       }
     } catch (e) { map = null; }
-    return { master, origin, map };
-  } finally {
-    if (targetId) ws.send(JSON.stringify({ id: ++id, method: 'Target.closeTarget', params: { targetId } }));
-    setTimeout(() => ws.close(), 500);
+    console.log('capture', master ? 'master' : 'no-master', 'map:', Object.keys(map || {}).length);
+    const fetchBuf = async (url) => {
+      for (const sid of kids) {
+        const probe = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid);
+        if (!/stravers\.live/.test(probe.result?.value || '')) continue;
+        const r = await call('Runtime.evaluate', {
+          awaitPromise: true, returnByValue: true,
+          expression: `fetch(${JSON.stringify(url)}, {headers:${JSON.stringify(Object.fromEntries(Object.entries(extra).filter(([k]) => k !== '__logged')))}}).then(r=>r.ok?r.arrayBuffer().then(b=>{let s='';const a=new Uint8Array(b);for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode.apply(null,a.subarray(i,i+8192));return btoa(s)}):'!'+r.status)`,
+        }, sid);
+        const v = r.result?.value;
+        if (r.exceptionDetails) console.log('fb err', (r.exceptionDetails.exception?.description || r.exceptionDetails.text || '').slice(0, 120));
+        if (typeof v === 'string' && v.startsWith('!')) return { status: +v.slice(1) };
+        if (typeof v === 'string' && v) return { status: 200, body: Buffer.from(v, 'base64') };
+      }
+      return { status: 0 };
+    };
+    s = { master, origin, map, extra, fetchBuf };
+    return s;
+  } catch (e) {
+    console.error('capture failed', e.message);
+    return null;
   }
 }
 
 
-const cdnHeaders = s => ({ Origin: s.origin, Referer: s.origin + '/', 'User-Agent': UA });
+const cdnHeaders = s => ({ Origin: s.origin, Referer: s.origin + '/', 'User-Agent': UA, ...(s.extra || {}) });
 
 // The token lives in the path and dies after a few minutes, but everything after it is
 // stable, so the player can hold token-free urls and we resolve the token per request.
 async function variantOf(s) {
   if (s.variant) return s.variant;
-  const r = await fetch(s.master, { headers: cdnHeaders(s) });
-  const body = await r.text();
-  if (!r.ok || !body.includes('#EXTM3U')) return null;
+  // The player already consumed its own master url, so a fresh one from /bnsi is tried first.
+  const candidates = [...Object.values(s.map || {}).map(x => x.url), s.master];
+  let body = '';
+  for (const u of candidates) {
+    const r = await s.fetchBuf(u);
+    body = r.body ? r.body.toString() : '';
+    if (body.includes('#EXTM3U')) { s.master = u; break; }
+  }
+  console.log('variant master', body.includes('#EXTM3U') ? 'ok' : 'fail');
+  if (!body.includes('#EXTM3U')) return null;
   const line = body.split('\n').find(l => l && !l.startsWith('#'));
   if (!line) return null;
   const url = new URL(line.trim(), s.master).href;
@@ -150,8 +197,9 @@ async function playlistFor(src, q, base) {
     v = s && await variantOf(s);
   }
   if (!v) return null;
-  const r = await fetch(v.url, { headers: cdnHeaders(s) });
-  const text = await r.text();
+  const r = await s.fetchBuf(v.url);
+  const text = r.body ? r.body.toString() : '';
+  console.log('variant playlist', r.status);
   if (!r.ok || !text.includes('#EXTM3U')) return null;
   const seg = abs => `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q || '')}&r=${encodeURIComponent(relOf(new URL(abs, v.url)))}`;
   return text.split('\n').map(line => {
@@ -287,16 +335,10 @@ http.createServer(async (req, res) => {
         const s = await streamFor(src, q.get('q'), attempt > 0);
         const v = s && await variantOf(s);
         if (!v) continue;
-        const ac = new AbortController();
-        res.on('close', () => ac.abort());
-        const up = await fetch(v.base + rel, { headers: cdnHeaders(s), signal: ac.signal });
-        if (up.status !== 200 && up.status !== 206) console.log('seg', up.status, rel.slice(0, 50));
-        if (up.status === 403 && !attempt) continue;
-        const out = { 'Access-Control-Allow-Origin': '*', 'Content-Type': up.headers.get('content-type') || 'application/octet-stream' };
-        for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
-        res.writeHead(up.status, out);
-        if (!up.body) return res.end();
-        return Readable.fromWeb(up.body).on('error', () => res.destroy()).pipe(res);
+        const up = await s.fetchBuf(v.base + rel);
+        if (!up.body) { console.log('seg', up.status, rel.slice(0, 50)); if (!attempt) continue; return send(res, 502, 'no segment'); }
+        res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': /m3u8/.test(rel) ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Content-Length': up.body.length });
+        return res.end(up.body);
       }
       return send(res, 502, 'no segment');
     }
