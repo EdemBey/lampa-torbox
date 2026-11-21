@@ -11,14 +11,15 @@ const PORT = Number(process.env.PORT || 8790);
 const CDP = 9334;
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CHROME_ARGS = (process.env.CHROME_ARGS || '').split(' ').filter(Boolean);
-const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
+// Must match the real platform: a macOS UA on Linux Chrome is an easy bot flag.
+const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let chrome = null;
 function startChrome() {
   chrome = spawn(CHROME, [
     '--headless', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(os.tmpdir(), 'alloha-chrome')}`,
-    '--no-first-run', '--no-default-browser-check', '--mute-audio', `--user-agent=${UA}`, ...CHROME_ARGS, 'about:blank',
+    '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-blink-features=AutomationControlled', `--user-agent=${UA}`, ...CHROME_ARGS, 'about:blank',
   ], { stdio: 'ignore' });
   chrome.unref();
   chrome.on('exit', () => { chrome = null; });
