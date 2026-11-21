@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 const PORT = Number(process.env.PORT || 8790);
 const CDP = 9334;
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME_ARGS = (process.env.CHROME_ARGS || '').split(' ').filter(Boolean);
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -17,7 +18,7 @@ let chrome = null;
 function startChrome() {
   chrome = spawn(CHROME, [
     '--headless', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(os.tmpdir(), 'alloha-chrome')}`,
-    '--no-first-run', '--no-default-browser-check', '--mute-audio', `--user-agent=${UA}`, 'about:blank',
+    '--no-first-run', '--no-default-browser-check', '--mute-audio', `--user-agent=${UA}`, ...CHROME_ARGS, 'about:blank',
   ], { stdio: 'ignore' });
   chrome.unref();
   chrome.on('exit', () => { chrome = null; });
@@ -153,7 +154,9 @@ function send(res, status, body, type = 'text/plain; charset=utf-8') {
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const q = url.searchParams;
-  const base = `http://${req.headers.host}`;
+  // Behind cloudflared the public scheme is https, and a Location with http:// would be blocked as mixed content.
+  const proto = req.headers['x-forwarded-proto'] || 'http';
+  const base = `${proto}://${req.headers.host}`;
   if (url.pathname !== '/hls') console.log(new Date().toISOString().slice(11, 19), req.method, url.pathname, req.headers.origin || '');
   if (req.method === 'OPTIONS') {
     // Chrome asks before a public page (lampa.mx) may call a LAN address.

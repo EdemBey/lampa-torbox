@@ -1,0 +1,14 @@
+services:
+  alloha:
+    build: .
+    container_name: alloha
+    restart: unless-stopped
+
+  # Random https URL in the logs: docker compose logs tunnel | grep trycloudflare
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: alloha-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://alloha:8790
+    depends_on:
+      - alloha

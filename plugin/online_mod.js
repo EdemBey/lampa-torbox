@@ -13491,7 +13491,7 @@
       var extract = {};
       var object = _object;
       var select_title = '';
-      var server = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/\/+$/, '') || 'http://192.168.1.26:8790';
+      var server = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/\/+$/, '');
       var filter_items = {};
       var choice = {
         season: 0,
@@ -13522,6 +13522,7 @@
         object = _object;
         select_title = object.search || object.movie.title;
         var error = component.empty.bind(component);
+        if (!server) return component.empty('Укажите адрес сервера Alloha в настройках');
         var api = (+kinopoisk_id ? 'kinopoisk=' : 'imdb=') + kinopoisk_id;
         alloha_api_search(api, function (iframe) {
           if (iframe) getPage(iframe);else if (!object.clarification && object.movie.imdb_id && kinopoisk_id != object.movie.imdb_id) {
@@ -13877,7 +13878,7 @@
           component: component_name,
           param: {
             name: 'online_mod_alloha_server',
-            placeholder: 'http://192.168.1.26:8790',
+            placeholder: 'https://alloha.example.com',
             type: 'input',
             values: '',
             "default": ''
