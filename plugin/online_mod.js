@@ -2,7 +2,7 @@
 //08.11.2026 - Added Naruto Based balancer (anime.home.kopenkin.tech)
 //08.11.2026 - Forward URL qualities to DDD for all balancers
 //08.11.2026 - DDD quality transport via X-DDD-Quality header
-//21.11.2026 - Alloha via onomovie.ru + local helper server (server/alloha.mjs)
+//21.11.2026 - Alloha via onomovie.ru + helper server (server/), search by kp/imdb id
 //08.11.2026 - Lazy playlist resolution, HDrezka mirror
 //08.11.2026 - Prefer fast source providers, revert direct CDN
 //08.11.2026 - DDD quality list keeps 1080p and real lower qualities
@@ -13523,10 +13523,14 @@
         select_title = object.search || object.movie.title;
         var error = component.empty.bind(component);
         if (!server) return component.empty('Укажите адрес сервера Alloha в настройках');
-        var api = (+kinopoisk_id ? 'kinopoisk=' : 'imdb=') + kinopoisk_id;
+        var kp = parseInt(kinopoisk_id, 10) || 0;
+        var imdb = object.movie.imdb_id || '';
+        if (!kp && !imdb) return component.emptyForQuery(select_title);
+        var api = kp ? 'kinopoisk=' + kp : 'imdb=' + imdb;
         alloha_api_search(api, function (iframe) {
-          if (iframe) getPage(iframe);else if (!object.clarification && object.movie.imdb_id && kinopoisk_id != object.movie.imdb_id) {
-            alloha_api_search('imdb=' + object.movie.imdb_id, function (iframe) {
+          if (iframe) return getPage(iframe);
+          if (kp && imdb && imdb != kp) {
+            alloha_api_search('imdb=' + imdb, function (iframe) {
               if (iframe) getPage(iframe);else component.emptyForQuery(select_title);
             }, error);
           } else component.emptyForQuery(select_title);
@@ -17307,7 +17311,7 @@
       };
     }
 
-    var mod_version = '12.11.2026-10';
+    var mod_version = '21.11.2026-1';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
