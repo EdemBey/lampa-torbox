@@ -54,7 +54,7 @@ async function capture(iframe) {
     waiters.set(n, res);
     ws.send(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
-  let done;
+  let done, qualities = null;
   const found = new Promise(r => { done = r; });
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
@@ -67,6 +67,10 @@ async function capture(iframe) {
     } else if (m.method === 'Network.requestWillBeSent') {
       const u = m.params.request.url;
       if (/\/master\.m3u8(\?|$)/.test(u)) done(u);
+    } else if (m.method === 'Network.responseReceived' && /\/bnsi\//.test(m.params.response.url)) {
+      call('Network.getResponseBody', { requestId: m.params.requestId }, m.sessionId).then(r => {
+        if (r && r.body) qualities = r.body;
+      });
     }
   };
   ws.onclose = () => { for (const r of waiters.values()) r({}); done(null); };
@@ -78,7 +82,19 @@ async function capture(iframe) {
     await call('Network.enable', {}, sessionId);
     await call('Page.navigate', { url: `http://127.0.0.1:${PORT}/frame?src=${encodeURIComponent(iframe)}` }, sessionId);
     const master = await Promise.race([found, sleep(25000).then(() => null)]);
-    return master && { master, origin: new URL(iframe).origin };
+    if (!master) return null;
+    const origin = new URL(iframe).origin;
+    let map = null;
+    try {
+      const src = JSON.parse(qualities).hlsSource || [];
+      const first = src.find(x => x['default']) || src[0] || {};
+      map = {};
+      for (const [label, links] of Object.entries(first.quality || {})) {
+        const link = String(links).split(' or ').filter(Boolean)[0];
+        if (link) map[label] = { url: link, origin };
+      }
+    } catch (e) { map = null; }
+    return { master, origin, map };
   } finally {
     if (targetId) ws.send(JSON.stringify({ id: ++id, method: 'Target.closeTarget', params: { targetId } }));
     setTimeout(() => ws.close(), 500);
@@ -87,7 +103,7 @@ async function capture(iframe) {
 
 // shortcut: in-memory cache, stale entries dropped only when hit again, fine for one household
 const cache = new Map();
-const TTL = 10 * 60 * 1000;
+const TTL = 4 * 60 * 1000;
 const inflight = new Map();
 // /hls only fetches CDN hosts a real player session pointed us to, so it is not an open proxy.
 const cdnHosts = new Set();
@@ -102,6 +118,7 @@ async function streamFor(iframe) {
   if (v) {
     cache.set(iframe, { t: Date.now(), v });
     cdnHosts.add(new URL(v.master).hostname);
+    for (const q2 of Object.values(v.map || {})) cdnHosts.add(new URL(q2.url).hostname);
   }
   return v;
 }
@@ -139,6 +156,7 @@ async function proxyHls(req, res, q, base) {
     const body = rewritePlaylist(await up.text(), u, origin, base);
     return send(res, up.status, body, 'application/vnd.apple.mpegurl');
   }
+  if (up.status === 403) cache.clear();
   const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': type || 'application/octet-stream' };
   for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
   res.writeHead(up.status, out);
@@ -188,8 +206,22 @@ http.createServer(async (req, res) => {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       const s = await streamFor(src);
       if (!s) return send(res, 502, 'no stream');
-      res.writeHead(302, { Location: hlsUrl(base, s.origin, s.master), 'Access-Control-Allow-Origin': '*' });
+      const want = q.get('q');
+      const pick = want && s.map && s.map[want] ? s.map[want] : null;
+      const target = pick ? pick.url : s.master;
+      res.writeHead(302, { Location: hlsUrl(base, s.origin, target), 'Access-Control-Allow-Origin': '*' });
       return res.end();
+    }
+    if (url.pathname === '/qualities') {
+      const src = q.get('url');
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      const s = await streamFor(src);
+      if (!s) return send(res, 502, 'no stream');
+      const out = {};
+      for (const [label, q2] of Object.entries(s.map || {})) {
+        out[label + 'p'] = `${base}/stream.m3u8?q=${encodeURIComponent(label)}&url=${encodeURIComponent(src)}`;
+      }
+      return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/hls') return await proxyHls(req, res, q, base);
     // Everything else is Lampa itself: same origin as the helper, so Chrome does not
