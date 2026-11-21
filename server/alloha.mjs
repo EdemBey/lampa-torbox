@@ -53,7 +53,7 @@ async function captureSlot() {
 }
 
 // Opens the player page inside an iframe and waits for its master.m3u8 request.
-async function capture(iframe) {
+async function capture(iframe, q) {
   await captureSlot();
   const ws = new WebSocket(await browserWs());
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
@@ -72,6 +72,8 @@ async function capture(iframe) {
     if (m.id && waiters.has(m.id)) { waiters.get(m.id)(m.result || {}); waiters.delete(m.id); return; }
     if (m.method === 'Target.attachedToTarget') {
       const sid = m.params.sessionId;
+      // The player asks for the quality saved in its own localStorage, so set it before the app boots.
+      if (q) call('Page.addScriptToEvaluateOnNewDocument', { source: `try{var k='allplay',o=JSON.parse(localStorage.getItem(k)||'{}');o.quality=${Number(q)};localStorage.setItem(k,JSON.stringify(o))}catch(e){}` }, sid);
       call('Network.enable', {}, sid);
       call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid);
       call('Runtime.runIfWaitingForDebugger', {}, sid);
@@ -123,16 +125,17 @@ const inflight = new Map();
 // /hls only fetches CDN hosts a real player session pointed us to, so it is not an open proxy.
 const cdnHosts = new Set();
 let lastClearAt = 0;
-async function streamFor(iframe) {
-  const hit = cache.get(iframe);
+async function streamFor(iframe, q) {
+  const key = iframe + '|' + (q || '');
+  const hit = cache.get(key);
   if (hit && Date.now() - hit.t < TTL) return hit.v;
-  if (hit) cache.delete(iframe);
-  if (!inflight.has(iframe)) {
-    inflight.set(iframe, capture(iframe).finally(() => inflight.delete(iframe)));
+  if (hit) cache.delete(key);
+  if (!inflight.has(key)) {
+    inflight.set(key, capture(iframe, q).finally(() => inflight.delete(key)));
   }
-  const v = await inflight.get(iframe);
+  const v = await inflight.get(key);
   if (v) {
-    cache.set(iframe, { t: Date.now(), v });
+    cache.set(key, { t: Date.now(), v });
     cdnHosts.add(new URL(v.master).hostname);
     for (const q2 of Object.values(v.map || {})) cdnHosts.add(new URL(q2.url).hostname);
   }
