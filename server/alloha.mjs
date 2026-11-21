@@ -13,12 +13,19 @@ const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/M
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-spawn(CHROME, [
-  '--headless', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(os.tmpdir(), 'alloha-chrome')}`,
-  '--no-first-run', '--no-default-browser-check', '--mute-audio', `--user-agent=${UA}`, 'about:blank',
-], { stdio: 'ignore' }).unref();
+let chrome = null;
+function startChrome() {
+  chrome = spawn(CHROME, [
+    '--headless', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(os.tmpdir(), 'alloha-chrome')}`,
+    '--no-first-run', '--no-default-browser-check', '--mute-audio', `--user-agent=${UA}`, 'about:blank',
+  ], { stdio: 'ignore' });
+  chrome.unref();
+  chrome.on('exit', () => { chrome = null; });
+}
+startChrome();
 
 async function browserWs() {
+  if (!chrome) startChrome();
   for (let i = 0; i < 40; i++) {
     try {
       const v = await (await fetch(`http://127.0.0.1:${CDP}/json/version`)).json();
@@ -180,7 +187,13 @@ http.createServer(async (req, res) => {
       return res.end();
     }
     if (url.pathname === '/hls') return await proxyHls(req, res, q, base);
-    send(res, 404, 'not found');
+    // Everything else is Lampa itself: same origin as the helper, so Chrome does not
+    // apply its "insecure page cannot reach the local network" rule.
+    const up = await fetch('http://lampa.mx' + req.url, { headers: { 'User-Agent': UA, Accept: req.headers.accept || '*/*' } });
+    const out = { 'Content-Type': up.headers.get('content-type') || 'application/octet-stream', 'Cache-Control': up.headers.get('cache-control') || 'no-store' };
+    res.writeHead(up.status, out);
+    const body = Buffer.from(await up.arrayBuffer());
+    res.end(body);
   } catch (e) {
     console.error(req.url.slice(0, 120), e.message);
     if (!res.headersSent) send(res, 502, e.message); else res.end();
