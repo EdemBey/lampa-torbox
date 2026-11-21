@@ -6,28 +6,39 @@
 
   var API = 'https://api.yani.tv';
   var LIMIT = 20;
-  var STORE = 'yummyani_tmdb';
+  var STORE = 'yummyani_tmdb2'; // v1 cache held same-type guesses like Наруто -> Боруто
   var ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7L12 17.3 5.8 20.9l1.6-7L2 9.2l7.1-.6z"/></svg>';
+  var ORDER_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg>';
+  var DICE = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300"><rect width="200" height="300" fill="#26282b"/>' +
+    '<rect x="45" y="95" width="110" height="110" rx="18" fill="none" stroke="#fff" stroke-width="8"/>' +
+    '<g fill="#fff"><circle cx="75" cy="125" r="10"/><circle cx="100" cy="150" r="10"/><circle cx="125" cy="175" r="10"/></g></svg>');
+  var YEAR = new Date().getFullYear();
   var SECTIONS = [
     { title: 'Онгоинги', q: 'status=ongoing&sort=views&sort_forward=false' },
-    { title: 'Новинки ' + new Date().getFullYear(), q: 'from_year=' + new Date().getFullYear() + '&to_year=' + new Date().getFullYear() + '&sort=views&sort_forward=false' },
+    { title: 'Случайное', q: 'sort=random', random: true },
+    { title: 'Новинки ' + YEAR, q: 'from_year=' + YEAR + '&to_year=' + YEAR + '&sort=views&sort_forward=false' },
     { title: 'Популярное', q: 'sort=rating_counters&sort_forward=false' },
-    { title: 'Топ', q: 'sort=top&sort_forward=true' },
+    { title: 'Топ 100', q: 'sort=top&sort_forward=true', max: 100 },
     { title: 'Фильмы', q: 'types=movie&sort=top&sort_forward=true' }
+  ];
+  var RECS = [
+    { title: 'Рекомендации нейросети · YummyAnime', ai: true },
+    { title: 'Рекомендации зрителей · YummyAnime', ai: false }
   ];
 
   var cache = {};
 
-  function get(path, ok, err) {
-    if (cache[path]) return ok(cache[path]);
+  function get(path, ok, err, fresh) {
+    if (cache[path] && !fresh) return ok(cache[path]);
     new Lampa.Reguest().silent(API + path, function (json) {
       if (!json || !json.response) return err && err();
       if (Object.keys(cache).length > 100) cache = {};
-      cache[path] = json.response;
+      if (!fresh) cache[path] = json.response;
       ok(json.response);
     }, function () {
       if (err) err();
-    });
+    }, false, { headers: { Lang: 'ru' } }); // without it the API answers in the browser's language
   }
 
   function yearOf(s) {
@@ -46,6 +57,10 @@
       yani_url: a.anime_url,
       yani_titles: titles,
       yani_type: a.type && a.type.alias,
+      yani_kind: a.type && a.type.name,
+      yani_rel: a.data && a.data.text,
+      yani_year: a.year || 0,
+      kp: a.remote_ids && a.remote_ids.kp_id || 0,
       img: poster.indexOf('//') === 0 ? 'https:' + poster : poster,
       vote_average: Math.round(rating * 10) / 10
     };
@@ -77,9 +92,14 @@
       }));
     }
     var lang = Lampa.Storage.field('tmdb_lang') || 'ru';
+    var loose = null;
+    var pack = function (r) {
+      return { id: r.id, method: r.media_type, poster_path: r.poster_path, backdrop_path: r.backdrop_path };
+    };
 
     (function next(i) {
-      if (i >= queries.length) return done(null);
+      // A year match from any title beats a same-type guess ("NARUTO" alone finds Boruto first).
+      if (i >= queries.length) return done(loose);
       var url = Lampa.TMDB.api('search/multi?query=' + encodeURIComponent(queries[i]) + '&language=' + lang + '&api_key=' + Lampa.TMDB.key());
       new Lampa.Reguest().silent(url, function (json) {
         var list = (json && json.results || []).filter(function (r) {
@@ -87,11 +107,10 @@
         });
         var same = function (r) { return (r.media_type === 'tv') === tv; };
         var sameYear = function (r) { return yearOf(r.first_air_date || r.release_date) === year; };
-        var hit = list.filter(function (r) { return same(r) && sameYear(r); })[0] ||
-          list.filter(sameYear)[0] ||
-          list.filter(same)[0];
-        if (hit) done({ id: hit.id, method: hit.media_type, poster_path: hit.poster_path, backdrop_path: hit.backdrop_path });
-        else next(i + 1);
+        var hit = list.filter(function (r) { return same(r) && sameYear(r); })[0] || list.filter(sameYear)[0];
+        if (hit) return done(pack(hit));
+        if (!loose && list.filter(same)[0]) loose = pack(list.filter(same)[0]);
+        next(i + 1);
       }, function () {
         done(undefined);
       });
@@ -136,6 +155,48 @@
     });
   }
 
+  // Seasons are separate yani pages but one Lampa (TMDB) card; KP id covers the unmatched ones.
+  function keyOf(card) {
+    return card.tmdb ? card.tmdb.method + card.tmdb.id : card.kp ? 'kp' + card.kp : 'y' + card.id;
+  }
+
+  // Drops a card when any of its ids (TMDB, KP, yani) was already seen or belongs to this page.
+  function uniq(cards, skip) {
+    var seen = {};
+    skip.forEach(function (k) { seen[k] = true; });
+    return cards.filter(function (c) {
+      var keys = [keyOf(c), 'y' + c.id];
+      if (c.kp) keys.push('kp' + c.kp);
+      if (keys.some(function (k) { return seen[k]; })) return false;
+      keys.forEach(function (k) { seen[k] = true; });
+      return true;
+    });
+  }
+
+  // Viewing order as Select items; consecutive TV parts of one TMDB show become one line.
+  function orderItems(order, currentId) {
+    var groups = [];
+    order.forEach(function (c) {
+      var last = groups[groups.length - 1];
+      if (last && c.tmdb && c.yani_type === 'tv' && last.type === 'tv' && last.key === keyOf(c)) last.parts.push(c);
+      else groups.push({ key: keyOf(c), type: c.yani_type, parts: [c] });
+    });
+    return groups.map(function (g, i) {
+      var first = g.parts[0];
+      var lastYear = g.parts[g.parts.length - 1].yani_year;
+      var years = first.yani_year && lastYear !== first.yani_year ? first.yani_year + '–' + lastYear : first.yani_year;
+      var info = [first.yani_kind, first.yani_rel, years].filter(Boolean).join(', ');
+      if (g.parts.length > 1) info += ' · частей: ' + g.parts.length;
+      if (first.vote_average) info += ' · ★ ' + first.vote_average;
+      return {
+        title: (i + 1) + '. ' + (first.title || first.name),
+        subtitle: info,
+        selected: g.parts.some(function (p) { return p.id === currentId; }),
+        card: first
+      };
+    });
+  }
+
   function looksAnime(movie) {
     var animated = (movie.genres || []).some(function (g) { return g.id === 16; });
     return animated && ['ja', 'zh', 'ko'].indexOf(movie.original_language) >= 0;
@@ -172,24 +233,17 @@
     }
   }
 
-  var RECS = [
-    { title: 'Рекомендации нейросети · YummyAnime', ai: true },
-    { title: 'Рекомендации зрителей · YummyAnime', ai: false }
-  ];
-
-  // done(rows): viewing order + both yani recommendation lists, [] when the anime is not on yani.
-  function yaniRows(movie, url, done) {
+  // done({order, ai, users}) for the anime on this page, or done(null) when it is not on yani.
+  function yaniData(movie, pageKey, url, done) {
     var withUrl = function (url) {
-      if (!url) return done([]);
+      if (!url) return done(null);
       get('/anime/' + url + '?need_videos=false', function (anime) {
         var order = anime.viewing_order && anime.viewing_order.length > 1 ? anime.viewing_order.map(toCard) : [];
         var lists = [];
         var left = RECS.length;
         RECS.forEach(function (r, i) {
           var take = function (recs) {
-            lists[i] = (Array.isArray(recs) ? recs : []).filter(function (a) {
-              return a.anime_id !== anime.anime_id;
-            }).map(toCard);
+            lists[i] = (Array.isArray(recs) ? recs : []).map(toCard);
             if (--left === 0) finish();
           };
           get('/anime/' + anime.anime_id + '/recommendations?from_ai=' + r.ai, take, take);
@@ -197,23 +251,31 @@
 
         function finish() {
           enrich(order.concat(lists[0], lists[1]), function () {
-            var rows = [];
-            if (order.length) rows.push({ title: 'Порядок просмотра · YummyAnime', results: order });
-            RECS.forEach(function (r, i) {
-              if (lists[i].length) rows.push({ title: r.title, results: lists[i], yani_recs: true });
+            var self = [pageKey, 'y' + anime.anime_id];
+            if (anime.remote_ids && anime.remote_ids.kp_id) self.push('kp' + anime.remote_ids.kp_id);
+            done({
+              order: order.length ? orderItems(order, anime.anime_id) : [],
+              ai: uniq(lists[0], self),
+              users: uniq(lists[1], self)
             });
-            done(rows);
           });
         }
       }, function () {
-        done([]);
+        done(null);
       });
     };
 
     url ? withUrl(url) : findYani(movie, withUrl);
   }
 
-  // Runs before Lampa builds the page, so its own recommendations/similar rows can be dropped.
+  // Lampa overwrites recomend/simular titles with its own; this keeps ours.
+  function row(title, results) {
+    var r = { results: results };
+    Object.defineProperty(r, 'title', { get: function () { return title; }, set: function () {}, enumerable: true });
+    return r;
+  }
+
+  // Runs before Lampa builds the page, so yani lists take the place of Lampa's recommendations/similar.
   function wrapFull(name) {
     var src = Lampa.Api.sources[name];
     if (!src || !src.full) return;
@@ -221,23 +283,52 @@
     src.full = function (params, oncomplete, onerror) {
       orig.call(src, params, function (data) {
         var called = false;
-        var finish = function (rows) {
+        var finish = function (res) {
           if (called) return;
           called = true;
           // The user left the page while we waited: don't build into a dead activity.
           if (params.component === 'full' && params !== Lampa.Activity.active()) return;
-          if (rows && rows.some(function (r) { return r.yani_recs; })) {
+          if (res && (res.ai.length || res.users.length)) {
             delete data.recomend;
             delete data.simular;
+            if (res.ai.length) data.recomend = row(RECS[0].title, res.ai);
+            if (res.users.length) data.simular = row(RECS[1].title, res.users);
           }
-          if (rows && rows.length) data.yani_rows = rows;
+          if (res && res.order.length) data.yani_order = res.order;
           oncomplete(data);
         };
         // Never hold the page longer than this; it then opens with Lampa's rows only.
         setTimeout(finish, 3000);
-        data && data.movie ? yaniRows(data.movie, params.yani_url, finish) : finish();
+        if (!data || !data.movie) return finish();
+        yaniData(data.movie, (params.method || (data.movie.name ? 'tv' : 'movie')) + data.movie.id, params.yani_url, finish);
       }, onerror);
     };
+  }
+
+  function addOrderButton(e) {
+    var buttons = e.body.find('.full-start-new__buttons, .full-start__buttons').first();
+    if (!buttons.length || buttons.find('.button--yani-order').length) return;
+    var btn = $('<div class="full-start__button selector button--yani-order">' + ORDER_ICON + '<span>Порядок просмотра</span></div>');
+    btn.on('hover:enter', function () {
+      var ctrl = Lampa.Controller.enabled().name;
+      Lampa.Select.show({
+        title: 'Порядок просмотра · YummyAnime',
+        items: e.data.yani_order,
+        onSelect: function (a) {
+          if (a.selected) return Lampa.Controller.toggle(ctrl);
+          Lampa.Activity.push({ url: '', component: 'full', id: a.card.id, method: a.card.original_name ? 'tv' : 'movie', card: a.card, source: 'yani' });
+        },
+        onBack: function () {
+          Lampa.Controller.toggle(ctrl);
+        }
+      });
+    });
+    var play = buttons.find('.button--play');
+    play.length ? play.after(btn) : buttons.append(btn);
+  }
+
+  function randomCard() {
+    return { id: 'random', source: 'yani', yani_random: true, title: 'Случайное аниме', img: DICE };
   }
 
   var source = {
@@ -247,11 +338,12 @@
         return function (call) {
           get('/anime?limit=' + LIMIT + '&' + s.q, function (list) {
             enrich(list.map(toCard), function (cards) {
+              if (s.random) cards.unshift(randomCard());
               call({ title: s.title, url: s.q, source: 'yani', results: cards, total_pages: 2 });
             });
           }, function () {
             call();
-          });
+          }, s.random);
         };
       });
       function load(ok, err) {
@@ -262,26 +354,24 @@
     },
     list: function (params, oncomplete, onerror) {
       var page = params.page || 1;
+      var section = SECTIONS.filter(function (s) { return s.q === params.url; })[0] || {};
+      var pages = section.max ? Math.ceil(section.max / LIMIT) : Infinity;
       get('/anime?limit=' + LIMIT + '&offset=' + (page - 1) * LIMIT + '&' + params.url, function (list) {
         enrich(list.map(toCard), function (cards) {
-          oncomplete({ results: cards, page: page, total_pages: list.length < LIMIT ? page : page + 1 });
+          oncomplete({ results: cards, page: page, total_pages: list.length < LIMIT || page >= pages ? page : page + 1 });
         });
-      }, onerror);
+      }, onerror, section.random);
     },
     full: function (params, oncomplete, onerror) {
-      var card = params.card || {};
-      var resolve = function (full) {
-        findTmdb(full, function (found) {
-          if (found !== undefined) remember(card.yani_url, found);
-          open(found);
-        });
+      var tries = 3;
+      var fail = function (card) {
+        if (params.card && params.card.yani_random && --tries > 0) return random();
+        Lampa.Noty.show('YummyAnime: «' + (card.title || card.name || '') + '» не найдено в TMDB');
+        // Lampa's full onError reads status.blocked, so it needs an object.
+        if (onerror) onerror({});
       };
-      var open = function (found) {
-        if (!found) {
-          Lampa.Noty.show('YummyAnime: «' + (card.title || card.name) + '» не найдено в TMDB');
-          // Lampa's full onError reads status.blocked, so it needs an object.
-          return onerror && onerror({});
-        }
+      var open = function (card, found) {
+        if (!found) return fail(card);
         // The activity continues as a normal TMDB card; yani_url keeps the exact yani match.
         params.id = found.id;
         params.method = found.method;
@@ -289,18 +379,36 @@
         params.yani_url = card.yani_url;
         Lampa.Api.sources.tmdb.full(params, oncomplete, onerror);
       };
-      if (card.tmdb) return open(card.tmdb);
-      // List items carry only the Russian title; the full record has other_titles for the TMDB search.
-      get('/anime/' + card.yani_url + '?need_videos=false', function (a) {
-        resolve(toCard(a));
-      }, function () {
-        resolve(card);
-      });
+      var search = function (card, full) {
+        findTmdb(full, function (found) {
+          if (found !== undefined) remember(card.yani_url, found);
+          open(card, found);
+        });
+      };
+      var resolve = function (card) {
+        var known = card.tmdb || Lampa.Storage.get(STORE, '{}')[card.yani_url];
+        if (known) return open(card, known);
+        // List items carry only the Russian title; the full record has other_titles for the TMDB search.
+        get('/anime/' + card.yani_url + '?need_videos=false', function (a) {
+          search(card, toCard(a));
+        }, function () {
+          search(card, card);
+        });
+      };
+      var random = function () {
+        get('/anime?limit=1&sort=random', function (list) {
+          list.length ? resolve(toCard(list[0])) : fail({});
+        }, function () {
+          if (onerror) onerror({});
+        }, true);
+      };
+      params.card && params.card.yani_random ? random() : resolve(params.card || {});
     }
   };
 
   function start() {
     Lampa.Api.sources.yani = source;
+    if (Lampa.Storage.get('yummyani_tmdb', '')) Lampa.Storage.set('yummyani_tmdb', '');
 
     Lampa.Menu.addButton(ICON, 'Аниме', function () {
       Lampa.Activity.push({ url: '', title: 'Аниме', component: 'category', source: 'yani', page: 1 });
@@ -310,12 +418,7 @@
     wrapFull('cub');
 
     Lampa.Listener.follow('full', function (e) {
-      if (e.type !== 'complite' || !e.link || !e.link.rows || !e.data || !e.data.yani_rows) return;
-      e.data.yani_rows.forEach(function (r) {
-        e.link.rows.push(['cards', r]);
-      });
-      // Rows are created lazily on scroll; nudge it so the new ones are appended.
-      e.link.emit('scroll', e.link.scroll.position());
+      if (e.type === 'complite' && e.body && e.data && e.data.yani_order) addOrderButton(e);
     });
   }
 
