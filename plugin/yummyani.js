@@ -6,7 +6,7 @@
 
   var API = 'https://api.yani.tv';
   var LIMIT = 20;
-  var STORE = 'yummyani_tmdb2'; // v1 cache held same-type guesses like Наруто -> Боруто
+  var STORE = 'yummyani_tmdb3'; // v3 marks same-type guesses with `loose`
   var ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7L12 17.3 5.8 20.9l1.6-7L2 9.2l7.1-.6z"/></svg>';
   var ORDER_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg>';
   var DICE = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
@@ -93,8 +93,10 @@
     }
     var lang = Lampa.Storage.field('tmdb_lang') || 'ru';
     var loose = null;
-    var pack = function (r) {
-      return { id: r.id, method: r.media_type, poster_path: r.poster_path, backdrop_path: r.backdrop_path };
+    var pack = function (r, guess) {
+      var p = { id: r.id, method: r.media_type, poster_path: r.poster_path, backdrop_path: r.backdrop_path };
+      if (guess) p.loose = true;
+      return p;
     };
 
     (function next(i) {
@@ -109,7 +111,7 @@
         var sameYear = function (r) { return yearOf(r.first_air_date || r.release_date) === year; };
         var hit = list.filter(function (r) { return same(r) && sameYear(r); })[0] || list.filter(sameYear)[0];
         if (hit) return done(pack(hit));
-        if (!loose && list.filter(same)[0]) loose = pack(list.filter(same)[0]);
+        if (!loose && list.filter(same)[0]) loose = pack(list.filter(same)[0], true);
         next(i + 1);
       }, function () {
         done(undefined);
@@ -174,7 +176,7 @@
   }
 
   // Viewing order as Select items; consecutive TV parts of one TMDB show become one line.
-  function orderItems(order, currentId) {
+  function orderItems(order, currentId, pageKey) {
     var groups = [];
     order.forEach(function (c) {
       var last = groups[groups.length - 1];
@@ -188,6 +190,7 @@
       var info = [first.yani_kind, first.yani_rel, years].filter(Boolean).join(', ');
       if (g.parts.length > 1) info += ' · частей: ' + g.parts.length;
       if (first.vote_average) info += ' · ★ ' + first.vote_average;
+      if (insideShow(first, pageKey)) info += ' · в Lampa — внутри сериала';
       return {
         title: (i + 1) + '. ' + (first.title || first.name),
         subtitle: info,
@@ -195,6 +198,37 @@
         card: first
       };
     });
+  }
+
+  // A special/OVA/ONA that TMDB has no card for: it matched its show (TMDB keeps it in season 0),
+  // by a same-type guess or by sharing the show's year on the show's own page.
+  function insideShow(card, pageKey) {
+    return !!(card.tmdb && card.tmdb.method === 'tv' && card.yani_type !== 'tv' && card.yani_type !== 'movie' &&
+      (card.tmdb.loose || keyOf(card) === pageKey));
+  }
+
+  // Tells where such an entry is inside the show: season 0 episode by English title, else by unique air year.
+  function specialNote(card) {
+    var name = card.title || card.name;
+    var say = function (ep) {
+      Lampa.Noty.show('«' + name + '» — в Lampa нет отдельной карточки. Ищи в сериале: «Спецвыпуски» (сезон 0)' + (ep ? ', серия ' + ep : ''));
+    };
+    get('/anime/' + card.yani_url + '?need_videos=false', lookup, function () { lookup({}); });
+
+    function lookup(full) {
+      var titles = (full.other_titles || []).concat(name).join(' | ').toLowerCase();
+      var url = Lampa.TMDB.api('tv/' + card.tmdb.id + '/season/0?language=en&api_key=' + Lampa.TMDB.key());
+      new Lampa.Reguest().silent(url, function (json) {
+        var eps = json && json.episodes || [];
+        // Short names ("OVA", "Recap") would match any title.
+        var hit = eps.filter(function (e) { return e.name && e.name.length >= 8 && titles.indexOf(e.name.toLowerCase()) >= 0; })[0];
+        var sameYear = eps.filter(function (e) { return yearOf(e.air_date) === card.yani_year; });
+        if (!hit && sameYear.length === 1) hit = sameYear[0];
+        say(hit && hit.episode_number);
+      }, function () {
+        say(0);
+      });
+    }
   }
 
   function looksAnime(movie) {
@@ -254,7 +288,7 @@
             var self = [pageKey, 'y' + anime.anime_id];
             if (anime.remote_ids && anime.remote_ids.kp_id) self.push('kp' + anime.remote_ids.kp_id);
             done({
-              order: order.length ? orderItems(order, anime.anime_id) : [],
+              order: order.length ? orderItems(order, anime.anime_id, pageKey) : [],
               ai: uniq(lists[0], self),
               users: uniq(lists[1], self)
             });
@@ -294,13 +328,17 @@
             if (res.ai.length) data.recomend = row(RECS[0].title, res.ai);
             if (res.users.length) data.simular = row(RECS[1].title, res.users);
           }
-          if (res && res.order.length) data.yani_order = res.order;
+          if (res && res.order.length) {
+            data.yani_order = res.order;
+            data.yani_page = pageKey;
+          }
           oncomplete(data);
         };
         // Never hold the page longer than this; it then opens with Lampa's rows only.
         setTimeout(finish, 3000);
         if (!data || !data.movie) return finish();
-        yaniData(data.movie, (params.method || (data.movie.name ? 'tv' : 'movie')) + data.movie.id, params.yani_url, finish);
+        var pageKey = (params.method || (data.movie.name ? 'tv' : 'movie')) + data.movie.id;
+        yaniData(data.movie, pageKey, params.yani_url, finish);
       }, onerror);
     };
   }
@@ -315,7 +353,13 @@
         title: 'Порядок просмотра · YummyAnime',
         items: e.data.yani_order,
         onSelect: function (a) {
-          if (a.selected) return Lampa.Controller.toggle(ctrl);
+          var here = a.selected || keyOf(a.card) === e.data.yani_page;
+          // Elsewhere the opened page shows the special note itself (source.full).
+          if (here) {
+            if (insideShow(a.card, e.data.yani_page)) specialNote(a.card);
+            else if (!a.selected) Lampa.Noty.show('«' + (a.card.title || a.card.name) + '» — в Lampa это сезон этого же сериала');
+            return Lampa.Controller.toggle(ctrl);
+          }
           Lampa.Activity.push({ url: '', component: 'full', id: a.card.id, method: a.card.original_name ? 'tv' : 'movie', card: a.card, source: 'yani' });
         },
         onBack: function () {
@@ -372,6 +416,9 @@
       };
       var open = function (card, found) {
         if (!found) return fail(card);
+        // Opened from a row: still say where the special is inside the show.
+        card.tmdb = found;
+        if (insideShow(card)) specialNote(card);
         // The activity continues as a normal TMDB card; yani_url keeps the exact yani match.
         params.id = found.id;
         params.method = found.method;
@@ -408,7 +455,9 @@
 
   function start() {
     Lampa.Api.sources.yani = source;
-    if (Lampa.Storage.get('yummyani_tmdb', '')) Lampa.Storage.set('yummyani_tmdb', '');
+    ['yummyani_tmdb', 'yummyani_tmdb2'].forEach(function (old) {
+      if (Lampa.Storage.get(old, '')) Lampa.Storage.set(old, '');
+    });
 
     Lampa.Menu.addButton(ICON, 'Аниме', function () {
       Lampa.Activity.push({ url: '', title: 'Аниме', component: 'category', source: 'yani', page: 1 });
