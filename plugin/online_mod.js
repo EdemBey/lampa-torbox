@@ -13736,22 +13736,9 @@
         var url = extract.iframe.replace(/&(translation|season|episode)=[^&]*/g, '') + '&translation=' + element.media.id_translation;
         if (element.season) url += '&season=' + element.season + '&episode=' + element.episode;
         element.stream = server + '/stream.m3u8?url=' + encodeURIComponent(url);
+        element.qualitys = false;
         element.subtitles = false;
-        network.clear();
-        network.timeout(30000);
-        network["native"](server + '/qualities?url=' + encodeURIComponent(url), function (res) {
-          var map = res;
-          if (typeof res === 'string') {
-            try { map = JSON.parse(res); } catch (e) { map = null; }
-          }
-          element.qualitys = map && Object.keys(map).length ? map : false;
-          call(element);
-        }, function () {
-          element.qualitys = false;
-          call(element);
-        }, false, {
-          dataType: 'text'
-        });
+        call(element);
       }
       /**
        * Показать файлы
