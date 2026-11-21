@@ -143,6 +143,8 @@
 
   // TMDB/CUB card -> yani anime_url: by KP id when the card has one, else by title + year.
   function findYani(movie, done) {
+    // Non-animation pages must not wait for yani (CUB cards carry a KP id on every movie).
+    if (!(movie.genres || []).some(function (g) { return g.id === 16; })) return done(null);
     var kp = +(movie.kinopoisk_id || movie.kp_id);
     if (kp) {
       return get('/anime?limit=1&kp_ids=' + kp, function (list) {
@@ -170,41 +172,72 @@
     }
   }
 
-  function addRows(e) {
-    var link = e.link;
-    var object = e.object;
-    var movie = e.data.movie;
+  var RECS = [
+    { title: 'Рекомендации нейросети · YummyAnime', ai: true },
+    { title: 'Рекомендации зрителей · YummyAnime', ai: false }
+  ];
 
+  // done(rows): viewing order + both yani recommendation lists, [] when the anime is not on yani.
+  function yaniRows(movie, url, done) {
     var withUrl = function (url) {
-      if (!url) return;
+      if (!url) return done([]);
       get('/anime/' + url + '?need_videos=false', function (anime) {
-        var rows = [];
         var order = anime.viewing_order && anime.viewing_order.length > 1 ? anime.viewing_order.map(toCard) : [];
-        var withRecs = function (recs) {
-          enrich(order.concat(recs), function () {
-            if (order.length) rows.push({ title: 'Порядок просмотра', results: order });
-            if (recs.length) rows.push({ title: 'Похожие аниме', results: recs });
-            render(rows);
-          });
-        };
-        get('/anime/' + anime.anime_id + '/recommendations', function (recs) {
-          withRecs(Array.isArray(recs) ? recs.map(toCard) : []);
-        }, function () {
-          withRecs([]);
+        var lists = [];
+        var left = RECS.length;
+        RECS.forEach(function (r, i) {
+          var take = function (recs) {
+            lists[i] = (Array.isArray(recs) ? recs : []).filter(function (a) {
+              return a.anime_id !== anime.anime_id;
+            }).map(toCard);
+            if (--left === 0) finish();
+          };
+          get('/anime/' + anime.anime_id + '/recommendations?from_ai=' + r.ai, take, take);
         });
+
+        function finish() {
+          enrich(order.concat(lists[0], lists[1]), function () {
+            var rows = [];
+            if (order.length) rows.push({ title: 'Порядок просмотра · YummyAnime', results: order });
+            RECS.forEach(function (r, i) {
+              if (lists[i].length) rows.push({ title: r.title, results: lists[i], yani_recs: true });
+            });
+            done(rows);
+          });
+        }
+      }, function () {
+        done([]);
       });
     };
 
-    function render(rows) {
-      if (!rows.length || Lampa.Activity.active() !== object) return;
-      rows.forEach(function (r) {
-        link.rows.push(['cards', r]);
-      });
-      // Rows are created lazily on scroll; nudge it so the new ones are appended.
-      link.emit('scroll', link.scroll.position());
-    }
+    url ? withUrl(url) : findYani(movie, withUrl);
+  }
 
-    object.yani_url ? withUrl(object.yani_url) : findYani(movie, withUrl);
+  // Runs before Lampa builds the page, so its own recommendations/similar rows can be dropped.
+  function wrapFull(name) {
+    var src = Lampa.Api.sources[name];
+    if (!src || !src.full) return;
+    var orig = src.full;
+    src.full = function (params, oncomplete, onerror) {
+      orig.call(src, params, function (data) {
+        var called = false;
+        var finish = function (rows) {
+          if (called) return;
+          called = true;
+          // The user left the page while we waited: don't build into a dead activity.
+          if (params.component === 'full' && params !== Lampa.Activity.active()) return;
+          if (rows && rows.some(function (r) { return r.yani_recs; })) {
+            delete data.recomend;
+            delete data.simular;
+          }
+          if (rows && rows.length) data.yani_rows = rows;
+          oncomplete(data);
+        };
+        // Never hold the page longer than this; it then opens with Lampa's rows only.
+        setTimeout(finish, 3000);
+        data && data.movie ? yaniRows(data.movie, params.yani_url, finish) : finish();
+      }, onerror);
+    };
   }
 
   var source = {
@@ -273,8 +306,16 @@
       Lampa.Activity.push({ url: '', title: 'Аниме', component: 'category', source: 'yani', page: 1 });
     });
 
+    wrapFull('tmdb');
+    wrapFull('cub');
+
     Lampa.Listener.follow('full', function (e) {
-      if (e.type === 'complite' && e.link && e.link.rows && e.data && e.data.movie) addRows(e);
+      if (e.type !== 'complite' || !e.link || !e.link.rows || !e.data || !e.data.yani_rows) return;
+      e.data.yani_rows.forEach(function (r) {
+        e.link.rows.push(['cards', r]);
+      });
+      // Rows are created lazily on scroll; nudge it so the new ones are appended.
+      e.link.emit('scroll', e.link.scroll.position());
     });
   }
 
