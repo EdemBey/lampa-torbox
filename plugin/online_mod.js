@@ -10638,22 +10638,6 @@
         extract = null;
       };
 
-      function parse(str, url) {
-        component.loading(false);
-        str = (str || '').replace(/\n/g, '');
-        var find = str.match(/var playerOptions = ({.*?});/);
-        var json;
-
-        try {
-          json = find && (0, eval)('"use strict"; (function(){ return ' + find[1] + '; })();');
-        } catch (e) {}
-
-        if (json && json.playlist && json.playlist.length && json.playlist.forEach) {
-          extract = json.playlist;
-          filter();
-          append(filtred());
-        } else component.emptyForQuery(select_title);
-      }
       /**
        * Построить фильтр
        */
@@ -13537,16 +13521,25 @@
         }, error);
       };
 
-      // The player page needs a Referer and the stream needs headless Chrome, both done by server/alloha.mjs.
+      // The helper fetches the player page (it needs a Referer) and returns its fileList as JSON.
       function getPage(iframe) {
         network.clear();
         network.timeout(20000);
-        network["native"](server + '/page?url=' + encodeURIComponent(iframe), function (str) {
-          parse(str, iframe);
+        network["native"](server + '/tracks?url=' + encodeURIComponent(iframe), function (pl) {
+          extract = {
+            iframe: iframe,
+            pl: pl && pl.all ? pl : {}
+          };
+
+          if (pl && pl.all && Object.keys(pl.all).length) {
+            component.loading(false);
+            filter();
+            append(filtred());
+          } else component.emptyForQuery(select_title);
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
         }, false, {
-          dataType: 'text'
+          dataType: 'json'
         });
       }
 

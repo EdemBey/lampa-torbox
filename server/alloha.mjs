@@ -175,11 +175,13 @@ http.createServer(async (req, res) => {
       const safe = new URL(src).href.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
       return send(res, 200, `<!doctype html><body style="margin:0"><iframe src="${safe}" width="1280" height="720" allow="autoplay; fullscreen"></iframe>`, 'text/html; charset=utf-8');
     }
-    if (url.pathname === '/page') {
+    if (url.pathname === '/page' || url.pathname === '/tracks') {
       const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       const up = await fetch(src, { headers: { Referer: 'https://onomovie.ru/', 'User-Agent': UA } });
-      return send(res, up.status, await up.text(), 'text/html; charset=utf-8');
+      const body = (await up.text()).replace(/\n/g, '');
+      const fileList = body.match(/ fileList = JSON\.parse\('(\{.*\})'\);/);
+      return send(res, up.status, fileList ? fileList[1] : '{}', 'application/json; charset=utf-8');
     }
     if (url.pathname === '/stream' || url.pathname === '/stream.m3u8') {
       const src = q.get('url');
