@@ -13525,7 +13525,11 @@
       function getPage(iframe) {
         network.clear();
         network.timeout(20000);
-        network["native"](server + '/tracks?url=' + encodeURIComponent(iframe), function (pl) {
+        network["native"](server + '/tracks?url=' + encodeURIComponent(iframe), function (res) {
+          var pl = res;
+          if (typeof res === 'string') {
+            try { pl = JSON.parse(res); } catch (e) { pl = null; }
+          }
           extract = {
             iframe: iframe,
             pl: pl && pl.all ? pl : {}
@@ -13539,7 +13543,7 @@
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
         }, false, {
-          dataType: 'json'
+          dataType: 'text'
         });
       }
 
