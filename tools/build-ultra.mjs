@@ -10,7 +10,8 @@ const list = JSON.parse(read('plugin/ultra.json')).plugins;
 const parts = list.map((name) => {
   const code = read('plugin/' + name).replace(/\s+$/, '');
   if (!code) throw new Error('empty plugin: ' + name);
-  return `\n/* ---- ${name} ---- */\n${code}\n`;
+  // The leading ; keeps a plugin starting with ( or [ from being read as a call on the one before.
+  return `\n;/* ---- ${name} ---- */\n${code}\n`;
 });
 
 const head = [
