@@ -376,7 +376,6 @@
 
       first.continue_play = true;
       attachExternalQualities(first);
-      attachAudioOverlay(first, playlist && playlist.length ? playlist : [first]);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
@@ -15934,7 +15933,7 @@
         return isNaN(value) ? 0 : value;
       }
 
-      function qualityMapFromPayload(payload) {
+      function qualityMapFromPayload(payload, malId, episode) {
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
           sources = [{ quality: payload.quality, src: payload.src }];
@@ -15947,9 +15946,13 @@
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
+          var proxied = src;
+          if (malId && episode) {
+            proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
+          }
           candidates.push({
             key: (source.quality || 'auto') + '',
-            src: src,
+            src: proxied,
             rank: providerRank(source.provider)
           });
         });
@@ -15976,7 +15979,7 @@
        * URL is the identity. Duplicate labels between providers are dropped:
        * the faster provider always comes first.
        */
-      function qualityOptionsFromPayload(payload) {
+      function qualityOptionsFromPayload(payload, malId, episode) {
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
           sources = [{ quality: payload.quality, src: payload.src, provider: payload.provider }];
@@ -15989,9 +15992,13 @@
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
+          var proxied = src;
+          if (malId && episode) {
+            proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
+          }
           candidates.push({
             name: (source.quality || 'auto') + '',
-            url: src,
+            url: proxied,
             rank: providerRank(source.provider),
             weight: qualityWeight(source.quality)
           });
@@ -16164,8 +16171,6 @@
           naruto_mal_id: element.malId,
           naruto_episode: element.episode
         };
-
-        narutoEnding.play(element);
 
         if (external) {
           var dddQualities = [{ name: 'Auto', url: autoUrl }];
