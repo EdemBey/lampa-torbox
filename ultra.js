@@ -15436,7 +15436,14 @@
        * URL that returns the source list for one episode. Cheap to build: it
        * only packs the mirror tokens, no network request is made here.
        */
-      function basedUrl(mirrors) {
+      // The site's player passes these: the proxy then replaces the ending music
+      // for the anime that has one (e.g. Steel Ball Run). Without them it plays the original.
+      function episodeQuery(malId, episode) {
+        if (malId == null || malId === '' || episode == null || episode === '') return '';
+        return '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
+      }
+
+      function basedUrl(mirrors, malId, episode) {
         var seen = {};
         var query = [];
 
@@ -15450,7 +15457,7 @@
           query.push('source=' + encodeURIComponent(key));
         });
 
-        return query.length ? site + '/api/player/based?' + query.join('&') : '';
+        return query.length ? site + '/api/player/based?' + query.join('&') + episodeQuery(malId, episode) : '';
       }
 
       function inSeason(episode, season) {
@@ -15746,7 +15753,7 @@
         return isNaN(value) ? 0 : value;
       }
 
-      function qualityMapFromPayload(payload, malId, episode) {
+      function qualityMapFromPayload(payload) {
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
           sources = [{ quality: payload.quality, src: payload.src }];
@@ -15759,13 +15766,9 @@
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
-          var proxied = src;
-          if (malId && episode && src.indexOf('/api/player/proxy') === -1) {
-            proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
-          }
           candidates.push({
             key: (source.quality || 'auto') + '',
-            src: proxied,
+            src: src,
             rank: providerRank(source.provider)
           });
         });
@@ -15792,7 +15795,7 @@
        * URL is the identity. Duplicate labels between providers are dropped:
        * the faster provider always comes first.
        */
-      function qualityOptionsFromPayload(payload, malId, episode) {
+      function qualityOptionsFromPayload(payload) {
         var sources = (payload && payload.sources) || [];
         if (!sources.length && payload && payload.src) {
           sources = [{ quality: payload.quality, src: payload.src, provider: payload.provider }];
@@ -15805,13 +15808,9 @@
           if (!src) return;
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
-          var proxied = src;
-          if (malId && episode && src.indexOf('/api/player/proxy') === -1) {
-            proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
-          }
           candidates.push({
             name: (source.quality || 'auto') + '',
-            url: proxied,
+            url: src,
             rank: providerRank(source.provider),
             weight: qualityWeight(source.quality)
           });
@@ -15924,7 +15923,7 @@
           return;
         }
 
-        var url = site + '/api/player/based?' + query.join('&');
+        var url = site + '/api/player/based?' + query.join('&') + episodeQuery(element.malId, element.episode);
         var options = { dataType: 'text' };
         var done = false;
         var finish = function (text) {
@@ -15932,9 +15931,9 @@
           done = true;
           try {
             var payload = payloadOf(parseJsonText(text));
-            var map = qualityMapFromPayload(payload, element.malId, element.episode);
+            var map = qualityMapFromPayload(payload);
             if (!pickBestQuality(map)) throw new Error('No playable sources');
-            qualityCache[cacheKey] = { time: Date.now(), map: map, options: qualityOptionsFromPayload(payload, element.malId, element.episode) };
+            qualityCache[cacheKey] = { time: Date.now(), map: map, options: qualityOptionsFromPayload(payload) };
             success(map);
           } catch (e) {
             fail();
@@ -16019,7 +16018,7 @@
           playlist.push({
             url: first.url,
             quality: first.quality,
-            qualitySourceUrl: basedUrl(element.mirrors),
+            qualitySourceUrl: basedUrl(element.mirrors, element.malId, element.episode),
             timeline: first.timeline,
             title: first.title,
             slug: first.slug,
@@ -16039,7 +16038,7 @@
 
             var ex = getFile(elem);
             var fallbackUrl = component.getDefaultQuality(ex.quality, ex.file);
-            var qualitySourceUrl = basedUrl(elem.mirrors);
+            var qualitySourceUrl = basedUrl(elem.mirrors, elem.malId, elem.episode);
 
             if (external) {
               playlist.push({
