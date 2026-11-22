@@ -12777,6 +12777,7 @@
       var prefer_mp4 = false;
       var kodik_id_nets = [];
       var kodik_destroyed = false;
+      var kodik_merged = false;
       var prox = component.proxy('kodik');
       var token = Utils.decodeSecret([124, 125, 1, 86, 90, 64, 12, 123, 108, 59, 122, 125, 82, 3, 90, 23, 90, 122, 60, 110, 43, 123, 84, 3, 91, 71, 88, 112, 111, 57, 122, 121], atob('ZmluZCB5b3VyIG93biB0b2tlbg=='));
       var embed = 'https://kodik-api.com/search';
@@ -12970,6 +12971,7 @@
           items: items,
           seasons: seasons
         };
+        kodik_merged = true;
         choice.season = 0;
         choice.voice = 0;
         choice.voice_name = '';
@@ -13296,6 +13298,7 @@
         seasons.sort(function (a, b) {
           return a.id - b.id;
         });
+        kodik_merged = false;
         extract = {
           items: items,
           seasons: seasons
@@ -13394,7 +13397,8 @@
             for (var episode_id in episodes) {
               var link = episodes[episode_id];
               filtred.push({
-                title: component.formatEpisodeTitle(season_id, episode_id),
+                // Merged franchise: season numbers are ours, so show only the episode.
+                title: component.formatEpisodeTitle(kodik_merged ? null : season_id, episode_id),
                 orig_title: translation.title_orig || translation.title || select_title,
                 quality: translation.quality || '360p ~ 1080p',
                 info: ' / ' + voice_name,
