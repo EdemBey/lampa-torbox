@@ -13340,7 +13340,7 @@
             if (!nums.length) return filter_items.voice_note.push('');
             var first = nums[0];
             var last = nums[nums.length - 1];
-            filter_items.voice_note.push(nums.length === 1 ? '' + first : nums.length === last - first + 1 ? first + '–' + last : nums.length + ' ' + Lampa.Lang.translate('torrent_serial_episode'));
+            filter_items.voice_note.push(nums.length === last - first + 1 ? first === last ? first + ' эп.' : first + '-' + last + ' эп.' : nums.length + ' эп.');
           });
         }
 
@@ -17196,7 +17196,7 @@
           var value = need[type];
           items.forEach(function (name, i) {
             subitems.push({
-              title: notes[i] ? name + ' \u00b7 ' + notes[i] : name,
+              title: notes[i] ? name + ' (' + notes[i] + ')' : name,
               selected: value == i,
               index: i
             });
