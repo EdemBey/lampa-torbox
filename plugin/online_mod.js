@@ -13308,12 +13308,14 @@
             return s.title;
           }),
           voice: [],
-          voice_info: []
+          voice_info: [],
+          voice_note: []
         };
         if (!filter_items.season[choice.season]) choice.season = 0;
 
         if (extract.seasons.length) {
           var season_id = extract.seasons[choice.season] && extract.seasons[choice.season].id;
+          var eps_by = {};
           extract.items.forEach(function (c) {
             if (!(c.seasons && c.seasons[season_id])) return;
 
@@ -13323,6 +13325,22 @@
               filter_items.voice.push(c.translation.title);
               filter_items.voice_info.push(c.translation);
             }
+            // Episodes this voice has in the selected season (rows repeat episodes per quality).
+            if (c.translation) {
+              var seen_eps = eps_by[c.translation.id] || (eps_by[c.translation.id] = {});
+              Object.keys(c.seasons[season_id].episodes || {}).forEach(function (e) {
+                seen_eps[e] = true;
+              });
+            }
+          });
+          filter_items.voice_info.forEach(function (v) {
+            var nums = Object.keys(eps_by[v.id] || {}).map(Number).sort(function (a, b) {
+              return a - b;
+            });
+            if (!nums.length) return filter_items.voice_note.push('');
+            var first = nums[0];
+            var last = nums[nums.length - 1];
+            filter_items.voice_note.push(nums.length === 1 ? '' + first : nums.length === last - first + 1 ? first + '–' + last : nums.length + ' ' + Lampa.Lang.translate('torrent_serial_episode'));
           });
         }
 
@@ -17173,11 +17191,12 @@
         var add = function add(type, title) {
           var need = Lampa.Storage.get('online_mod_filter', '{}');
           var items = filter_items[type];
+          var notes = filter_items[type + '_note'] || [];
           var subitems = [];
           var value = need[type];
           items.forEach(function (name, i) {
             subitems.push({
-              title: name,
+              title: notes[i] ? name + ' \u00b7 ' + notes[i] : name,
               selected: value == i,
               index: i
             });
