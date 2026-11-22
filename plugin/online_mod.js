@@ -15559,7 +15559,7 @@
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
           var proxied = src;
-          if (malId && episode) {
+          if (malId && episode && src.indexOf('/api/player/proxy') === -1) {
             proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
           }
           candidates.push({
@@ -15605,7 +15605,7 @@
           if (src.indexOf('//') === 0) src = 'https:' + src;
           else if (!/^https?:\/\//i.test(src)) src = site + (src.charAt(0) === '/' ? '' : '/') + src;
           var proxied = src;
-          if (malId && episode) {
+          if (malId && episode && src.indexOf('/api/player/proxy') === -1) {
             proxied = site + '/api/player/proxy?src=' + encodeURIComponent(src) + '&malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode);
           }
           candidates.push({
