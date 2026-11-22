@@ -360,13 +360,10 @@
         title: 'Порядок просмотра · YummyAnime',
         items: e.data.yani_order,
         onSelect: function (a) {
-          var here = a.selected || keyOf(a.card) === e.data.yani_page;
-          // Elsewhere the opened page shows the special note itself (source.full).
-          if (here) {
-            if (insideShow(a.card, e.data.yani_page)) specialNote(a.card);
-            else if (!a.selected) Lampa.Noty.show('«' + (a.card.title || a.card.name) + '» — в Lampa это сезон этого же сериала');
-            return Lampa.Controller.toggle(ctrl);
-          }
+          // This page, another season of the same show or a special living inside it:
+          // Kodik has each part as its own entry, so open it straight on that part.
+          if (a.selected || keyOf(a.card) === e.data.yani_page || insideShow(a.card, e.data.yani_page)) return openKodik(a.card, e.data.movie);
+          // Own TMDB page: open it as usual.
           Lampa.Activity.push({ url: '', component: 'full', id: a.card.id, method: a.card.original_name ? 'tv' : 'movie', card: a.card, source: 'yani' });
         },
         onBack: function () {
@@ -376,6 +373,29 @@
     });
     var play = buttons.find('.button--play');
     play.length ? play.after(btn) : buttons.append(btn);
+  }
+
+  // Opens the Kodik balancer straight on one yani part (online_mod reads `yani_only_shikimori`).
+  // The TMDB card is kept as-is, so watch history and resume keep working.
+  function openKodik(card, base) {
+    get('/anime/' + card.yani_url + '?need_videos=false', function (a) {
+      var shiki = a.remote_ids && a.remote_ids.shikimori_id;
+      if (!shiki) return Lampa.Noty.show('«' + (a.title || card.title) + '» нет в Kodik');
+      var movie = {};
+      for (var k in base) movie[k] = base[k];
+      movie.yani_only_shikimori = shiki;
+      Lampa.Activity.push({
+        url: '',
+        title: 'Онлайн',
+        component: 'online_mod',
+        page: 1,
+        search: a.title,
+        balancer: 'kodik',
+        movie: movie
+      });
+    }, function () {
+      Lampa.Noty.show('YummyAnime: не удалось получить данные');
+    });
   }
 
   function randomCard() {

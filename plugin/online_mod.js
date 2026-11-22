@@ -13061,6 +13061,25 @@
         // Ветка срабатывает, если на карточку плагин yummyani положил shikimori-id частей.
 
 
+        // Выбор из «порядка просмотра»: сразу одна часть — её переводы, без списка вариантов.
+        var yani_only = +object.movie.yani_only_shikimori || 0;
+        if (!object.clarification && yani_only) {
+          kodik_api_search_ids([yani_only], function (results) {
+            var byTitle = {};
+            results.forEach(function (c) {
+              byTitle[c.title] = c;
+            });
+            var titles = Object.keys(byTitle);
+            // Kodik может не знать этот shikimori_id — тогда обычный поиск по названию
+            if (!titles.length) return kodik_search_by_title(function (json) {
+              display(json && json.results, function () {
+                component.emptyForQuery(select_title);
+              });
+            }, component.empty.bind(component));
+            if (titles.length === 1) return success({ media: byTitle[titles[0]] });
+            display(results, function () {}, true);
+          });
+        }
         if (!object.clarification && object.movie.yani_order_urls && object.movie.yani_order_urls.length && window.YummyAnime && window.YummyAnime.shikimoriIds) {
           window.YummyAnime.shikimoriIds(object.movie, function (ids) {
             if (!ids.length) return kodik_search_usual();
