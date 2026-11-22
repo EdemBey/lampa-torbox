@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
-import { borthFor, episodeKey, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
+import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
@@ -118,7 +118,9 @@ async function iframeInfo(src) {
       // Nothing about a failure is cached, but the key stays blocked for a moment, otherwise
       // every retry of every segment starts a fresh resolve.
       .catch((e) => {
-        const refusal = /no websocket session|guard:/.test(e.message);
+        // Alloha throttles a repeated /bnsi by answering 404 "content not found", so a refusal
+        // and a throttle both wait the long cooldown; only a real network blip is retried soon.
+        const refusal = /no websocket session|guard:|bnsi: 404 without hlsSource/.test(e.message);
         failures.set(key, Date.now() + (refusal ? FAIL_ALLoha : FAIL_NETWORK));
         throw e;
       })
@@ -132,15 +134,29 @@ async function iframeInfo(src) {
 const recoveries = new Map();
 const RECOVER_QUIET = 15000;
 
-// The edge hash is bound to one resolution and lives ~2 minutes, so each quality keeps its
-// own socket open and takes every refreshed hash the server pushes.
+// The edge hash signs every quality of the episode, so one socket serves them all. A second
+// socket per quality is what got the session blocked: the CDN tolerates a couple, not one per
+// switch. The socket is reopened only when it really dies.
 const sessions = new Map();
 const pendingSessions = new Map();
 const SESSION_TTL = 10 * 60 * 1000;
 
+// The player reports what it plays: playback_start when the socket opens, resumed when the
+// video starts, then playing every 30 s with the current position (app.js: Ph() and the PT
+// interval). A session that downloads without these looks like a bot and the CDN closes it
+// after about five minutes.
+function report(s, type) {
+  // A throw inside an undici event listener is an uncaught exception, and that is fatal.
+  try {
+    if (s.ws?.readyState !== 1) return false;
+    s.ws.send(JSON.stringify({ type, current_time: Math.floor(s.pos || 0), resolution: s.q, track_id: '1', speed: 1, subtitle: -1, ts: Date.now() }));
+    return true;
+  } catch (e) { return false; }
+}
+
 function connect(s) {
   return new Promise((ok, bad) => {
-    const { info, q } = s;
+    const { info } = s;
     const ws = new WebSocket(`${info.pnr}?sid=${encodeURIComponent(info.pnk)}&v=2.1&t=${Date.now()}`,
       { headers: { Origin: info.origin, 'User-Agent': UA } });
     s.ws = ws;
@@ -152,28 +168,27 @@ function connect(s) {
       clearTimeout(timer);
       bad(new Error(msg));
     };
-    ws.onopen = () => {
-      // A throw inside an undici event listener is an uncaught exception, and that is fatal.
-      try { ws.send(JSON.stringify({ type: 'playback_start', current_time: 0, resolution: q, track_id: '1', speed: 1, subtitle: -1, ts: Date.now() })); } catch (e) {}
-    };
+    ws.onopen = () => report(s, 'playback_start');
     ws.onmessage = (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       if (!m.edge_hash) return;
       s.edge = m.edge_hash;
-      if (!settled) { settled = true; clearTimeout(timer); ok(); }
+      if (!settled) { settled = true; clearTimeout(timer); ok(); if (!s.paused) report(s, 'resumed'); }
     };
-    ws.onerror = () => { s.ws = null; fail('edge socket failed'); };
-    ws.onclose = () => { s.ws = null; fail('edge socket closed'); };
+    // A late close from a socket that was already replaced must not orphan the new one.
+    ws.onerror = () => { if (s.ws === ws) s.ws = null; fail('edge socket failed'); };
+    ws.onclose = () => { if (s.ws === ws) s.ws = null; fail('edge socket closed'); };
   });
 }
 
 async function sessionFor(src, want) {
   const info = await iframeInfo(src);
   const q = pickQuality(info.qualities, want);
-  const key = keyOf(src) + '|' + q;
+  const key = keyOf(src);
   const hit = sessions.get(key);
-  if (hit && hit.s.edge) { hit.t = Date.now(); return hit.s; }
+  // The heartbeat reports the quality currently being played, which changes on every switch.
+  if (hit && hit.s.edge) { hit.t = Date.now(); hit.s.q = q; return hit.s; }
   if (!pendingSessions.has(key)) {
     const s = { key, src, info, q, edge: null, ws: null };
     pendingSessions.set(key, connect(s)
@@ -203,8 +218,20 @@ setInterval(() => {
   for (const [key, until] of sessionBlocks) if (now >= until) sessionBlocks.delete(key);
   for (const [key, hit] of recoveries) if (!hit.promise && now - hit.at > 5 * 60 * 1000) recoveries.delete(key);
   for (const [key, hit] of sessions) {
+    // Like the player: playing only while the position moves, one paused when it stops, and
+    // resumed before the next playing. State moves only on a report that actually went out,
+    // so a tick without a live socket is retried on the next one.
+    const s = hit.s;
+    if (s.pos !== s.reportedPos) {
+      if (!s.paused || report(s, 'resumed')) {
+        s.paused = false;
+        if (report(s, 'playing')) s.reportedPos = s.pos;
+      }
+    } else if (!s.paused && s.reportedPos != null) {
+      if (report(s, 'paused')) s.paused = true;
+    }
     if (now - hit.t > SESSION_TTL) { sessions.delete(key); hit.s.ws?.close(); }
-    // Alloha closes the socket after pushing a hash, so a missing one is normal; only a
+    // The socket stays open for minutes (measured), so a missing one means it dropped; only a
     // reconnect that keeps failing means the session itself is spent.
     else if (!hit.s.ws) {
       connect(hit.s).catch(async () => {
@@ -316,20 +343,14 @@ async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
 // Only hosts a real player session pointed us to are proxied, so /s is not an open proxy.
 const cdnHosts = new Set();
 
-function proxied(base, src, q, url) {
+function proxied(base, src, q, url, t) {
   const x = new URL(url);
   cdnHosts.add(x.hostname);
-  return `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q)}&u=${encodeURIComponent(x.href)}`;
+  return `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q)}&u=${encodeURIComponent(x.href)}${t == null ? '' : '&t=' + t.toFixed(1)}`;
 }
 
-function rewritePlaylist(text, playlistUrl, base, src, q) {
-  return text.split('\n').map((line) => {
-    const l = line.trim();
-    if (!l) return line;
-    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (m, u) => `URI="${proxied(base, src, q, new URL(u, playlistUrl).href)}"`);
-    return proxied(base, src, q, new URL(l, playlistUrl).href);
-  }).join('\n');
-}
+const rewritePlaylist = (text, playlistUrl, base, src, q) =>
+  mapPlaylist(text, playlistUrl, (url, t) => proxied(base, src, q, url, t));
 
 async function playlist(base, src, want) {
   const info = await iframeInfo(src);
@@ -400,6 +421,10 @@ http.createServer(async (req, res) => {
       const up = await cdnFetch(src, q.get('q'), target.href, req.headers.range ? { Range: req.headers.range } : {}, 45000);
       // The player abandons fragments on every seek; there is nobody left to send this to.
       if (res.destroyed) { await up.body?.cancel(); return; }
+      // The newest segment the player still wanted is the position the heartbeat reports.
+      const t = q.get('t');
+      const live = sessions.get(keyOf(src));
+      if (live && up.ok && t && Number.isFinite(Number(t))) live.s.pos = Number(t);
       const type = up.headers.get('content-type') || '';
       const isPlaylist = /mpegurl/i.test(type) || /\.m3u8(\?|$)/.test(target.pathname);
       if (up.ok && isPlaylist) {

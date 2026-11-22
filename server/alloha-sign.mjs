@@ -52,13 +52,31 @@ const trailingZeros = (c, k) => { if (c === 0) return k; let m = 0; while (!(c &
 
 export const borthFor = (viewport) => YB + '|' + shuffle(weave(weave(viewport, bitLength, false), trailingZeros, true));
 
-// The CDN only unlocks the resolution named when the socket session starts, so an unknown
-// request falls back to the closest lower quality, or the lowest one available.
+// Each quality is its own CDN url, so the requested one is picked from the list; the edge hash
+// that signs it is the same for all of them. An unknown request falls back to the closest
+// lower quality, or the lowest one available.
 export function pickQuality(qualities, want) {
   const have = QUALITIES.filter((x) => qualities[x]);
   if (!have.length) throw new Error('no qualities');
   const below = have.filter((x) => Number(x) <= Number(want || 0));
   return below.length ? below[below.length - 1] : have[0];
+}
+
+// Rewrites every uri in an HLS playlist through `proxy(url, t)`. Segments get `t`, the second
+// they start at, so the heartbeat can report a real position; uris without a preceding
+// #EXTINF (init map, keys, variants of a master) get none. VOD only: a sliding live window
+// would restart at 0 on every refresh.
+export function mapPlaylist(text, playlistUrl, proxy) {
+  let start = 0, dur = null;
+  return text.split('\n').map((line) => {
+    const l = line.trim();
+    if (!l) return line;
+    if (l.startsWith('#EXTINF:')) dur = parseFloat(l.slice(8)) || 0;
+    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (m, u) => `URI="${proxy(new URL(u, playlistUrl).href)}"`);
+    const out = proxy(new URL(l, playlistUrl).href, dur == null ? undefined : start);
+    if (dur != null) { start += dur; dur = null; }
+    return out;
+  }).join('\n');
 }
 
 // One key per episode: every cache in the server is keyed by it, so two different films must
