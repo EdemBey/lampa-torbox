@@ -23524,26 +23524,18 @@ try {
   }
 
   // Viewing order as Select items; consecutive TV parts of one TMDB show become one line.
+  // One line per yani title, exactly like the site's own viewing order: Kodik keeps each
+  // season part as its own entry, so merging them here would hide a part.
   function orderItems(order, currentId, pageKey) {
-    var groups = [];
-    order.forEach(function (c) {
-      var last = groups[groups.length - 1];
-      if (last && c.tmdb && c.yani_type === 'tv' && last.type === 'tv' && last.key === keyOf(c)) last.parts.push(c);
-      else groups.push({ key: keyOf(c), type: c.yani_type, parts: [c] });
-    });
-    return groups.map(function (g, i) {
-      var first = g.parts[0];
-      var lastYear = g.parts[g.parts.length - 1].yani_year;
-      var years = first.yani_year && lastYear !== first.yani_year ? first.yani_year + '–' + lastYear : first.yani_year;
-      var info = [first.yani_kind, first.yani_rel, years].filter(Boolean).join(', ');
-      if (g.parts.length > 1) info += ' · частей: ' + g.parts.length;
-      if (first.vote_average) info += ' · ★ ' + first.vote_average;
-      if (insideShow(first, pageKey)) info += ' · в Lampa — внутри сериала';
+    return order.map(function (c, i) {
+      var info = [c.yani_kind, c.yani_rel, c.yani_year].filter(Boolean).join(', ');
+      if (c.vote_average) info += ' · ★ ' + c.vote_average;
+      if (insideShow(c, pageKey)) info += ' · в Lampa — внутри сериала';
       return {
-        title: (i + 1) + '. ' + (first.title || first.name),
+        title: (i + 1) + '. ' + (c.title || c.name),
         subtitle: info,
-        selected: g.parts.some(function (p) { return p.id === currentId; }),
-        card: first
+        selected: c.id === currentId,
+        card: c
       };
     });
   }
