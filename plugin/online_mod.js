@@ -13180,7 +13180,39 @@
         // Аниме с «порядком просмотра»: все сезоны и OVA франшизы одним списком.
         // Для Kodik каждый сезон/OVA — отдельный тайтл, поэтому сезоны склеиваем мы.
         var yani_ids = !object.clarification && object.movie.yani_order_urls && object.movie.yani_order_urls.length && window.YummyAnime && window.YummyAnime.shikimoriIds;
-        if (yani_ids) {
+        // Выбор из «Порядка просмотра»: открываем именно эту часть — её озвучки или серии.
+        var part = +object.movie.yani_part_index;
+        var single_id = +object.movie.yani_only_shikimori || 0;
+        if (!object.clarification && part >= 0 && single_id) {
+          kodik_api_search_parts([single_id], function (parts) {
+            if (kodik_destroyed) return;
+            var rows = parts[0] && parts[0].results;
+            if (rows && rows.length) return success({ media: rows[0] });
+            // Такой записи в Kodik нет (спешл внутри сезона): открываем соседнюю часть,
+            // там он и живёт — обычно нулевой серией.
+            var titleFallback = function () {
+              kodik_search_by_title(function (json) {
+                display(json && json.results, function () {
+                  component.emptyForQuery(select_title);
+                });
+              }, component.empty.bind(component));
+            };
+            if (!yani_ids || part < 0) return titleFallback();
+            window.YummyAnime.shikimoriIds(object.movie, function (ids) {
+              if (kodik_destroyed) return;
+              kodik_api_search_parts(ids, function (all) {
+                if (kodik_destroyed) return;
+                for (var p = part + 1; p < all.length && p < ids.length; p++) {
+                  if (all[p] && all[p].results.length) return success({ media: all[p].results[0] });
+                }
+                for (var q = part; q >= 0; q--) {
+                  if (all[q] && all[q].results.length) return success({ media: all[q].results[0] });
+                }
+                titleFallback();
+              });
+            });
+          });
+        } else if (yani_ids) {
           window.YummyAnime.shikimoriIds(object.movie, function (ids) {
             if (!ids.length) return kodik_search_usual();
             kodik_api_search_parts(ids, function (parts) {
