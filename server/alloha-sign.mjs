@@ -3,7 +3,7 @@
 
 // The player's browser fingerprint hash, which it puts in front of the Borth signature.
 export const YB = 'e25a003f3c581b3202043118d9aa32bbfbfe66857bdae8a4d6d0334092cd99ad';
-export const QUALITIES = ['360', '480', '720', '1080'];
+export const QUALITIES = ['360', '480', '720', '1080', '1440', '2160'];
 
 // app.js YX: reorder chars along the primes-length walk 0,2,4,... then odd ones, then 0.
 function isPrime(n) {

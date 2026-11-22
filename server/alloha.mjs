@@ -48,7 +48,9 @@ async function resolveInfo(src) {
   const origin = new URL(src).origin;
   const page = await playerPage(src);
   if (!page.fileList || !page.viewport) throw new Error('player page: ' + page.status);
-  const id = page.fileList.active.id_file || page.fileList.active.id;
+  // The page turns the requested translation into active.id; id_file is the shared movie id,
+  // so asking bnsi with it would always resolve the default audio.
+  const id = page.fileList.active.id || page.fileList.active.id_file;
   const token = new URL(src).searchParams.get('token') || '';
   const kind = page.fileList.type === 'trailer' ? 'trailers' : 'movies';
   const bnsiRes = await fetch(`${origin}/bnsi/${kind}/${id}`, {
