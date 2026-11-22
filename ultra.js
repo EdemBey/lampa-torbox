@@ -12775,6 +12775,8 @@
       var select_title = '';
       var prefer_http = Lampa.Storage.field('online_mod_prefer_http') === true;
       var prefer_mp4 = false;
+      var kodik_id_nets = [];
+      var kodik_destroyed = false;
       var prox = component.proxy('kodik');
       var token = Utils.decodeSecret([124, 125, 1, 86, 90, 64, 12, 123, 108, 59, 122, 125, 82, 3, 90, 23, 90, 122, 60, 110, 43, 123, 84, 3, 91, 71, 88, 112, 111, 57, 122, 121], atob('ZmluZCB5b3VyIG93biB0b2tlbg=='));
       var embed = 'https://kodik-api.com/search';
@@ -12797,56 +12799,188 @@
         });
       }
       /**
-       * Поиск по нескольким shikimori_id (порядок просмотра аниме из yani), результаты одним списком
+       * Части франшизы (порядок просмотра) — каждая со своими сезонами и переводами
        * @param {Array} ids
        */
 
-      var kodik_id_nets = [];
-
-      function kodik_api_search_ids(ids, callback) {
-        var all = [];
+      function kodik_api_search_parts(ids, callback) {
+        var parts = ids.map(function (id) {
+          return {
+            id: id,
+            results: []
+          };
+        });
         var next = 0;
         var active = 0;
         var closed = false;
-        var timer = setTimeout(finish, 6000);
+        var timer = setTimeout(done, 15000);
 
-        function finish() {
+        function done() {
           if (closed) return;
           closed = true;
           clearTimeout(timer);
-          // Хронология франшизы, как в порядке просмотра: сезон 1, OVA, сезон 2…
-          all.sort(function (a, b) {
-            return (a.year || 9999) - (b.year || 9999) || String(a.title).localeCompare(String(b.title));
-          });
-          callback(all);
+          callback(parts);
         }
 
         function tick() {
           if (closed) return;
           while (active < 4 && next < ids.length) {
-            active++;
-            var params = Lampa.Utils.addUrlComponent('', 'token=' + token);
-            params = Lampa.Utils.addUrlComponent(params, 'limit=100');
-            params = Lampa.Utils.addUrlComponent(params, 'translation_type=voice');
-            params = Lampa.Utils.addUrlComponent(params, 'shikimori_id=' + encodeURIComponent(ids[next++]));
-            var net = new Lampa.Reguest();
-            kodik_id_nets.push(net);
-            net.timeout(15000);
-            net["native"](component.proxyLink(embed + params, prox), function (json) {
-              if (json && json.results && json.results.forEach) json.results.forEach(function (c) {
-                all.push(c);
+            (function (i) {
+              active++;
+              var params = Lampa.Utils.addUrlComponent('', 'token=' + token);
+              params = Lampa.Utils.addUrlComponent(params, 'limit=100');
+              params = Lampa.Utils.addUrlComponent(params, 'with_episodes=true');
+              params = Lampa.Utils.addUrlComponent(params, 'shikimori_id=' + encodeURIComponent(ids[i]));
+              if (!ids[i]) {
+                active--;
+                tick();
+                return;
+              }
+              var net = new Lampa.Reguest();
+              kodik_id_nets.push(net);
+              net.timeout(15000);
+              net["native"](component.proxyLink(embed + params, prox), function (json) {
+                parts[i] = {
+                  id: ids[i],
+                  results: json && json.results || []
+                };
+                active--;
+                tick();
+              }, function () {
+                parts[i] = {
+                  id: ids[i],
+                  results: []
+                };
+                active--;
+                tick();
               });
-              active--;
-              tick();
-            }, function () {
-              active--;
-              tick();
-            });
+            })(next++);
           }
-          if (!active && next >= ids.length) finish();
+          if (!active && next >= ids.length) done();
         }
 
         tick();
+      }
+      /**
+       * Собрать все части в один список сезонов: у Kodik каждый сезон/OVA — отдельный тайтл,
+       * поэтому сезоны перенумеровываются по порядку просмотра.
+       * @param {Array} parts
+       * @param {Number} preselect shikimori_id части, на которой открыть
+       */
+
+      function mergeParts(parts, preselect_index, preselect_id) {
+        var items = [];
+        var seasons = [];
+        var starts = [];
+        var seen = {};
+        var wanted = 0;
+        var wanted_id = 0;
+
+        parts.forEach(function (part, part_index) {
+          var rows = part.results || [];
+          // Empty parts and two urls with one shikimori id must not shift the season order.
+          if (!rows.length || !part.id || seen[part.id]) return;
+          seen[part.id] = true;
+
+          // Rows of one id may differ (a compilation row has no seasons): take the union.
+          var keys = [];
+          rows.forEach(function (c) {
+            Object.keys(c.seasons || {}).forEach(function (k) {
+              var s = c.seasons[k];
+              if (keys.indexOf(k) < 0 && s && s.episodes && Object.keys(s.episodes).length) keys.push(k);
+            });
+          });
+          keys.sort(function (x, y) {
+            return x - y;
+          });
+
+          var map = {};
+          var title = rows[0].title || select_title;
+
+          starts[part_index] = seasons.length + 1;
+
+          if (!keys.length) {
+            // Single video (OVA/film): a season with one episode.
+            var single = seasons.length + 1;
+            seasons.push({
+              id: single,
+              title: title
+            });
+            map.single = single;
+            if (part.id === preselect_id) wanted_id = single;
+          } else {
+            keys.forEach(function (k) {
+              var sid = seasons.length + 1;
+              map[k] = sid;
+              seasons.push({
+                id: sid,
+                title: title + (keys.length > 1 ? ' / ' + k : '')
+              });
+              if (part.id === preselect_id) wanted_id = sid;
+            });
+          }
+
+          rows.forEach(function (c) {
+            if (!c.link) return;
+            var mine = {};
+
+            if (!keys.length) mine[map.single] = {
+              episodes: {
+                1: c.link
+              }
+            };else keys.forEach(function (k) {
+              var season = c.seasons && c.seasons[k];
+              if (season && season.episodes && Object.keys(season.episodes).length) mine[map[k]] = season;
+            });
+            if (!Object.keys(mine).length) return;
+            var copy = {};
+            for (var f in c) copy[f] = c[f];
+            copy.seasons = mine;
+            items.push(copy);
+          });
+        });
+
+        if (!seasons.length) return false;
+
+        // Drop seasons no row produced (every link missing).
+        var used = {};
+        items.forEach(function (c) {
+          Object.keys(c.seasons).forEach(function (k) {
+            used[k] = true;
+          });
+        });
+        seasons = seasons.filter(function (season) {
+          return used[season.id];
+        });
+        if (!seasons.length) return false;
+
+        wanted = used[wanted_id] ? wanted_id : 0;
+
+        // Part absent in Kodik (some OVAs): the special usually sits as episode 0 of the next part.
+        if (!wanted && preselect_index >= 0) {
+          for (var p = preselect_index + 1; p < starts.length && !wanted; p++) {
+            if (used[starts[p]]) wanted = starts[p];
+          }
+          for (var q = preselect_index; q >= 0 && !wanted; q--) {
+            if (used[starts[q]]) wanted = starts[q];
+          }
+        }
+
+        extract = {
+          items: items,
+          seasons: seasons
+        };
+        choice.season = 0;
+        choice.voice = 0;
+        choice.voice_name = '';
+        if (wanted) {
+          seasons.forEach(function (season, i) {
+            if (season.id === wanted) choice.season = i;
+          });
+        }
+        filter();
+        append(filtred());
+        return true;
       }
       /**
        * Поиск
@@ -12873,7 +13007,7 @@
         if (object.movie.original_name) orig_titles.push(object.movie.original_name);
 
         // Список вариантов без угадывания: вкус «порядка просмотра» — сезоны и OVA отдельными пунктами
-        var display = function display(results, empty, force_list) {
+        var display = function display(results, empty) {
           if (results && results.length && results.forEach) {
             var is_sure = false;
             var is_imdb = false;
@@ -12901,17 +13035,6 @@
                 episodes_count: list[0].episodes_count,
                 media: list[0]
               });
-            }
-
-            if (force_list && items.length) {
-              // Без этого флага выбор пункта снова запускает поиск вместо открытия перевода
-              _this.wait_similars = true;
-              items.forEach(function (c) {
-                c.is_similars = true;
-              });
-              component.similars(items);
-              component.loading(false);
-              return;
             }
 
             if (!object.clarification && (object.movie.imdb_id || +kinopoisk_id)) {
@@ -13056,29 +13179,16 @@
         // Ветка срабатывает, если на карточку плагин yummyani положил shikimori-id частей.
 
 
-        // Выбор из «порядка просмотра»: сразу одна часть — её переводы, без списка вариантов.
-        var yani_only = +object.movie.yani_only_shikimori || 0;
-        if (!object.clarification && yani_only) {
-          kodik_api_search_ids([yani_only], function (results) {
-            var byTitle = {};
-            results.forEach(function (c) {
-              byTitle[c.title] = c;
-            });
-            var titles = Object.keys(byTitle);
-            // Kodik может не знать этот shikimori_id — тогда обычный поиск по названию
-            if (!titles.length) return kodik_search_by_title(function (json) {
-              display(json && json.results, function () {
-                component.emptyForQuery(select_title);
-              });
-            }, component.empty.bind(component));
-            if (titles.length === 1) return success({ media: byTitle[titles[0]] });
-            display(results, function () {}, true);
-          });
-        } else if (!object.clarification && object.movie.yani_order_urls && object.movie.yani_order_urls.length && window.YummyAnime && window.YummyAnime.shikimoriIds) {
+        // Аниме с «порядком просмотра»: все сезоны и OVA франшизы одним списком.
+        // Для Kodik каждый сезон/OVA — отдельный тайтл, поэтому сезоны склеиваем мы.
+        var yani_ids = !object.clarification && object.movie.yani_order_urls && object.movie.yani_order_urls.length && window.YummyAnime && window.YummyAnime.shikimoriIds;
+        if (yani_ids) {
           window.YummyAnime.shikimoriIds(object.movie, function (ids) {
             if (!ids.length) return kodik_search_usual();
-            kodik_api_search_ids(ids, function (results) {
-              display(results, kodik_search_usual, true);
+            kodik_api_search_parts(ids, function (parts) {
+              if (kodik_destroyed) return;
+              if (!mergeParts(parts, +(object.movie.yani_part_index), +object.movie.yani_only_shikimori || 0)) return kodik_search_usual();
+              component.loading(false);
             });
           });
         } else kodik_search_usual();
@@ -13126,9 +13236,11 @@
 
       this.destroy = function () {
         network.clear();
+        kodik_destroyed = true;
         kodik_id_nets.forEach(function (n) {
           n.clear();
         });
+        kodik_id_nets = [];
         extract = null;
       };
 
@@ -23724,6 +23836,7 @@ try {
       var movie = {};
       for (var k in base) movie[k] = base[k];
       movie.yani_only_shikimori = shiki;
+      movie.yani_part_index = (base.yani_order_urls || []).indexOf(card.yani_url);
       Lampa.Activity.push({
         url: '',
         title: 'Онлайн',
@@ -23824,7 +23937,9 @@ try {
   // Starter page's own id is already known; other parts need their record, cached by `get`.
   function shikimoriIds(movie, done) {
     var urls = (movie.yani_order_urls || []).slice();
-    var ids = (movie.yani_shikimori || []).slice();
+    // Viewing-order sequence matters: Kodik seasons are numbered in this order.
+    var own = (movie.yani_shikimori || []).slice();
+    var ids = new Array(urls.length);
     var i = 0;
     var running = 0;
     var closed = false;
@@ -23834,8 +23949,10 @@ try {
       if (closed) return;
       closed = true;
       clearTimeout(timer);
+      if (urls.length) return done(ids);
+      // No order urls: the page's own id is all we have.
       var out = [];
-      ids.forEach(function (id) {
+      own.forEach(function (id) {
         id = +id;
         if (id && out.indexOf(id) < 0) out.push(id);
       });
@@ -23846,14 +23963,16 @@ try {
       if (closed) return;
       while (running < 4 && i < urls.length) {
         running++;
-        get('/anime/' + urls[i++] + '?need_videos=false', function (a) {
-          if (a.remote_ids && a.remote_ids.shikimori_id) ids.push(a.remote_ids.shikimori_id);
-          running--;
-          tick();
-        }, function () {
-          running--;
-          tick();
-        });
+        (function (index) {
+          get('/anime/' + urls[index] + '?need_videos=false', function (a) {
+            if (a.remote_ids && a.remote_ids.shikimori_id) ids[index] = a.remote_ids.shikimori_id;
+            running--;
+            tick();
+          }, function () {
+            running--;
+            tick();
+          });
+        })(i++);
       }
       if (!running && i >= urls.length) finish();
     }

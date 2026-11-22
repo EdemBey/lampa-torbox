@@ -376,6 +376,7 @@
       var movie = {};
       for (var k in base) movie[k] = base[k];
       movie.yani_only_shikimori = shiki;
+      movie.yani_part_index = (base.yani_order_urls || []).indexOf(card.yani_url);
       Lampa.Activity.push({
         url: '',
         title: 'Онлайн',
@@ -476,7 +477,9 @@
   // Starter page's own id is already known; other parts need their record, cached by `get`.
   function shikimoriIds(movie, done) {
     var urls = (movie.yani_order_urls || []).slice();
-    var ids = (movie.yani_shikimori || []).slice();
+    // Viewing-order sequence matters: Kodik seasons are numbered in this order.
+    var own = (movie.yani_shikimori || []).slice();
+    var ids = new Array(urls.length);
     var i = 0;
     var running = 0;
     var closed = false;
@@ -486,8 +489,10 @@
       if (closed) return;
       closed = true;
       clearTimeout(timer);
+      if (urls.length) return done(ids);
+      // No order urls: the page's own id is all we have.
       var out = [];
-      ids.forEach(function (id) {
+      own.forEach(function (id) {
         id = +id;
         if (id && out.indexOf(id) < 0) out.push(id);
       });
@@ -498,14 +503,16 @@
       if (closed) return;
       while (running < 4 && i < urls.length) {
         running++;
-        get('/anime/' + urls[i++] + '?need_videos=false', function (a) {
-          if (a.remote_ids && a.remote_ids.shikimori_id) ids.push(a.remote_ids.shikimori_id);
-          running--;
-          tick();
-        }, function () {
-          running--;
-          tick();
-        });
+        (function (index) {
+          get('/anime/' + urls[index] + '?need_videos=false', function (a) {
+            if (a.remote_ids && a.remote_ids.shikimori_id) ids[index] = a.remote_ids.shikimori_id;
+            running--;
+            tick();
+          }, function () {
+            running--;
+            tick();
+          });
+        })(i++);
       }
       if (!running && i >= urls.length) finish();
     }
