@@ -13221,7 +13221,8 @@
             if (!ids.length) return kodik_search_usual();
             kodik_api_search_parts(ids, function (parts) {
               if (kodik_destroyed) return;
-              if (!mergeParts(parts, +(object.movie.yani_part_index), +object.movie.yani_only_shikimori || 0)) return kodik_search_usual();
+              // Plain open: start on the part this page is about.
+              if (!mergeParts(parts, +(object.movie.yani_part_index), +object.movie.yani_only_shikimori || +(object.movie.yani_shikimori || [])[0] || 0)) return kodik_search_usual();
               component.loading(false);
             });
           });
@@ -13521,10 +13522,6 @@
                     element.stream = file;
                     element.qualitys = quality;
                     call(element);
-                    // Don't hold the player back: only report a stub file once it is known.
-                    checkStream(file, function (broken) {
-                      if (broken) Lampa.Noty.show('Кажется, озвучка отсутствует или файл битый');
-                    });
                   } else error();
                 } else error();
               }, function (a, c) {
@@ -13563,62 +13560,6 @@
         }, false, {
           dataType: 'text'
         });
-      }
-
-      // У битых озвучек Kodik манифест отдаётся, а сегменты — заглушки по ~16 КБ:
-      // тянем начало первого сегмента и, если он крошечный, не пускаем в плеер.
-      function checkStream(url, done) {
-        if (!/\.m3u8/.test(url)) return done(false);
-
-        var manifest = new XMLHttpRequest();
-        manifest.timeout = 8000;
-        manifest.open('GET', url, true);
-
-        manifest.onload = function () {
-          var lines = (manifest.responseText || '').split(/\r?\n/);
-          var first = null;
-
-          for (var i = 0; i < lines.length; i++) {
-            if (lines[i] && lines[i].charAt(0) !== '#') {
-              first = lines[i];
-              break;
-            }
-          }
-
-          if (!first) return done(true);
-
-          var segment = /^https?:/.test(first) ? first : url.replace(/[^/]*$/, '') + first.replace(/^\.\//, '');
-          var probe = new XMLHttpRequest();
-          var finished = false;
-
-          var finish = function (healthy) {
-            if (finished) return;
-            finished = true;
-            done(!healthy);
-          };
-
-          probe.timeout = 10000;
-          probe.open('GET', segment, true);
-          probe.onprogress = function (e) {
-            if (e.loaded >= 60000) {
-              finish(true);
-              probe.abort();
-            }
-          };
-          probe.onload = function () {
-            finish(!!probe.response && probe.response.byteLength >= 60000);
-          };
-          // Не смогли проверить (сеть, CORS) — не мешаем смотреть.
-          probe.onerror = probe.ontimeout = function () {
-            finish(true);
-          };
-          probe.send();
-        };
-
-        manifest.onerror = manifest.ontimeout = function () {
-          done(false);
-        };
-        manifest.send();
       }
 
       function extractItems(playlists) {
@@ -23839,13 +23780,33 @@ try {
       if (!looksAnime(movie)) return done(null);
       var tv = !!(movie.original_name || movie.name);
       var year = yearOf(movie.first_air_date || movie.release_date);
-      var queries = [movie.original_name || movie.original_title, movie.name || movie.title].filter(Boolean);
+      // yani is a Russian site: its search hits the Russian title first, the original is a fallback.
+      var queries = [movie.name || movie.title, movie.original_name || movie.original_title].filter(Boolean);
+      // Search is fuzzy (a Japanese title returns any film of that year), so the name must match too.
+      var norm = function (t) {
+        return String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9\u3040-\u30ff\u4e00-\u9fff]+/g, '');
+      };
+      var alt = movie.alternative_titles || {};
+      var names = [movie.title, movie.name, movie.original_title, movie.original_name].concat((alt.titles || alt.results || []).map(function (t) {
+        return t.title;
+      })).map(norm).filter(function (t) {
+        return t.length >= 3;
+      });
+      var sameName = function (a) {
+        var t = norm(a.title);
+        return t.length >= 3 && names.some(function (n) {
+          return n === t || n.indexOf(t) === 0 || t.indexOf(n) === 0;
+        });
+      };
 
       (function next(i) {
         if (i >= queries.length) return done(null);
         get('/search?limit=10&q=' + encodeURIComponent(queries[i]), function (list) {
-          var near = list.filter(function (a) { return Math.abs((a.year || 0) - year) <= 1; });
-          var hit = near.filter(function (a) { return (a.type && a.type.alias !== 'movie') === tv && a.year === year; })[0] || near[0];
+          var near = list.filter(function (a) { return Math.abs((a.year || 0) - year) <= 1 && sameName(a); });
+          // "Title" beats "Title | Часть 2": exact name first, then same type and year.
+          var exact = near.filter(function (a) { return names.indexOf(norm(a.title)) >= 0; });
+          var pool = exact.length ? exact : near;
+          var hit = pool.filter(function (a) { return (a.type && a.type.alias !== 'movie') === tv && a.year === year; })[0] || pool[0];
           hit ? done(hit.anime_url) : next(i + 1);
         }, function () {
           next(i + 1);

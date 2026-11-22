@@ -243,13 +243,33 @@
       if (!looksAnime(movie)) return done(null);
       var tv = !!(movie.original_name || movie.name);
       var year = yearOf(movie.first_air_date || movie.release_date);
-      var queries = [movie.original_name || movie.original_title, movie.name || movie.title].filter(Boolean);
+      // yani is a Russian site: its search hits the Russian title first, the original is a fallback.
+      var queries = [movie.name || movie.title, movie.original_name || movie.original_title].filter(Boolean);
+      // Search is fuzzy (a Japanese title returns any film of that year), so the name must match too.
+      var norm = function (t) {
+        return String(t || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9\u3040-\u30ff\u4e00-\u9fff]+/g, '');
+      };
+      var alt = movie.alternative_titles || {};
+      var names = [movie.title, movie.name, movie.original_title, movie.original_name].concat((alt.titles || alt.results || []).map(function (t) {
+        return t.title;
+      })).map(norm).filter(function (t) {
+        return t.length >= 3;
+      });
+      var sameName = function (a) {
+        var t = norm(a.title);
+        return t.length >= 3 && names.some(function (n) {
+          return n === t || n.indexOf(t) === 0 || t.indexOf(n) === 0;
+        });
+      };
 
       (function next(i) {
         if (i >= queries.length) return done(null);
         get('/search?limit=10&q=' + encodeURIComponent(queries[i]), function (list) {
-          var near = list.filter(function (a) { return Math.abs((a.year || 0) - year) <= 1; });
-          var hit = near.filter(function (a) { return (a.type && a.type.alias !== 'movie') === tv && a.year === year; })[0] || near[0];
+          var near = list.filter(function (a) { return Math.abs((a.year || 0) - year) <= 1 && sameName(a); });
+          // "Title" beats "Title | Часть 2": exact name first, then same type and year.
+          var exact = near.filter(function (a) { return names.indexOf(norm(a.title)) >= 0; });
+          var pool = exact.length ? exact : near;
+          var hit = pool.filter(function (a) { return (a.type && a.type.alias !== 'movie') === tv && a.year === year; })[0] || pool[0];
           hit ? done(hit.anime_url) : next(i + 1);
         }, function () {
           next(i + 1);

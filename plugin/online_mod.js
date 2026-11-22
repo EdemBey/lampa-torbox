@@ -13217,7 +13217,8 @@
             if (!ids.length) return kodik_search_usual();
             kodik_api_search_parts(ids, function (parts) {
               if (kodik_destroyed) return;
-              if (!mergeParts(parts, +(object.movie.yani_part_index), +object.movie.yani_only_shikimori || 0)) return kodik_search_usual();
+              // Plain open: start on the part this page is about.
+              if (!mergeParts(parts, +(object.movie.yani_part_index), +object.movie.yani_only_shikimori || +(object.movie.yani_shikimori || [])[0] || 0)) return kodik_search_usual();
               component.loading(false);
             });
           });
@@ -13517,10 +13518,6 @@
                     element.stream = file;
                     element.qualitys = quality;
                     call(element);
-                    // Don't hold the player back: only report a stub file once it is known.
-                    checkStream(file, function (broken) {
-                      if (broken) Lampa.Noty.show('Кажется, озвучка отсутствует или файл битый');
-                    });
                   } else error();
                 } else error();
               }, function (a, c) {
@@ -13559,62 +13556,6 @@
         }, false, {
           dataType: 'text'
         });
-      }
-
-      // У битых озвучек Kodik манифест отдаётся, а сегменты — заглушки по ~16 КБ:
-      // тянем начало первого сегмента и, если он крошечный, не пускаем в плеер.
-      function checkStream(url, done) {
-        if (!/\.m3u8/.test(url)) return done(false);
-
-        var manifest = new XMLHttpRequest();
-        manifest.timeout = 8000;
-        manifest.open('GET', url, true);
-
-        manifest.onload = function () {
-          var lines = (manifest.responseText || '').split(/\r?\n/);
-          var first = null;
-
-          for (var i = 0; i < lines.length; i++) {
-            if (lines[i] && lines[i].charAt(0) !== '#') {
-              first = lines[i];
-              break;
-            }
-          }
-
-          if (!first) return done(true);
-
-          var segment = /^https?:/.test(first) ? first : url.replace(/[^/]*$/, '') + first.replace(/^\.\//, '');
-          var probe = new XMLHttpRequest();
-          var finished = false;
-
-          var finish = function (healthy) {
-            if (finished) return;
-            finished = true;
-            done(!healthy);
-          };
-
-          probe.timeout = 10000;
-          probe.open('GET', segment, true);
-          probe.onprogress = function (e) {
-            if (e.loaded >= 60000) {
-              finish(true);
-              probe.abort();
-            }
-          };
-          probe.onload = function () {
-            finish(!!probe.response && probe.response.byteLength >= 60000);
-          };
-          // Не смогли проверить (сеть, CORS) — не мешаем смотреть.
-          probe.onerror = probe.ontimeout = function () {
-            finish(true);
-          };
-          probe.send();
-        };
-
-        manifest.onerror = manifest.ontimeout = function () {
-          done(false);
-        };
-        manifest.send();
       }
 
       function extractItems(playlists) {
