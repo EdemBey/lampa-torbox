@@ -13520,11 +13520,10 @@
                   if (file) {
                     element.stream = file;
                     element.qualitys = quality;
+                    call(element);
+                    // Don't hold the player back: only report a stub file once it is known.
                     checkStream(file, function (broken) {
-                      if (!broken) return call(element);
-                      element.stream = '';
-                      Lampa.Noty.show('Кажется, озвучка отсутствует или файл битый');
-                      error();
+                      if (broken) Lampa.Noty.show('Кажется, озвучка отсутствует или файл битый');
                     });
                   } else error();
                 } else error();
@@ -13691,8 +13690,16 @@
             if (element.loading) return;
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
             element.loading = true;
-            getStream(element, function (element) {
+            var cancelled = false;
+            Lampa.Loading.start(function () {
+              cancelled = true;
               element.loading = false;
+              Lampa.Loading.stop();
+            });
+            getStream(element, function (element) {
+              Lampa.Loading.stop();
+              element.loading = false;
+              if (cancelled) return;
               var first = {
                 url: component.getDefaultQuality(element.qualitys, element.stream),
                 quality: component.renameQualityMap(element.qualitys),
@@ -13734,8 +13741,9 @@
                 Lampa.Storage.set('online_view', viewed);
               }
             }, function () {
+              Lampa.Loading.stop();
               element.loading = false;
-              Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+              if (!cancelled) Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
             });
           });
           component.append(item);
