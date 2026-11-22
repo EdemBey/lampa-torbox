@@ -291,10 +291,10 @@ async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
       return r;
     }
     await r.arrayBuffer();
-    // `x-vd: token_decrypt` means the url token was rejected, `session_blocked` means the CDN
-    // has stopped serving this whole session, and retrying it just digs the hole deeper.
+    // `x-vd: token_decrypt` means the url token was rejected, `session_blocked` and
+    // `client_blocked` mean the CDN has stopped serving this client, and retrying digs deeper.
     const vd = r.headers.get('x-vd') || '';
-    if (vd === 'session_blocked') {
+    if (vd === 'session_blocked' || vd === 'client_blocked') {
       console.log('cdn session blocked, backing off');
       dropSession(s);
       infos.delete(keyOf(src));
