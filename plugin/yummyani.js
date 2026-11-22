@@ -14,12 +14,12 @@
     '<rect x="45" y="95" width="110" height="110" rx="18" fill="none" stroke="#fff" stroke-width="8"/>' +
     '<g fill="#fff"><circle cx="75" cy="125" r="10"/><circle cx="100" cy="150" r="10"/><circle cx="125" cy="175" r="10"/></g></svg>');
   var SECTIONS = [
-    { title: 'Онгоинги', q: 'status=ongoing&sort=views&sort_forward=false' },
-    { title: 'Случайное', q: 'sort=random', random: true },
     { title: 'Аниме сезона', feed: true },
+    { title: 'Онгоинги', q: 'status=ongoing&sort=views&sort_forward=false' },
     { title: 'Популярное', q: 'sort=rating_counters&sort_forward=false' },
     { title: 'Топ 100', q: 'sort=top&sort_forward=true', max: 100 },
-    { title: 'Фильмы', q: 'types=movie&sort=top&sort_forward=true' }
+    { title: 'Фильмы', q: 'types=movie&sort=top&sort_forward=true' },
+    { title: 'Случайное', q: 'sort=random', random: true }
   ];
   var RECS = [
     { title: 'Рекомендации нейросети · YummyAnime', ai: true },
