@@ -16119,9 +16119,9 @@
           done = true;
           try {
             var payload = payloadOf(parseJsonText(text));
-            var map = qualityMapFromPayload(payload);
+            var map = qualityMapFromPayload(payload, element.malId, element.episode);
             if (!pickBestQuality(map)) throw new Error('No playable sources');
-            qualityCache[cacheKey] = { time: Date.now(), map: map, options: qualityOptionsFromPayload(payload) };
+            qualityCache[cacheKey] = { time: Date.now(), map: map, options: qualityOptionsFromPayload(payload, element.malId, element.episode) };
             success(map);
           } catch (e) {
             fail();
