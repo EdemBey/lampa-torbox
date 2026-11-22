@@ -1,0 +1,8 @@
+{
+  "plugins": [
+    "online_mod.js",
+    "torbox-lampa-plugin.js",
+    "yummyani.js",
+    "lang_menu.js"
+  ]
+}
