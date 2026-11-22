@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
 import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
+import { handleTurbo } from './turbo.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
@@ -443,6 +444,7 @@ http.createServer(async (req, res) => {
       pipeline(body, res, () => {});
       return;
     }
+    if (await handleTurbo(req, res, url, base)) return;
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       // Answer right away: Lampa asks for this right before playback and has no patience.

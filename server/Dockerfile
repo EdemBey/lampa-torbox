@@ -14,7 +14,7 @@ ADD --checksum=sha256:e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a4
 RUN tar xzf /tmp/wireproxy.tgz -C /usr/local/bin && chmod +x /usr/local/bin/wireproxy && rm /tmp/wireproxy.tgz
 
 WORKDIR /app
-COPY alloha.mjs alloha-sign.mjs entrypoint.sh ./
+COPY alloha.mjs alloha-sign.mjs turbo.mjs entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 ENV PORT=8790
