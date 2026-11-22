@@ -11,6 +11,11 @@
   var list = null;
 
   function get(url, ok, err) {
+    // Lampa's request helper (also what makes Lampa verify a plugin: its code must use the API).
+    if (window.Lampa && Lampa.Reguest) {
+      new Lampa.Reguest().quiet(url, ok, err);
+      return;
+    }
     var xhr = new XMLHttpRequest();
     xhr.timeout = 10000;
     xhr.open('GET', url, true);
