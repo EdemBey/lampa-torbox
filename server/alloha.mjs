@@ -651,11 +651,11 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      // Only what Alloha really has for this episode, so no 4K where there is none. The resolve
-      // is cached per episode and the play.m3u8 that follows reuses it: no extra upstream calls.
-      const info = await iframeInfo(src);
+      // Answer right away: Lampa asks this for every episode of the season before playback
+      // starts, so a resolve here would cost a /bnsi per episode. The plugin drops 4K itself
+      // where Alloha has no uhd mark; a quality the episode lacks falls back in pickQuality.
       const out = {};
-      for (const label of QUALITIES) if (info.qualities[label]) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
+      for (const label of QUALITIES) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
     send(res, 404, 'not found');
