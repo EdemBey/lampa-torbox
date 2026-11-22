@@ -14041,6 +14041,11 @@
             try { map = JSON.parse(res); } catch (e) { map = null; }
           }
           element.qualitys = map && Object.keys(map).length ? map : false;
+          // Alloha marks the voices and episodes that have 4K; elsewhere the list stops at 1080p.
+          if (element.qualitys && !element.media.uhd) {
+            delete element.qualitys['2160p'];
+            delete element.qualitys['1440p'];
+          }
           call(element);
         }, function () {
           element.qualitys = false;
