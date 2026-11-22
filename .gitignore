@@ -4,6 +4,9 @@ node_modules/
 keys.local.*
 upstream/
 
+# Cloudflare WARP key for the Alloha helper: generated on the host, never committed
+server/wireproxy.conf
+
 # Local binaries and archives (APKs, builds, downloads)
 *.apk
 *.aab
