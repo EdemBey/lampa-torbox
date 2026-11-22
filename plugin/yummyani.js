@@ -530,6 +530,31 @@
       if (Lampa.Storage.get(old, '')) Lampa.Storage.set(old, '');
     });
 
+    // Lampa hides its anime / feed / releases items outside ru/uk/be; add the same screens ourselves.
+    if (!Lampa.Lang.selected(['ru', 'uk', 'be'])) {
+      var have = {};
+      $('.menu__item').each(function () {
+        have[$(this).attr('data-action')] = true;
+      });
+      var item = function (sprite, title, action, run) {
+        if (have[action]) return;
+        Lampa.Menu.addButton('<svg><use xlink:href="#sprite-' + sprite + '"></use></svg>', title, run)
+          .attr('data-action', action);
+      };
+      var anime = Lampa.Lang.translate('menu_anime');
+      item('anime', anime, 'anime', function () {
+        Lampa.Router.call('category', { url: 'anime', title: anime + ' - CUB', source: 'cub' });
+      });
+      if (window.lampa_settings && window.lampa_settings.feed) {
+        item('feed', 'Feed', 'feed', function () {
+          Lampa.Router.call('feed', { title: 'Feed' });
+        });
+      }
+      item('hd', Lampa.Lang.translate('menu_relises'), 'relise', function () {
+        Lampa.Router.call('relise', { title: Lampa.Lang.translate('menu_relises') });
+      });
+    }
+
     Lampa.Menu.addButton(ICON, 'YummyAnime', function () {
       Lampa.Activity.push({ url: '', title: 'YummyAnime', component: 'category', source: 'yani', page: 1 });
     });
