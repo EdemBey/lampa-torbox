@@ -12807,6 +12807,53 @@
           if (error) error(network.errorDecode(a, c));
         });
       }
+      var kodik_id_nets = [];
+
+      function kodik_api_search_ids(ids, callback) {
+        var all = [];
+        var next = 0;
+        var active = 0;
+        var closed = false;
+        var timer = setTimeout(finish, 6000);
+
+        function finish() {
+          if (closed) return;
+          closed = true;
+          clearTimeout(timer);
+          // Хронология франшизы, как в порядке просмотра: сезон 1, OVA, сезон 2…
+          all.sort(function (a, b) {
+            return (a.year || 9999) - (b.year || 9999) || String(a.title).localeCompare(String(b.title));
+          });
+          callback(all);
+        }
+
+        function tick() {
+          if (closed) return;
+          while (active < 4 && next < ids.length) {
+            active++;
+            var params = Lampa.Utils.addUrlComponent('', 'token=' + token);
+            params = Lampa.Utils.addUrlComponent(params, 'limit=100');
+            params = Lampa.Utils.addUrlComponent(params, 'translation_type=voice');
+            params = Lampa.Utils.addUrlComponent(params, 'shikimori_id=' + encodeURIComponent(ids[next++]));
+            var net = new Lampa.Reguest();
+            kodik_id_nets.push(net);
+            net.timeout(15000);
+            net["native"](component.proxyLink(embed + params, prox), function (json) {
+              if (json && json.results && json.results.forEach) json.results.forEach(function (c) {
+                all.push(c);
+              });
+              active--;
+              tick();
+            }, function () {
+              active--;
+              tick();
+            });
+          }
+          if (!active && next >= ids.length) finish();
+        }
+
+        tick();
+      }
       /**
        * Поиск
        * @param {Object} _object
@@ -12831,7 +12878,7 @@
         if (object.movie.original_title) orig_titles.push(object.movie.original_title);
         if (object.movie.original_name) orig_titles.push(object.movie.original_name);
 
-        var display = function display(results, empty) {
+        var display = function display(results, empty, force_list) {
           if (results && results.length && results.forEach) {
             var is_sure = false;
             var is_imdb = false;
@@ -12859,6 +12906,17 @@
                 episodes_count: list[0].episodes_count,
                 media: list[0]
               });
+            }
+
+            if (force_list && items.length) {
+              // Без этого флага выбор пункта снова запускает поиск вместо открытия перевода
+              _this.wait_similars = true;
+              items.forEach(function (c) {
+                c.is_similars = true;
+              });
+              component.similars(items);
+              component.loading(false);
+              return;
             }
 
             if (!object.clarification && (object.movie.imdb_id || +kinopoisk_id)) {
@@ -12985,19 +13043,33 @@
         };
 
         var error = component.empty.bind(component);
-        kodik_search_by_id(function (json) {
-          display(json && json.results, function () {
-            kodik_search_by_title_part(function (json) {
-              display(json && json.results, function () {
-                kodik_search_by_title(function (json) {
-                  display(json && json.results, function () {
-                    component.emptyForQuery(select_title);
-                  });
-                }, error);
-              });
-            }, error);
+        var kodik_search_usual = function () {
+          kodik_search_by_id(function (json) {
+            display(json && json.results, function () {
+              kodik_search_by_title_part(function (json) {
+                display(json && json.results, function () {
+                  kodik_search_by_title(function (json) {
+                    display(json && json.results, function () {
+                      component.emptyForQuery(select_title);
+                    });
+                  }, error);
+                });
+              }, error);
+            });
+          }, error);
+        }; // Аниме с «порядком просмотра»: ищем по всем частям сразу, показываем их списком (сезоны и OVA)
+        // Ветка срабатывает, если на карточку плагин yummyani положил shikimori-id частей.
+
+
+        if (!object.clarification && object.movie.yani_order_urls && object.movie.yani_order_urls.length && window.YummyAnime && window.YummyAnime.shikimoriIds) {
+          window.YummyAnime.shikimoriIds(object.movie, function (ids) {
+            if (!ids.length) return kodik_search_usual();
+            kodik_api_search_ids(ids, function (results) {
+              display(results, kodik_search_usual, true);
+            });
           });
-        }, error);
+        } else kodik_search_usual();
+
       };
 
       this.extendChoice = function (saved) {
@@ -13042,6 +13114,9 @@
 
       this.destroy = function () {
         network.clear();
+        kodik_id_nets.forEach(function (n) {
+          n.clear();
+        });
         extract = null;
       };
 

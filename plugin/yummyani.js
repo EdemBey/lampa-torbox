@@ -204,7 +204,7 @@
   // by a same-type guess or by sharing the show's year on the show's own page.
   function insideShow(card, pageKey) {
     return !!(card.tmdb && card.tmdb.method === 'tv' && card.yani_type !== 'tv' && card.yani_type !== 'movie' &&
-      (card.tmdb.loose || keyOf(card) === pageKey));
+      (card.tmdb.loose || pageKey === undefined || keyOf(card) === pageKey));
   }
 
   // Tells where such an entry is inside the show: season 0 episode by English title, else by unique air year.
@@ -290,7 +290,10 @@
             done({
               order: order.length ? orderItems(order, anime.anime_id, pageKey) : [],
               ai: uniq(lists[0], self),
-              users: uniq(lists[1], self)
+              users: uniq(lists[1], self),
+              // Franchise entry pages for the Kodik balancer: seasons and OVA are separate there.
+              urls: order.map(function (c) { return c.yani_url; }),
+              shikimori: anime.remote_ids && anime.remote_ids.shikimori_id ? [anime.remote_ids.shikimori_id] : []
             });
           });
         }
@@ -327,6 +330,10 @@
             delete data.simular;
             if (res.ai.length) data.recomend = row(RECS[0].title, res.ai);
             if (res.users.length) data.simular = row(RECS[1].title, res.users);
+          }
+          if (res && res.urls.length) {
+            data.movie.yani_order_urls = res.urls;
+            data.movie.yani_shikimori = res.shikimori;
           }
           if (res && res.order.length) {
             data.yani_order = res.order;
@@ -452,6 +459,50 @@
       params.card && params.card.yani_random ? random() : resolve(params.card || {});
     }
   };
+
+  // Shikimori ids of the whole viewing order for the Kodik balancer (online_mod).
+  // Starter page's own id is already known; other parts need their record, cached by `get`.
+  function shikimoriIds(movie, done) {
+    var urls = (movie.yani_order_urls || []).slice();
+    var ids = (movie.yani_shikimori || []).slice();
+    var i = 0;
+    var running = 0;
+    var closed = false;
+    var timer = setTimeout(finish, 3000);
+
+    function finish() {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      var out = [];
+      ids.forEach(function (id) {
+        id = +id;
+        if (id && out.indexOf(id) < 0) out.push(id);
+      });
+      done(out);
+    }
+
+    function tick() {
+      if (closed) return;
+      while (running < 4 && i < urls.length) {
+        running++;
+        get('/anime/' + urls[i++] + '?need_videos=false', function (a) {
+          if (a.remote_ids && a.remote_ids.shikimori_id) ids.push(a.remote_ids.shikimori_id);
+          running--;
+          tick();
+        }, function () {
+          running--;
+          tick();
+        });
+      }
+      if (!running && i >= urls.length) finish();
+    }
+
+    urls.length ? tick() : finish();
+  }
+
+  window.YummyAnime = window.YummyAnime || {};
+  window.YummyAnime.shikimoriIds = shikimoriIds;
 
   function start() {
     Lampa.Api.sources.yani = source;
