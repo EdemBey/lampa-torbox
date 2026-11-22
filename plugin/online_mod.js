@@ -424,6 +424,7 @@
       var MUSIC = '/api/player/ending-music/steel-ball-run-the-chain-v1.m4a';
       var watching = false;
       var state = null;
+      var pending = null;
 
       function site() {
         return ((Lampa.Storage.get('online_mod_narutobased_site', '') || '') + '').replace(/\/+$/, '') || 'https://anime.home.kopenkin.tech';
@@ -483,6 +484,7 @@
       }
 
       function tick() {
+        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function') return;
         var video = Lampa.PlayerVideo.video();
 
         if (state.video && state.video !== video) silence();
@@ -524,6 +526,7 @@
       }
 
       function start(data) {
+        if (!data || !data.naruto_mal_id) data = pending || data;
         stop();
         if (!data || data.naruto_mal_id !== MAL_ID || data.naruto_episode == 1 || isExternalAndroidPlayer()) return;
         if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function' || typeof Audio === 'undefined') return;
@@ -565,6 +568,16 @@
           watching = true;
           Lampa.Player.listener.follow('start', start);
           Lampa.Player.listener.follow('destroy', stop);
+        },
+        play: function (element) {
+          pending = { naruto_mal_id: element.malId, naruto_episode: element.episode };
+          narutoEnding.watch();
+          // Fallback: if Lampa does not fire 'start' for this item, start manually.
+          setTimeout(function () {
+            if (!state && pending && pending.naruto_mal_id === MAL_ID && pending.naruto_episode !== 1) {
+              start(pending);
+            }
+          }, 1500);
         }
       };
     })();
@@ -16148,7 +16161,7 @@
           naruto_episode: element.episode
         };
 
-        narutoEnding.watch();
+        narutoEnding.play(element);
 
         if (external) {
           var dddQualities = [{ name: 'Auto', url: autoUrl }];
