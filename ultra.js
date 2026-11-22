@@ -23865,7 +23865,10 @@ try {
         });
 
         function finish() {
-          enrich(order.concat(lists[0], lists[1]), function () {
+          var sent = false;
+          var send = function () {
+            if (sent) return;
+            sent = true;
             var self = [pageKey, 'y' + anime.anime_id];
             if (anime.remote_ids && anime.remote_ids.kp_id) self.push('kp' + anime.remote_ids.kp_id);
             done({
@@ -23876,7 +23879,11 @@ try {
               urls: order.map(function (c) { return c.yani_url; }),
               shikimori: anime.remote_ids && anime.remote_ids.shikimori_id ? [anime.remote_ids.shikimori_id] : []
             });
-          });
+          };
+          // TMDB posters are cosmetic: a cold cache needs dozens of searches, so wait at most 1 s
+          // and let the rest fill the cache for next time (cards keep their yani posters meanwhile).
+          enrich(order.concat(lists[0], lists[1]), send);
+          setTimeout(send, 1000);
         }
       }, function () {
         done(null);
