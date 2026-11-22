@@ -3,6 +3,11 @@ services:
     build: .
     container_name: alloha
     restart: unless-stopped
+    # tini as PID 1: the entrypoint's watchdog signals it, and `docker stop` reaches node.
+    init: true
+    volumes:
+      # WireGuard profile from `wgcf generate`, kept on the host and never committed.
+      - ./wireproxy.conf:/opt/wireproxy.conf:ro
 
   # Random https URL in the logs: docker compose logs tunnel | grep trycloudflare
   tunnel:

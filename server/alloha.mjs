@@ -1,284 +1,348 @@
-// Alloha helper for online_mod: the player page signs its stream request in obfuscated JS
-// and the CDN only answers with the player's Origin, so a headless Chrome gets the link
-// and this server proxies the HLS with that Origin. Run: node server/alloha.mjs
-import { spawn } from 'node:child_process';
+// Alloha helper for online_mod. The player signs every CDN request with three things:
+// a Borth header built from the page fingerprint, a guard token from /sarn + /vorf, and a
+// per-quality edge hash that arrives over its websocket. All three are reproduced here in
+// plain Node, so no browser is needed. Alloha hands out usable tokens only to
+// residential-looking IPs, so entrypoint.sh sends the traffic through Cloudflare WARP.
+import crypto from 'node:crypto';
 import http from 'node:http';
-import http2 from 'node:http2';
-import os from 'node:os';
-import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, pipeline } from 'node:stream';
+import { borthFor, episodeKey, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
-const CDP = 9334;
-const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-const CHROME_ARGS = (process.env.CHROME_ARGS || '').split(' ').filter(Boolean);
-// Must match the real platform: a macOS UA on Linux Chrome is an easy bot flag.
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const PARENT = 'https://onomovie.ru';
+// Alloha answers in a second or two; anything slower is a stalled proxy and Lampa has given up.
+const TIMEOUT = 20000;
 
-let chrome = null;
-function startChrome() {
-  chrome = spawn(CHROME, [
-    '--headless', `--remote-debugging-port=${CDP}`, `--user-data-dir=${path.join(os.tmpdir(), 'alloha-chrome')}`,
-    '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-blink-features=AutomationControlled', `--user-agent=${UA}`, ...CHROME_ARGS, 'about:blank',
-  ], { stdio: 'ignore' });
-  chrome.unref();
-  chrome.on('exit', () => { chrome = null; });
-}
-startChrome();
-
-async function browserWs() {
-  if (!chrome) startChrome();
-  for (let i = 0; i < 40; i++) {
-    try {
-      const v = await (await fetch(`http://127.0.0.1:${CDP}/json/version`)).json();
-      return v.webSocketDebuggerUrl;
-    } catch { await sleep(250); }
-  }
-  throw new Error('chrome did not start');
+async function playerPage(src) {
+  const up = await fetch(src, { headers: { Referer: PARENT + '/', 'User-Agent': UA }, signal: AbortSignal.timeout(TIMEOUT) });
+  const body = (await up.text()).replace(/\n/g, '');
+  const fl = body.match(/ fileList = JSON\.parse\('(\{.*\})'\);/);
+  const vp = body.match(/name="viewporti" content="([^"]+)"/);
+  return { status: up.status, fileList: fl ? JSON.parse(fl[1].replace(/\\'/g, "'")) : null, viewport: vp && vp[1] };
 }
 
-function isAllowedIframe(u) {
-  try {
-    const x = new URL(u);
-    return x.protocol === 'https:' && /(^|\.)stravers\.live$/i.test(x.hostname);
-  } catch { return false; }
+// The player proves itself to the CDN with a guard token from /sarn + /vorf. That token is
+// the part with a short life, and it can be renewed on its own: /bnsi (which hands out the
+// websocket session) refuses a client that still has one active, so it is never re-asked
+// just to get a fresh guard.
+async function signGuard(src, origin, id) {
+  const sarn = await (await fetch(`${origin}/sarn`, {
+    headers: { 'User-Agent': UA, Referer: src, acceptis: `${YB}.${id}` },
+    signal: AbortSignal.timeout(TIMEOUT),
+  })).json();
+  const proof = crypto.createHash('sha256').update([sarn.nonce, YB, sarn.uap, origin, origin].join('|')).digest('hex');
+  const vorf = await (await fetch(`${origin}/vorf`, {
+    method: 'POST',
+    headers: { 'User-Agent': UA, Referer: src, Origin: origin, 'Content-Type': 'application/json', 'accepts-block': YB },
+    body: JSON.stringify({ challenge: sarn.challenge, proof, parentOrigin: origin, referrer: PARENT + '/' }),
+    signal: AbortSignal.timeout(TIMEOUT),
+  })).json();
+  if (!vorf.token) throw new Error('guard: ' + (vorf.ok ? 'no token' : 'refused'));
+  return vorf.token;
 }
 
-// Alloha bans for hammering: never start two captures closer than 5s apart.
-let lastCaptureAt = 0;
-async function captureSlot() {
-  const wait = lastCaptureAt + 5000 - Date.now();
-  if (wait > 0) await sleep(wait);
-  lastCaptureAt = Date.now();
-}
-
-// Opens the player page inside an iframe and waits for its master.m3u8 request.
-async function capture(iframe, q) {
-  await captureSlot();
-  const ws = new WebSocket(await browserWs());
-  await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
-  let id = 0;
-  const waiters = new Map();
-  // Chrome can die mid-flight; without a timeout a single call would hang the request forever.
-  const call = (method, params = {}, sessionId) => new Promise(res => {
-    const n = ++id;
-    const timer = setTimeout(() => { waiters.delete(n); res({}); }, 10000);
-    waiters.set(n, v => { clearTimeout(timer); res(v); });
-    ws.send(JSON.stringify({ id: n, method, params, ...(sessionId ? { sessionId } : {}) }));
+// The player page, its signed quality list and the websocket session id are resolved once
+// per episode and reused until the session really dies.
+async function resolveInfo(src) {
+  const origin = new URL(src).origin;
+  const page = await playerPage(src);
+  if (!page.fileList || !page.viewport) throw new Error('player page: ' + page.status);
+  const id = page.fileList.active.id_file || page.fileList.active.id;
+  const token = new URL(src).searchParams.get('token') || '';
+  const kind = page.fileList.type === 'trailer' ? 'trailers' : 'movies';
+  const bnsiRes = await fetch(`${origin}/bnsi/${kind}/${id}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest',
+      'User-Agent': UA, Referer: src, Origin: origin, Borth: borthFor(page.viewport),
+    },
+    body: `token=${encodeURIComponent(token)}&av1=true&autoplay=0&audio=&subtitle=`,
+    signal: AbortSignal.timeout(TIMEOUT),
   });
-  let done, qualities = null;
-  const masterIds = new Map();
-  const extra = {};
-  const kids = [];
-  const found = new Promise(r => { done = r; });
-  ws.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    if (m.id && waiters.has(m.id)) { waiters.get(m.id)(m.result || (m.error ? { error: m.error } : {})); waiters.delete(m.id); return; }
-    if (m.method === 'Target.attachedToTarget') {
-      const sid = m.params.sessionId;
-      kids.push(sid);
-      // The player asks for the quality saved in its own localStorage, so set it before the app boots.
-      if (q) call('Page.addScriptToEvaluateOnNewDocument', { source: `try{var k='allplay',o=JSON.parse(localStorage.getItem(k)||'{}');o.quality=${Number(q)};localStorage.setItem(k,JSON.stringify(o))}catch(e){}` }, sid);
-      call('Network.enable', {}, sid);
-      call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sid);
-      call('Runtime.runIfWaitingForDebugger', {}, sid);
-    } else if (m.method === 'Network.requestWillBeSent') {
-      const u = m.params.request.url;
-      const h = m.params.request.headers || {};
-      // The CDN wants the player's own tokens on every media request.
-      if (/userplay\.live|play-revers\.live/.test(u)) {
-        if (!globalThis.__logged) { globalThis.__logged = 1; console.log('cdn headers:', Object.keys(h).join(',')); }
-        for (const [k, v] of Object.entries(h)) {
-          if (/^(host|connection|content-length|origin|referer|accept-encoding|cookie)$/i.test(k)) continue;
-          extra[k] = v;
-        }
-        if (!extra.__logged) { extra.__logged = 1; console.log('cdn headers:', Object.keys(h).join(',')); }
-      }
-      if (/\/master\.m3u8(\?|$)/.test(u)) masterIds.set(m.params.requestId, u);
-    } else if (m.method === 'Network.responseReceived' && masterIds.has(m.params.requestId) && m.params.response.status === 200) {
-      done(masterIds.get(m.params.requestId));
-    } else if (m.method === 'Network.responseReceived' && /\/bnsi\//.test(m.params.response.url)) {
-      call('Network.getResponseBody', { requestId: m.params.requestId }, m.sessionId).then(r => {
-        if (r && r.body) qualities = r.body;
+  const bnsi = await bnsiRes.json();
+  const sources = bnsi.hlsSource || [];
+  const source = sources.find((x) => x['default']) || sources[0];
+  if (!source || !source.quality) throw new Error('bnsi: ' + bnsiRes.status + ' without hlsSource');
+  // Without a websocket session Alloha hands out urls the CDN cannot decrypt, so this is fatal.
+  if (!bnsi.pnr || !bnsi.pnk) throw new Error('bnsi: no websocket session (Alloha refuses this client right now)');
+
+  const qualities = {};
+  for (const [label, links] of Object.entries(source.quality)) {
+    const link = String(links).split(' or ').filter(Boolean)[0];
+    if (link) qualities[label] = link;
+  }
+  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, qualities };
+}
+
+// Episodes resolved for playback, plus the in-flight and recently failed ones.
+const infos = new Map();
+const pending = new Map();
+const failures = new Map();
+// Episodes the CDN has stopped serving for a while, keyed to the same episode key.
+const sessionBlocks = new Map();
+const SESSION_BLOCK = 60 * 1000;
+// How long a resolved episode survives without being used; while it plays it is touched and kept.
+const INFO_TTL = 30 * 60 * 1000;
+// A resolve costs four upstream requests and Alloha throttles them, so a refusal blocks the
+// key for a while. A plain network failure only needs a moment, and hls.js gives up early.
+const FAIL_ALLoha = 30000;
+const FAIL_NETWORK = 2000;
+
+const keyOf = episodeKey;
+
+async function iframeInfo(src) {
+  const key = keyOf(src);
+  // Anything still in use is returned as is: a resolve cannot be repeated while its websocket
+  // session is alive, and the guard inside it is renewed separately.
+  const hit = infos.get(key);
+  if (hit) { hit.t = Date.now(); return hit.v; }
+  const blocked = sessionBlocks.get(key);
+  if (blocked && Date.now() < blocked) {
+    const e = new Error('cdn session blocked');
+    e.until = blocked;
+    throw e;
+  }
+  const until = failures.get(key);
+  if (until && Date.now() < until) {
+    const e = new Error('resolve cooling down');
+    e.until = until;
+    throw e;
+  }
+  // A seek fires a dozen segment requests at once; one resolve has to serve them all.
+  if (!pending.has(key)) {
+    pending.set(key, resolveInfo(src)
+      .then((v) => { infos.set(key, { t: Date.now(), v }); failures.delete(key); return v; })
+      // Nothing about a failure is cached, but the key stays blocked for a moment, otherwise
+      // every retry of every segment starts a fresh resolve.
+      .catch((e) => {
+        const refusal = /no websocket session|guard:/.test(e.message);
+        failures.set(key, Date.now() + (refusal ? FAIL_ALLoha : FAIL_NETWORK));
+        throw e;
+      })
+      .finally(() => pending.delete(key)));
+  }
+  return pending.get(key);
+}
+
+// One recovery per episode: the promise is shared, and after a successful one the next 15s
+// are left alone so ten parallel segments cannot sign the same episode ten times.
+const recoveries = new Map();
+const RECOVER_QUIET = 15000;
+
+// The edge hash is bound to one resolution and lives ~2 minutes, so each quality keeps its
+// own socket open and takes every refreshed hash the server pushes.
+const sessions = new Map();
+const pendingSessions = new Map();
+const SESSION_TTL = 10 * 60 * 1000;
+
+function connect(s) {
+  return new Promise((ok, bad) => {
+    const { info, q } = s;
+    const ws = new WebSocket(`${info.pnr}?sid=${encodeURIComponent(info.pnk)}&v=2.1&t=${Date.now()}`,
+      { headers: { Origin: info.origin, 'User-Agent': UA } });
+    s.ws = ws;
+    let settled = false;
+    const timer = setTimeout(() => { ws.close(); fail('edge hash timeout'); }, 10000);
+    const fail = (msg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      bad(new Error(msg));
+    };
+    ws.onopen = () => {
+      // A throw inside an undici event listener is an uncaught exception, and that is fatal.
+      try { ws.send(JSON.stringify({ type: 'playback_start', current_time: 0, resolution: q, track_id: '1', speed: 1, subtitle: -1, ts: Date.now() })); } catch (e) {}
+    };
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      if (!m.edge_hash) return;
+      s.edge = m.edge_hash;
+      if (!settled) { settled = true; clearTimeout(timer); ok(); }
+    };
+    ws.onerror = () => { s.ws = null; fail('edge socket failed'); };
+    ws.onclose = () => { s.ws = null; fail('edge socket closed'); };
+  });
+}
+
+async function sessionFor(src, want) {
+  const info = await iframeInfo(src);
+  const q = pickQuality(info.qualities, want);
+  const key = keyOf(src) + '|' + q;
+  const hit = sessions.get(key);
+  if (hit && hit.s.edge) { hit.t = Date.now(); return hit.s; }
+  if (!pendingSessions.has(key)) {
+    const s = { key, src, info, q, edge: null, ws: null };
+    pendingSessions.set(key, connect(s)
+      .then(() => { sessions.set(key, { t: Date.now(), s }); return s; })
+      .finally(() => pendingSessions.delete(key)));
+  }
+  return pendingSessions.get(key);
+}
+
+function dropSession(s) {
+  if (sessions.get(s.key)?.s === s) sessions.delete(s.key);
+  s.ws?.close();
+}
+
+// The websocket session id dies with the socket, so a failed reconnect also invalidates the
+// episode it came from: only a fresh /bnsi hands out a usable one.
+function dropEpisode(s) {
+  dropSession(s);
+  infos.delete(keyOf(s.src));
+}
+
+// Keeps every used session alive, and forgets the ones nobody played for ten minutes.
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, hit] of infos) if (now - hit.t > INFO_TTL) infos.delete(key);
+  for (const [key, until] of failures) if (now >= until) failures.delete(key);
+  for (const [key, until] of sessionBlocks) if (now >= until) sessionBlocks.delete(key);
+  for (const [key, hit] of recoveries) if (!hit.promise && now - hit.at > 5 * 60 * 1000) recoveries.delete(key);
+  for (const [key, hit] of sessions) {
+    if (now - hit.t > SESSION_TTL) { sessions.delete(key); hit.s.ws?.close(); }
+    // Alloha closes the socket after pushing a hash, so a missing one is normal; only a
+    // reconnect that keeps failing means the session itself is spent.
+    else if (!hit.s.ws) {
+      connect(hit.s).catch(async () => {
+        await new Promise((r) => setTimeout(r, 2000));
+        connect(hit.s).catch(() => dropEpisode(hit.s));
       });
     }
-  };
-  ws.onclose = () => { for (const r of waiters.values()) r({}); done(null); };
-  let targetId, s;
-  try {
-    ({ targetId } = await call('Target.createTarget', { url: 'about:blank' }));
-    const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
-    await call('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
-    await call('Network.enable', {}, sessionId);
-    await call('Page.navigate', { url: `http://127.0.0.1:${PORT}/frame?src=${encodeURIComponent(iframe)}` }, sessionId);
-    let master = await Promise.race([found, sleep(25000).then(() => null)]);
-    if (!master) {
-      // The player's own CDN request can be refused while /bnsi still answered, so fall back to its links.
-      try {
-        const src = JSON.parse(qualities).hlsSource || [];
-        const first = src.find(x => x['default']) || src[0] || {};
-        const link = String(Object.values(first.quality || {})[0] || '').split(' or ')[0];
-        if (link) master = link;
-      } catch (e) {}
-    }
-    if (!master) return null;
-    for (let i = 0; i < 20 && !qualities; i++) await sleep(100);
-    const origin = new URL(iframe).origin;
-    let map = null;
+  }
+}, 30000).unref();
+
+const headersFor = (s) => ({
+  Origin: s.info.origin, Referer: s.info.origin + '/', 'User-Agent': UA,
+  'Accepts-Controls': s.edge, Authorizations: 'Bearer ' + s.info.guard,
+});
+
+// A 401/403/410 means something we sign with has expired. The player recovers by renewing its
+// proof and reopening the websocket, so the ladder does the same, cheapest step first, and
+// only re-resolves the episode at the end (that is what Alloha throttles).
+//
+// One recovery serves the whole episode: a seek fires ten segments at once and they all see
+// the same 403, so without the shared promise and the quiet window that follows it the server
+// would sign the same episode dozens of times a minute — which is exactly what gets it refused.
+const RETRY_STATUS = /^(401|403|410)$/;
+
+function recoverOnce(key, s) {
+  const now = Date.now();
+  const hit = recoveries.get(key);
+  if (hit) {
+    if (hit.promise) return hit.promise;
+    if (now - hit.at < RECOVER_QUIET) return Promise.resolve();
+  }
+  const p = (async () => {
+    s.info.guard = await signGuard(s.info.src, s.info.origin, s.info.id);
+    dropSession(s);
     try {
-      const src = JSON.parse(qualities).hlsSource || [];
-      console.log('qualities', Object.keys((src[0] || {}).quality || {}).join(','));
-      const first = src.find(x => x['default']) || src[0] || {};
-      map = {};
-      for (const [label, links] of Object.entries(first.quality || {})) {
-        const link = String(links).split(' or ').filter(Boolean)[0];
-        if (link) map[label] = { url: link, origin };
+      await sessionFor(s.info.src, s.q);
+      console.log('recover: guard renewed, socket reopened');
+    } catch (e) {
+      // The session id died with its socket, and only a fresh /bnsi hands out a usable one.
+      infos.delete(key);
+      await sessionFor(s.info.src, s.q);
+      console.log('recover: episode re-resolved');
+    }
+  })().then(
+    () => recoveries.set(key, { at: Date.now() }),
+    () => recoveries.delete(key),
+  );
+  recoveries.set(key, { at: now, promise: p });
+  return p;
+}
+
+async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
+  cdnHosts.add(new URL(url).hostname);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let s;
+    try {
+      s = await sessionFor(src, want);
+    } catch (e) {
+      // A blocked episode is not worth waiting on: the player gets its answer and retries later.
+      if (/session blocked/.test(e.message)) throw e;
+      if (attempt === 2) throw e;
+      // A cooldown is a wait, not a failure: the player must not be told the stream is gone.
+      // The tunnel takes a couple of seconds to come back, so the gaps grow.
+      const wait = e.until ? Math.min(e.until - Date.now(), 3000) : [300, 1200, 2500][attempt];
+      await new Promise((r) => setTimeout(r, Math.max(wait, 0)));
+      continue;
+    }
+    // Redirects are not followed: our signing headers would travel to whatever host it names.
+    let r;
+    try {
+      r = await fetch(url, { headers: { ...headersFor(s), ...extra }, redirect: 'manual', signal: AbortSignal.timeout(timeout) });
+    } catch (e) {
+      // The tunnel is replaced in a couple of seconds; that is a retry, not the end of the stream.
+      if (attempt === 2) throw e;
+      await new Promise((res) => setTimeout(res, [300, 1200][attempt]));
+      continue;
+    }
+    if (!RETRY_STATUS.test(String(r.status))) {
+      if (!r.ok && r.status < 400) {
+        const to = r.headers.get('location') || '?';
+        await r.body?.cancel();
+        throw new Error('cdn redirect ' + r.status + ' to ' + to);
       }
-    } catch (e) { map = null; }
-    console.log('capture', master ? 'master' : 'no-master', 'map:', Object.keys(map || {}).length);
-    const fetchBuf = async (url) => {
-      for (const sid of kids) {
-        const probe = await call('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sid);
-        if (!/stravers\.live/.test(probe.result?.value || '')) continue;
-        const r = await call('Runtime.evaluate', {
-          awaitPromise: true, returnByValue: true,
-          expression: `fetch(${JSON.stringify(url)}, {headers:${JSON.stringify(Object.fromEntries(Object.entries(extra).filter(([k]) => k !== '__logged')))}}).then(r=>r.ok?r.arrayBuffer().then(b=>{let s='';const a=new Uint8Array(b);for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode.apply(null,a.subarray(i,i+8192));return btoa(s)}):'!'+r.status)`,
-        }, sid);
-        const v = r.result?.value;
-        if (r.exceptionDetails) console.log('fb err', (r.exceptionDetails.exception?.description || r.exceptionDetails.text || '').slice(0, 120));
-        if (typeof v === 'string' && v.startsWith('!')) return { status: +v.slice(1) };
-        if (typeof v === 'string' && v) return { status: 200, body: Buffer.from(v, 'base64') };
-      }
-      return { status: 0 };
-    };
-    s = { master, origin, map, extra, fetchBuf };
-    return s;
-  } catch (e) {
-    console.error('capture failed', e.message);
-    return null;
+      return r;
+    }
+    await r.arrayBuffer();
+    // `x-vd: token_decrypt` means the url token was rejected, `session_blocked` means the CDN
+    // has stopped serving this whole session, and retrying it just digs the hole deeper.
+    const vd = r.headers.get('x-vd') || '';
+    if (vd === 'session_blocked') {
+      console.log('cdn session blocked, backing off');
+      dropSession(s);
+      infos.delete(keyOf(src));
+      sessionBlocks.set(keyOf(src), Date.now() + SESSION_BLOCK);
+      throw new Error('cdn blocked the session');
+    }
+    if (!attempt) console.log('cdn', r.status, vd || '-', url.slice(8, 40));
+    try {
+      await recoverOnce(keyOf(src), s);
+    } catch (e) {
+      // A recovery that could not finish is still a failure of this attempt, never a bypass.
+      if (attempt === 2) throw e;
+      await new Promise((r) => setTimeout(r, [300, 1200][attempt]));
+    }
   }
+  throw new Error('cdn refused every attempt');
 }
 
-
-const cdnHeaders = s => ({ Origin: s.origin, Referer: s.origin + '/', 'User-Agent': UA, ...(s.extra || {}) });
-
-// The token lives in the path and dies after a few minutes, but everything after it is
-// stable, so the player can hold token-free urls and we resolve the token per request.
-async function variantOf(s) {
-  if (s.variant) return s.variant;
-  // The player already consumed its own master url, so a fresh one from /bnsi is tried first.
-  const candidates = [...Object.values(s.map || {}).map(x => x.url), s.master];
-  let body = '';
-  for (const u of candidates) {
-    const r = await s.fetchBuf(u);
-    body = r.body ? r.body.toString() : '';
-    if (body.includes('#EXTM3U')) { s.master = u; break; }
-  }
-  console.log('variant master', body.includes('#EXTM3U') ? 'ok' : 'fail');
-  if (!body.includes('#EXTM3U')) return null;
-  const line = body.split('\n').find(l => l && !l.startsWith('#'));
-  if (!line) return null;
-  const url = new URL(line.trim(), s.master).href;
-  s.variant = { url, base: url.slice(0, url.lastIndexOf('/') + 1) };
-  return s.variant;
-}
-
-const relOf = u => {
-  const x = new URL(u);
-  return x.pathname.split('/').slice(3).join('/') + x.search;
-};
-
-async function playlistFor(src, q, base) {
-  let s = await streamFor(src, q);
-  let v = s && await variantOf(s);
-  if (!v) {
-    s = await streamFor(src, q, true);
-    v = s && await variantOf(s);
-  }
-  if (!v) return null;
-  const r = await s.fetchBuf(v.url);
-  const text = r.body ? r.body.toString() : '';
-  console.log('variant playlist', r.status);
-  if (!r.ok || !text.includes('#EXTM3U')) return null;
-  const seg = abs => `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q || '')}&r=${encodeURIComponent(relOf(new URL(abs, v.url)))}`;
-  return text.split('\n').map(line => {
-    const l = line.trim();
-    if (!l) return line;
-    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (m, u) => `URI="${seg(u)}"`);
-    return seg(l);
-  }).join('\n');
-}
-
-// shortcut: in-memory cache, stale entries dropped only when hit again, fine for one household
-const cache = new Map();
-const TTL = 4 * 60 * 1000;
-const inflight = new Map();
-// /hls only fetches CDN hosts a real player session pointed us to, so it is not an open proxy.
+// Only hosts a real player session pointed us to are proxied, so /s is not an open proxy.
 const cdnHosts = new Set();
-let lastClearAt = 0;
-async function streamFor(iframe, q, force) {
-  const key = iframe + '|' + (q || '');
-  if (force) { cache.delete(key); inflight.delete(key); }
-  const hit = cache.get(key);
-  if (hit && Date.now() - hit.t < TTL) return hit.v;
-  if (hit) cache.delete(key);
-  if (!inflight.has(key)) {
-    inflight.set(key, capture(iframe, q).finally(() => inflight.delete(key)));
-  }
-  const v = await inflight.get(key);
-  if (v) {
-    cache.set(key, { t: Date.now(), v });
-    cdnHosts.add(new URL(v.master).hostname);
-    for (const q2 of Object.values(v.map || {})) cdnHosts.add(new URL(q2.url).hostname);
-  }
-  return v;
+
+function proxied(base, src, q, url) {
+  const x = new URL(url);
+  cdnHosts.add(x.hostname);
+  return `${base}/s?url=${encodeURIComponent(src)}&q=${encodeURIComponent(q)}&u=${encodeURIComponent(x.href)}`;
 }
 
-const hlsUrl = (base, origin, u) => `${base}/hls?o=${encodeURIComponent(origin)}&u=${encodeURIComponent(u)}`;
-
-function rewritePlaylist(text, src, origin, base) {
-  const abs = u => {
-    const x = new URL(u, src);
-    cdnHosts.add(x.hostname);
-    return x.href;
-  };
-  return text.split('\n').map(line => {
+function rewritePlaylist(text, playlistUrl, base, src, q) {
+  return text.split('\n').map((line) => {
     const l = line.trim();
     if (!l) return line;
-    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${hlsUrl(base, origin, abs(u))}"`);
-    return hlsUrl(base, origin, abs(l));
+    if (l.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (m, u) => `URI="${proxied(base, src, q, new URL(u, playlistUrl).href)}"`);
+    return proxied(base, src, q, new URL(l, playlistUrl).href);
   }).join('\n');
 }
 
-async function proxyHls(req, res, q, base) {
-  const u = q.get('u');
-  const origin = q.get('o');
-  if (!u || !origin || !/^https:\/\/[a-z0-9.-]+\.stravers\.live$/i.test(origin)) return send(res, 400, 'bad hls params');
-  let target;
-  try { target = new URL(u); } catch { return send(res, 400, 'bad hls url'); }
-  if (target.protocol !== 'https:' || !cdnHosts.has(target.hostname)) return send(res, 403, 'unknown cdn host');
-  const headers = { Origin: origin, Referer: origin + '/', 'User-Agent': UA };
-  if (req.headers.range) headers.Range = req.headers.range;
-  const ac = new AbortController();
-  res.on('close', () => ac.abort());
-  const up = await fetch(u, { headers, signal: ac.signal });
-  const type = up.headers.get('content-type') || '';
-  if (up.ok && /mpegurl/i.test(type) || /\.m3u8(\?|$)/.test(new URL(u).pathname)) {
-    const body = rewritePlaylist(await up.text(), u, origin, base);
-    return send(res, up.status, body, 'application/vnd.apple.mpegurl');
-  }
-  // A 403 means the signed link died; drop the cache, but at most once a minute so a
-  // broken episode cannot turn into a capture storm.
-  if (up.status === 403 && Date.now() - lastClearAt > 60000) {
-    cache.clear();
-    lastClearAt = Date.now();
-  }
-  const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': type || 'application/octet-stream' };
-  for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
-  res.writeHead(up.status, out);
-  if (!up.body) return res.end();
-  Readable.fromWeb(up.body).on('error', () => res.destroy()).pipe(res);
+async function playlist(base, src, want) {
+  const info = await iframeInfo(src);
+  const q = pickQuality(info.qualities, want);
+  const masterUrl = info.qualities[q];
+  const masterRes = await cdnFetch(src, q, masterUrl);
+  const master = await masterRes.text();
+  if (!masterRes.ok) throw new Error('master: ' + masterRes.status);
+  const line = master.split('\n').find((l) => l.trim() && !l.startsWith('#'));
+  if (!line) throw new Error('master: no variant');
+  const variantUrl = new URL(line.trim(), masterUrl).href;
+  const r = await cdnFetch(src, q, variantUrl);
+  const text = await r.text();
+  if (!text.includes('#EXTM3U')) throw new Error('variant: ' + r.status);
+  return rewritePlaylist(text, variantUrl, base, src, q);
 }
 
 function send(res, status, body, type = 'text/plain; charset=utf-8') {
@@ -286,13 +350,23 @@ function send(res, status, body, type = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
+const isAllowedIframe = (u) => {
+  try { const x = new URL(u); return x.protocol === 'https:' && /(^|\.)stravers\.live$/i.test(x.hostname); }
+  catch { return false; }
+};
+
 http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+  // A malformed path (//, //[ ) throws here, and an unhandled rejection would kill the process.
+  let url;
+  try { url = new URL(req.url, 'http://x'); }
+  catch { return send(res, 400, 'bad path'); }
   const q = url.searchParams;
-  // Behind cloudflared the public scheme is https, and a Location with http:// would be blocked as mixed content.
-  const proto = req.headers['x-forwarded-proto'] || 'http';
-  const base = `${proto}://${req.headers.host}`;
-  if (url.pathname !== '/hls') console.log(new Date().toISOString().slice(11, 19), req.method, url.pathname, req.headers.origin || '');
+  // Behind cloudflared the public scheme is https, and a Location with http:// would be blocked as
+  // mixed content. Both halves come from the client, so neither is trusted as is.
+  const proto = /^https$/i.test(req.headers['x-forwarded-proto'] || '') ? 'https' : 'http';
+  const host = /^[a-z0-9.:[\]-]+$/i.test(req.headers.host || '') ? req.headers.host : '127.0.0.1:' + PORT;
+  const base = `${proto}://${host}`;
+  if (url.pathname !== '/s') console.log(new Date().toISOString().slice(11, 19), req.method, url.pathname, q.get('q') || '');
   if (req.method === 'OPTIONS') {
     // Chrome asks before a public page (lampa.mx) may call a LAN address.
     res.writeHead(204, {
@@ -304,70 +378,55 @@ http.createServer(async (req, res) => {
     return res.end();
   }
   try {
-    if (url.pathname === '/frame') {
-      const src = q.get('src');
-      if (!isAllowedIframe(src)) return send(res, 400, 'bad src');
-      const safe = new URL(src).href.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-      return send(res, 200, `<!doctype html><body style="margin:0"><iframe src="${safe}" width="1280" height="720" allow="autoplay; fullscreen"></iframe>`, 'text/html; charset=utf-8');
-    }
+    const src = q.get('url');
     if (url.pathname === '/page' || url.pathname === '/tracks') {
-      const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const up = await fetch(src, { headers: { Referer: 'https://onomovie.ru/', 'User-Agent': UA } });
-      const body = (await up.text()).replace(/\n/g, '');
-      const fileList = body.match(/ fileList = JSON\.parse\('(\{.*\})'\);/);
-      return send(res, up.status, fileList ? fileList[1] : '{}', 'application/json; charset=utf-8');
+      const page = await playerPage(src);
+      return send(res, page.status, JSON.stringify(page.fileList || {}), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/play.m3u8' || url.pathname === '/stream.m3u8') {
-      const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const body = await playlistFor(src, q.get('q'), base);
-      if (!body) console.log('playlist fail', src.slice(-40));
-      if (!body) return send(res, 502, 'no stream');
+      const body = await playlist(base, src, q.get('q'));
       return send(res, 200, body, 'application/vnd.apple.mpegurl');
     }
     if (url.pathname === '/s') {
-      const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const rel = q.get('r') || '';
-      if (!rel || rel.includes('..')) return send(res, 400, 'bad path');
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const s = await streamFor(src, q.get('q'), attempt > 0);
-        const v = s && await variantOf(s);
-        if (!v) continue;
-        const up = await s.fetchBuf(v.base + rel);
-        if (!up.body) { console.log('seg', up.status, rel.slice(0, 50)); if (!attempt) continue; return send(res, 502, 'no segment'); }
-        res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Content-Type': /m3u8/.test(rel) ? 'application/vnd.apple.mpegurl' : 'video/mp4', 'Content-Length': up.body.length });
-        return res.end(up.body);
+      let target;
+      try { target = new URL(q.get('u') || ''); } catch { return send(res, 400, 'bad segment url'); }
+      if (target.protocol !== 'https:' || target.port || !cdnHosts.has(target.hostname)) return send(res, 403, 'unknown cdn host');
+      // A segment runs to a few MB, and the WARP hop is slower than the CDN itself.
+      const up = await cdnFetch(src, q.get('q'), target.href, req.headers.range ? { Range: req.headers.range } : {}, 45000);
+      // The player abandons fragments on every seek; there is nobody left to send this to.
+      if (res.destroyed) { await up.body?.cancel(); return; }
+      const type = up.headers.get('content-type') || '';
+      const isPlaylist = /mpegurl/i.test(type) || /\.m3u8(\?|$)/.test(target.pathname);
+      if (up.ok && isPlaylist) {
+        const text = await up.text();
+        if (text.includes('#EXTM3U')) return send(res, 200, rewritePlaylist(text, target.href, base, src, q.get('q')), 'application/vnd.apple.mpegurl');
+        return send(res, up.status, text, type);
       }
-      return send(res, 502, 'no segment');
-    }
-    if (url.pathname === '/map') {
-      const src = q.get('url');
-      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const s = await streamFor(src, q.get('q'));
-      return send(res, 200, JSON.stringify(s && s.map || {}), 'application/json; charset=utf-8');
+      const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': type || 'video/mp4' };
+      for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
+      res.writeHead(up.status, out);
+      if (!up.body) return res.end();
+      // A seek abandons this response. The upstream body has to die with it, and neither a
+      // late error from the web stream nor an already-closed destination may reach the process.
+      const body = Readable.fromWeb(up.body);
+      body.on('error', () => res.destroy());
+      pipeline(body, res, () => {});
+      return;
     }
     if (url.pathname === '/qualities') {
-      const src = q.get('url');
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      // Answer right away: a capture takes ~20s and Cloudflare drops the request long before that.
+      // Answer right away: Lampa asks for this right before playback and has no patience.
       const out = {};
-      for (const label of ['360', '480', '720', '1080']) {
-        out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
-      }
+      for (const label of QUALITIES) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
-    if (url.pathname === '/hls') return await proxyHls(req, res, q, base);
-    // Everything else is Lampa itself: same origin as the helper, so Chrome does not
-    // apply its "insecure page cannot reach the local network" rule.
-    const up = await fetch('http://lampa.mx' + req.url, { headers: { 'User-Agent': UA, Accept: req.headers.accept || '*/*' } });
-    const out = { 'Content-Type': up.headers.get('content-type') || 'application/octet-stream', 'Cache-Control': up.headers.get('cache-control') || 'no-store' };
-    res.writeHead(up.status, out);
-    const body = Buffer.from(await up.arrayBuffer());
-    res.end(body);
+    send(res, 404, 'not found');
   } catch (e) {
-    console.error(req.url.slice(0, 120), e.message);
+    // The query string carries the iframe token, so only the path is logged.
+    console.error(url.pathname, e.message);
     if (!res.headersSent) send(res, 502, e.message); else res.end();
   }
 }).listen(PORT, '0.0.0.0', () => console.log(`alloha helper on :${PORT}`));
