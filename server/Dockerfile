@@ -13,6 +13,11 @@ RUN [ "$TARGETARCH" = "amd64" ] || { echo "this Dockerfile pins wireproxy_linux_
 ADD --checksum=sha256:e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c https://github.com/pufferffish/wireproxy/releases/download/v1.1.3/wireproxy_linux_amd64.tar.gz /tmp/wireproxy.tgz
 RUN tar xzf /tmp/wireproxy.tgz -C /usr/local/bin && chmod +x /usr/local/bin/wireproxy && rm /tmp/wireproxy.tgz
 
+# curl-impersonate makes every HTTP request look like Chrome down to the TLS handshake
+# (cfetch in alloha.mjs); Node's own fetch is recognised as a bot. Same amd64-only pin.
+ADD --checksum=sha256:bc9bd2522fe1850dd54c0fff189c8dd606df3f222ab2a905f2dd255123c3f495 https://github.com/lexiforest/curl-impersonate/releases/download/v2.3.2/curl-impersonate-v2.3.2.x86_64-linux-gnu.tar.gz /tmp/curl-impersonate.tgz
+RUN tar xzf /tmp/curl-impersonate.tgz -C /usr/local/bin curl-impersonate && rm /tmp/curl-impersonate.tgz
+
 WORKDIR /app
 COPY alloha.mjs alloha-sign.mjs entrypoint.sh ./
 RUN chmod +x entrypoint.sh

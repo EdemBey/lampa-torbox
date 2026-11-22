@@ -3,19 +3,93 @@
 // per-quality edge hash that arrives over its websocket. All three are reproduced here in
 // plain Node, so no browser is needed. Alloha hands out usable tokens only to
 // residential-looking IPs, so entrypoint.sh sends the traffic through Cloudflare WARP.
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
 import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
+// Alloha drops a session a few minutes in when its requests do not come from a browser, and
+// then refuses that IP + User-Agent pair. Node's fetch speaks HTTP/1.1 with a TLS handshake no
+// browser has, so every HTTP request goes through curl-impersonate, which shakes hands like
+// Chrome 152 on Windows and sends its User-Agent and client hints. The websocket stays in Node
+// with the same User-Agent. Keep it distinct from the browser you watch in, so a mark on the
+// helper cannot land on you.
+const IMPERSONATE = 'chrome152';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+const CURL = process.env.CURL_IMPERSONATE || '/usr/local/bin/curl-impersonate';
+
+// What Chrome adds to a request from the player iframe on top of curl-impersonate's defaults,
+// which describe a top-level navigation. An empty value drops a default header.
+const browser = (site, dest = 'empty', mode = 'cors') => ({
+  'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Sec-Fetch-Site': site,
+  'Sec-Fetch-Mode': mode,
+  'Sec-Fetch-Dest': dest,
+  ...(mode === 'navigate' ? {} : { 'Upgrade-Insecure-Requests': '', 'Sec-Fetch-User': '', 'Cache-Control': '', Priority: 'u=1, i' }),
+});
+
+// fetch() over curl-impersonate: same options this file uses (method, headers, body, signal)
+// and a real Response back, with the body streamed. Redirects are not followed, like
+// redirect: 'manual'. curl picks up HTTPS_PROXY from the environment, so WARP still applies.
+function cfetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
+  // -g: curl would otherwise expand [1-5000] or {a,b} in a url into many requests.
+  const args = ['--impersonate', IMPERSONATE, '--compressed', '-g', '-sS', '-i', '--suppress-connect-headers', '-X', method];
+  for (const [k, v] of Object.entries(headers)) if (v != null) args.push('-H', v === '' ? `${k}:` : `${k}: ${v}`);
+  if (body != null) args.push('--data-binary', '@-');
+  args.push(url);
+  return new Promise((ok, bad) => {
+    const child = spawn(CURL, args, { stdio: [body != null ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    let err = '', head = Buffer.alloc(0), done = false;
+    const exit = new Promise((r) => child.on('close', r));
+    const fail = (e) => { if (!done) { done = true; child.kill(); bad(e); } };
+    signal?.addEventListener('abort', () => { child.kill(); fail(signal.reason || new Error('aborted')); }, { once: true });
+    child.stderr.on('data', (c) => { err += c; });
+    child.on('error', fail);
+    exit.then((code) => fail(new Error(`curl ${code}: ${err.trim() || 'no response'}`)));
+    if (body != null) { child.stdin.on('error', () => {}); child.stdin.end(body); }
+    const onData = (chunk) => {
+      head = Buffer.concat([head, chunk]);
+      for (;;) {
+        const end = head.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const lines = head.subarray(0, end).toString('latin1').split('\r\n');
+        head = head.subarray(end + 4);
+        const status = Number((lines[0].match(/^HTTP\/[\d.]+ (\d{3})/) || [])[1]);
+        if (status >= 100 && status < 200) continue;
+        child.stdout.pause();
+        child.stdout.off('data', onData);
+        // This runs inside a stream listener, where a throw would kill the whole process.
+        try {
+          const h = new Headers();
+          for (const l of lines.slice(1)) { const i = l.indexOf(':'); if (i > 0) h.append(l.slice(0, i).trim(), l.slice(i + 1).trim()); }
+          // curl has already decoded the body, so the encoded length no longer describes it.
+          if (h.has('content-encoding')) { h.delete('content-encoding'); h.delete('content-length'); }
+          // The rest of stdout is the body, the bytes read past the headers first. A curl that
+          // dies mid-body must fail the stream, not end it short like a complete response.
+          const rest = Readable.from((async function* () {
+            if (head.length) yield head;
+            for await (const c of child.stdout) yield c;
+            const code = await exit;
+            if (code !== 0) throw new Error(`curl ${code}: ${err.trim()}`);
+          })());
+          rest.on('error', () => child.kill());
+          const res = new Response([204, 205, 304].includes(status) ? null : Readable.toWeb(rest), { status, headers: h });
+          done = true;
+          return ok(res);
+        } catch (e) { return fail(e); }
+      }
+    };
+    child.stdout.on('data', onData);
+  });
+}
 const PARENT = 'https://onomovie.ru';
 // Alloha answers in a second or two; anything slower is a stalled proxy and Lampa has given up.
 const TIMEOUT = 20000;
 
 async function playerPage(src) {
-  const up = await fetch(src, { headers: { Referer: PARENT + '/', 'User-Agent': UA }, signal: AbortSignal.timeout(TIMEOUT) });
+  const up = await cfetch(src, { headers: { ...browser('cross-site', 'iframe', 'navigate'), Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8', 'Upgrade-Insecure-Requests': '1', Referer: PARENT + '/' }, signal: AbortSignal.timeout(TIMEOUT) });
   const body = (await up.text()).replace(/\n/g, '');
   const fl = body.match(/ fileList = JSON\.parse\('(\{.*\})'\);/);
   const vp = body.match(/name="viewporti" content="([^"]+)"/);
@@ -27,14 +101,14 @@ async function playerPage(src) {
 // websocket session) refuses a client that still has one active, so it is never re-asked
 // just to get a fresh guard.
 async function signGuard(src, origin, id) {
-  const sarn = await (await fetch(`${origin}/sarn`, {
-    headers: { 'User-Agent': UA, Referer: src, acceptis: `${YB}.${id}` },
+  const sarn = await (await cfetch(`${origin}/sarn`, {
+    headers: { ...browser('same-origin'), Accept: '*/*', Referer: src, acceptis: `${YB}.${id}` },
     signal: AbortSignal.timeout(TIMEOUT),
   })).json();
   const proof = crypto.createHash('sha256').update([sarn.nonce, YB, sarn.uap, origin, origin].join('|')).digest('hex');
-  const vorf = await (await fetch(`${origin}/vorf`, {
+  const vorf = await (await cfetch(`${origin}/vorf`, {
     method: 'POST',
-    headers: { 'User-Agent': UA, Referer: src, Origin: origin, 'Content-Type': 'application/json', 'accepts-block': YB },
+    headers: { ...browser('same-origin'), Accept: '*/*', Referer: src, Origin: origin, 'Content-Type': 'application/json', 'accepts-block': YB },
     body: JSON.stringify({ challenge: sarn.challenge, proof, parentOrigin: origin, referrer: PARENT + '/' }),
     signal: AbortSignal.timeout(TIMEOUT),
   })).json();
@@ -53,11 +127,11 @@ async function resolveInfo(src) {
   const id = page.fileList.active.id || page.fileList.active.id_file;
   const token = new URL(src).searchParams.get('token') || '';
   const kind = page.fileList.type === 'trailer' ? 'trailers' : 'movies';
-  const bnsiRes = await fetch(`${origin}/bnsi/${kind}/${id}`, {
+  const bnsiRes = await cfetch(`${origin}/bnsi/${kind}/${id}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest',
-      'User-Agent': UA, Referer: src, Origin: origin, Borth: borthFor(page.viewport),
+      ...browser('same-origin'), Accept: 'application/json, text/javascript, */*; q=0.01', Referer: src, Origin: origin, Borth: borthFor(page.viewport),
     },
     body: `token=${encodeURIComponent(token)}&av1=true&autoplay=0&audio=&subtitle=`,
     signal: AbortSignal.timeout(TIMEOUT),
@@ -74,7 +148,7 @@ async function resolveInfo(src) {
     const link = String(links).split(' or ').filter(Boolean)[0];
     if (link) qualities[label] = link;
   }
-  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, qualities };
+  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, qualities, audio: source.label || null, meta: {} };
 }
 
 // Episodes resolved for playback, plus the in-flight and recently failed ones.
@@ -150,15 +224,64 @@ function report(s, type) {
   try {
     if (s.ws?.readyState !== 1) return false;
     s.ws.send(JSON.stringify({ type, current_time: Math.floor(s.pos || 0), resolution: s.q, track_id: '1', speed: 1, subtitle: -1, ts: Date.now() }));
+    console.log('ws>', type, Math.floor(s.pos || 0), s.q);
     return true;
   } catch (e) { return false; }
+}
+
+// The player also posts analytics to /events every 30 s (app.js: DK queues, DX flushes):
+// view_start and playback_ready once, then a heartbeat per 10 s of playback. It is the last
+// channel the helper did not reproduce, so the same batches go out, built from what the proxy
+// really saw (position, bytes, the stream's bitrate and size) plus a plausible screen.
+function postEvents(s, played) {
+  const { info } = s;
+  const m = info.meta[s.q] || {};
+  const now = Date.now();
+  const token = new URL(info.src).searchParams.get('token') || '';
+  const event = (type, at, extra) => ({
+    url: null, manifestUrl: m.manifestUrl || null, currentTime: s.pos || 0, duration: m.duration || null,
+    bufferLength: 30, paused: false, audioTrack: info.audio, quality: Number(s.q), subtitle: null,
+    event_type: type, at, since: at - (s.lastFlush || s.playerInitAt), ...extra,
+  });
+  const events = [];
+  if (!s.viewStarted) {
+    s.viewStarted = true;
+    events.push(event('view_start', now, { fileChangeType: null, autoplay: false, resumeFrom: s.pos || 0, startupQuality: Number(s.q), startupAudio: info.audio }));
+    events.push(event('playback_ready', now, { timeToPlaybackReadyMs: 1500, bandwidthEstimate: 5e7 }));
+  }
+  const bytes = s.bytes || 0, dBytes = bytes - (s.bytesReported || 0);
+  s.bytesReported = bytes;
+  for (let i = 2; i >= 0; i--) {
+    events.push(event('heartbeat', now - i * 10000, {
+      currentTime: Math.max(0, (s.pos || 0) - (i * played) / 3), bandwidthEstimate: 5e7,
+      droppedFrames: 0, droppedFramesDelta: 0, playedSecondsDelta: Math.round((played / 3) * 1000) / 1000,
+      isBuffering: false, isSeeking: false, playbackRate: 1, currentBitrate: m.bitrate || null,
+      currentFrameRate: m.fps || null, videoWidth: m.width || null, videoHeight: m.height || null,
+      isUpscaling: false, rebufferCountSession: 0, rebufferTotalMsSession: 0,
+      bytesLoadedTotal: bytes, bytesLoadedDelta: Math.round(dBytes / 3),
+    }));
+  }
+  s.lastFlush = now;
+  const payload = {
+    token, domain: encodeURIComponent(PARENT + '/'), isTrailer: false, dropped: 0,
+    playerInitAt: s.playerInitAt, clientSessionId: s.clientSessionId,
+    clientRequestId: crypto.randomBytes(16).toString('hex'),
+    env: { connectionType: '4g', downlink: 10, pixelRatio: 1, screenW: 1920, screenH: 1080 }, events,
+  };
+  cfetch(`${info.origin}/events`, {
+    method: 'POST',
+    headers: { ...browser('same-origin'), Accept: '*/*', 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8', Referer: info.src, Origin: info.origin },
+    body: new URLSearchParams({ token, payload: JSON.stringify(payload) }).toString(),
+    signal: AbortSignal.timeout(TIMEOUT),
+  }).then((r) => { console.log('events', r.status, events.map((e) => e.event_type).join(',')); return r.arrayBuffer(); })
+    .catch((e) => console.log('events failed', e.message));
 }
 
 function connect(s) {
   return new Promise((ok, bad) => {
     const { info } = s;
     const ws = new WebSocket(`${info.pnr}?sid=${encodeURIComponent(info.pnk)}&v=2.1&t=${Date.now()}`,
-      { headers: { Origin: info.origin, 'User-Agent': UA } });
+      { headers: { Origin: info.origin, 'User-Agent': UA, 'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7', 'Cache-Control': 'no-cache', Pragma: 'no-cache' } });
     s.ws = ws;
     let settled = false;
     const timer = setTimeout(() => { ws.close(); fail('edge hash timeout'); }, 10000);
@@ -171,14 +294,19 @@ function connect(s) {
     ws.onopen = () => report(s, 'playback_start');
     ws.onmessage = (ev) => {
       let m;
-      try { m = JSON.parse(ev.data); } catch { return; }
+      try { m = JSON.parse(ev.data); } catch { console.log('ws< (not json)', String(ev.data).length, 'bytes'); return; }
+      if (!m || typeof m !== 'object') return;
+      // Logged so the log shows what the server tells a session before the CDN blocks it; the
+      // hash itself is a credential (Accepts-Controls) and stays out of the log.
+      console.log('ws<', m.type, Object.keys(m).filter((k) => k !== 'type').map((k) => k === 'edge_hash' ? k : `${k}=${String(m[k]).slice(0, 40)}`).join(' '));
       if (!m.edge_hash) return;
+      if (s.edge && m.edge_hash !== s.edge) console.log('ws< edge hash changed');
       s.edge = m.edge_hash;
       if (!settled) { settled = true; clearTimeout(timer); ok(); if (!s.paused) report(s, 'resumed'); }
     };
     // A late close from a socket that was already replaced must not orphan the new one.
     ws.onerror = () => { if (s.ws === ws) s.ws = null; fail('edge socket failed'); };
-    ws.onclose = () => { if (s.ws === ws) s.ws = null; fail('edge socket closed'); };
+    ws.onclose = (e) => { console.log('ws closed', e.code, e.reason || ''); if (s.ws === ws) s.ws = null; fail('edge socket closed'); };
   });
 }
 
@@ -190,7 +318,7 @@ async function sessionFor(src, want) {
   // The heartbeat reports the quality currently being played, which changes on every switch.
   if (hit && hit.s.edge) { hit.t = Date.now(); hit.s.q = q; return hit.s; }
   if (!pendingSessions.has(key)) {
-    const s = { key, src, info, q, edge: null, ws: null };
+    const s = { key, src, info, q, edge: null, ws: null, playerInitAt: Date.now(), clientSessionId: crypto.randomBytes(16).toString('hex') };
     pendingSessions.set(key, connect(s)
       .then(() => { sessions.set(key, { t: Date.now(), s }); return s; })
       .finally(() => pendingSessions.delete(key)));
@@ -217,6 +345,12 @@ setInterval(() => {
   for (const [key, until] of failures) if (now >= until) failures.delete(key);
   for (const [key, until] of sessionBlocks) if (now >= until) sessionBlocks.delete(key);
   for (const [key, hit] of recoveries) if (!hit.promise && now - hit.at > 5 * 60 * 1000) recoveries.delete(key);
+  for (const [key, hit] of refreshes) if (!hit.promise && now - hit.at > REFRESH_EVERY) refreshes.delete(key);
+  // A segment path is dropped with its episode, never while it resolves or refreshes.
+  for (const k of origins.keys()) {
+    const ep = k.slice(0, k.lastIndexOf('|'));
+    if (!infos.has(ep) && !pending.has(ep) && !refreshes.has(ep)) { origins.delete(k); moves.delete(k); }
+  }
   for (const [key, hit] of sessions) {
     // Like the player: playing only while the position moves, one paused when it stops, and
     // resumed before the next playing. State moves only on a report that actually went out,
@@ -225,7 +359,12 @@ setInterval(() => {
     if (s.pos !== s.reportedPos) {
       if (!s.paused || report(s, 'resumed')) {
         s.paused = false;
-        if (report(s, 'playing')) s.reportedPos = s.pos;
+        if (report(s, 'playing')) {
+          // Seconds played since the last tick; a seek is not playback, so it is capped.
+          const played = Math.max(0, Math.min(45, s.pos - (s.reportedPos ?? s.pos)));
+          s.reportedPos = s.pos;
+          postEvents(s, played);
+        }
       }
     } else if (!s.paused && s.reportedPos != null) {
       if (report(s, 'paused')) s.paused = true;
@@ -243,7 +382,7 @@ setInterval(() => {
 }, 30000).unref();
 
 const headersFor = (s) => ({
-  Origin: s.info.origin, Referer: s.info.origin + '/', 'User-Agent': UA,
+  ...browser('cross-site'), Accept: '*/*', Origin: s.info.origin, Referer: s.info.origin + '/',
   'Accepts-Controls': s.edge, Authorizations: 'Bearer ' + s.info.guard,
 });
 
@@ -283,9 +422,61 @@ function recoverOnce(key, s) {
   return p;
 }
 
+// A session dies about two minutes after Alloha rotates its edge hash (seen twice: blocked 96 s
+// and 108 s after "edge hash changed"), while the player keeps asking for segments from the
+// playlist it already holds. So a blocked episode gets a fresh session, and every segment is
+// moved onto the new session's path: the file name (seg-686-f1-v1-a1.m4s) stays, only the
+// signed path in front of it changes. At most one refresh per two minutes per episode.
+// origins: the segment path of the playlist the player holds; moves: where a refresh put it.
+const origins = new Map();
+const moves = new Map();
+const refreshes = new Map();
+const REFRESH_EVERY = 2 * 60 * 1000;
+const dirOf = (u) => u.slice(0, u.lastIndexOf('/') + 1);
+
+// Only urls under the player's original path move, and only after a refresh; init segments,
+// keys or renditions elsewhere stay where the playlist put them.
+function relocate(src, q, url) {
+  const k = keyOf(src) + '|' + q;
+  const from = origins.get(k), to = moves.get(k);
+  return from && to && url.startsWith(from) ? to + url.slice(from.length) : url;
+}
+
+// shortcut: refreshes only the quality that hit the block; a switch to another quality right
+// after a refresh waits out the two minutes. Refresh every known quality if that shows up.
+function refreshEpisode(src, want) {
+  const key = keyOf(src);
+  const hit = refreshes.get(key);
+  if (hit?.promise) return hit.promise;
+  if (hit && Date.now() - hit.at < REFRESH_EVERY) return Promise.resolve(false);
+  const p = (async () => {
+    const old = sessions.get(key)?.s;
+    if (old) dropSession(old);
+    infos.delete(key);
+    const info = await iframeInfo(src);
+    const q = pickQuality(info.qualities, want);
+    const s = await sessionFor(src, q);
+    if (old) { s.pos = old.pos; s.reportedPos = old.reportedPos; s.bytes = old.bytes; }
+    const masterUrl = info.qualities[q];
+    const r = await cfetch(masterUrl, { headers: headersFor(s), signal: AbortSignal.timeout(TIMEOUT) });
+    const master = await r.text();
+    const line = r.ok && master.split('\n').find((l) => l.trim() && !l.startsWith('#'));
+    if (!line) throw new Error('master ' + r.status);
+    const base = dirOf(new URL(line.trim(), masterUrl).href);
+    cdnHosts.add(new URL(base).hostname);
+    moves.set(key + '|' + q, base);
+    console.log('session refreshed, segments moved to the new path');
+    return true;
+  })().catch((e) => { console.log('refresh failed:', e.message); return false; })
+    .then((ok) => { refreshes.set(key, { at: Date.now() }); return ok; });
+  refreshes.set(key, { at: Date.now(), promise: p });
+  return p;
+}
+
 async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
   cdnHosts.add(new URL(url).hostname);
   for (let attempt = 0; attempt < 3; attempt++) {
+    url = relocate(src, want, url);
     let s;
     try {
       s = await sessionFor(src, want);
@@ -302,7 +493,7 @@ async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
     // Redirects are not followed: our signing headers would travel to whatever host it names.
     let r;
     try {
-      r = await fetch(url, { headers: { ...headersFor(s), ...extra }, redirect: 'manual', signal: AbortSignal.timeout(timeout) });
+      r = await cfetch(url, { headers: { ...headersFor(s), ...extra }, signal: AbortSignal.timeout(timeout) });
     } catch (e) {
       // The tunnel is replaced in a couple of seconds; that is a retry, not the end of the stream.
       if (attempt === 2) throw e;
@@ -322,6 +513,8 @@ async function cdnFetch(src, want, url, extra = {}, timeout = TIMEOUT) {
     // `client_blocked` mean the CDN has stopped serving this client, and retrying digs deeper.
     const vd = r.headers.get('x-vd') || '';
     if (vd === 'session_blocked' || vd === 'client_blocked') {
+      // The retry relocates the url onto the fresh session's path at the top of the loop.
+      if (await refreshEpisode(src, want)) continue;
       console.log('cdn session blocked, backing off');
       dropSession(s);
       infos.delete(keyOf(src));
@@ -365,6 +558,17 @@ async function playlist(base, src, want) {
   const r = await cdnFetch(src, q, variantUrl);
   const text = await r.text();
   if (!text.includes('#EXTM3U')) throw new Error('variant: ' + r.status);
+  // A fresh playlist carries fresh paths, so any earlier move no longer applies.
+  origins.set(keyOf(src) + '|' + q, dirOf(variantUrl));
+  moves.delete(keyOf(src) + '|' + q);
+  // What /events reports about the stream, read from the playlists the player gets.
+  const inf = master.split('\n').find((l) => l.startsWith('#EXT-X-STREAM-INF')) || '';
+  const num = (re) => Number((inf.match(re) || [])[1]) || null;
+  info.meta[q] = {
+    manifestUrl: masterUrl, bitrate: num(/BANDWIDTH=(\d+)/), fps: num(/FRAME-RATE=([\d.]+)/),
+    width: num(/RESOLUTION=(\d+)x/), height: num(/RESOLUTION=\d+x(\d+)/),
+    duration: text.split('\n').reduce((sum, l) => sum + (l.startsWith('#EXTINF:') ? parseFloat(l.slice(8)) || 0 : 0), 0),
+  };
   return rewritePlaylist(text, variantUrl, base, src, q);
 }
 
@@ -409,7 +613,8 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/play.m3u8' || url.pathname === '/stream.m3u8') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      const body = await playlist(base, src, q.get('q'));
+      // Without q (the plugin's fallback when /qualities failed) the best quality plays, not 360p.
+      const body = await playlist(base, src, q.get('q') || QUALITIES[QUALITIES.length - 1]);
       return send(res, 200, body, 'application/vnd.apple.mpegurl');
     }
     if (url.pathname === '/s') {
@@ -425,6 +630,7 @@ http.createServer(async (req, res) => {
       const t = q.get('t');
       const live = sessions.get(keyOf(src));
       if (live && up.ok && t && Number.isFinite(Number(t))) live.s.pos = Number(t);
+      if (live && up.ok) live.s.bytes = (live.s.bytes || 0) + (Number(up.headers.get('content-length')) || 0);
       const type = up.headers.get('content-type') || '';
       const isPlaylist = /mpegurl/i.test(type) || /\.m3u8(\?|$)/.test(target.pathname);
       if (up.ok && isPlaylist) {
@@ -445,9 +651,11 @@ http.createServer(async (req, res) => {
     }
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      // Answer right away: Lampa asks for this right before playback and has no patience.
+      // Only what Alloha really has for this episode, so no 4K where there is none. The resolve
+      // is cached per episode and the play.m3u8 that follows reuses it: no extra upstream calls.
+      const info = await iframeInfo(src);
       const out = {};
-      for (const label of QUALITIES) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
+      for (const label of QUALITIES) if (info.qualities[label]) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
     send(res, 404, 'not found');
