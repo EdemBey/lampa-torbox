@@ -13338,9 +13338,21 @@
               return a - b;
             });
             if (!nums.length) return filter_items.voice_note.push('');
-            var first = nums[0];
-            var last = nums[nums.length - 1];
-            filter_items.voice_note.push(nums.length === last - first + 1 ? first === last ? first + ' эп.' : first + '-' + last + ' эп.' : nums.length + ' эп.');
+            // 1-11, or with gaps: 1-5,7-10
+            var ranges = [];
+            var from = nums[0];
+            var to = nums[0];
+
+            for (var e = 1; e < nums.length; e++) {
+              if (nums[e] === to + 1) {
+                to = nums[e];
+                continue;
+              }
+              ranges.push(from === to ? '' + from : from + '-' + to);
+              from = to = nums[e];
+            }
+            ranges.push(from === to ? '' + from : from + '-' + to);
+            filter_items.voice_note.push(ranges.join(',') + ' эп.');
           });
         }
 
