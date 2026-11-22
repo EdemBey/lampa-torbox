@@ -22,6 +22,8 @@
 //12.11.2026 - HDrezka: hide b-prem_translator voices (setting to show them)
 //12.11.2026 - DDD: inline per-episode qualities for resolved playlists (HDrezka)
 //12.11.2026 - DDD: stable item keys and Lampa positions for per-episode resume
+//22.11.2026 - Alloha: real quality list per episode, 4K by default when Alloha has it
+//22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
     'use strict';
@@ -339,38 +341,11 @@
       if (have_positions) setDddHeader(first, 'X-DDD-Positions', JSON.stringify(positions));
     }
 
-    /**
-     * Ending music replacement for the external player (DDD): the player mutes
-     * the video on the ending segment and plays the music over it, so it needs
-     * the track and the segment list per playlist item.
-     */
-    function attachAudioOverlay(first, playlist) {
-      if (!first || !isExternalAndroidPlayer()) return;
-
-      var items = {};
-      var count = 0;
-
-      (playlist || []).forEach(function (item, index) {
-        if (!item || item.naruto_mal_id !== narutoEnding.malId || item.naruto_episode == 1) return;
-
-        items[String(index)] = {
-          music: narutoEnding.music(),
-          segments: narutoEnding.segments(item.naruto_mal_id, item.naruto_episode)
-        };
-        count++;
-      });
-
-      if (!count) return;
-
-      setDddHeader(first, 'X-DDD-Audio-Overlay', JSON.stringify(items));
-    }
-
     function startPlayer(first, playlist) {
       if (!first) return;
 
       first.continue_play = true;
       attachExternalQualities(first);
-      attachAudioOverlay(first, playlist && playlist.length ? playlist : [first]);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
@@ -411,168 +386,12 @@
       startPlayer(first, playlist);
     }
 
-    var narutoEnding = (function () {
-      var MAL_ID = 61469;
-      var MUSIC = '/api/player/ending-music/steel-ball-run-the-chain-v1.m4a';
-      var watching = false;
-      var state = null;
-      var pending = null;
-
-      function site() {
-        return ((Lampa.Storage.get('online_mod_narutobased_site', '') || '') + '').replace(/\/+$/, '') || 'https://anime.home.kopenkin.tech';
-      }
-
-      // Same window as the site: the replacement covers at most 90 seconds.
-      function endOf(segment) {
-        return segment.endTime - segment.startTime <= 93 ? segment.endTime : segment.startTime + 90;
-      }
-
-      function silence() {
-        if (!state) return;
-        if (!state.audio.paused) state.audio.pause();
-        if (state.muted && state.video) state.video.muted = false;
-        state.muted = false;
-      }
-
-      function stop() {
-        if (!state) return;
-        clearInterval(state.timer);
-        state.network.clear();
-        silence();
-        state.audio.removeAttribute('src');
-        state = null;
-      }
-
-      function loadSegments(video) {
-        var key = (video.currentSrc || video.src) + ':' + video.duration;
-        if (state.key === key) return;
-
-        var current = state;
-        current.key = key;
-        current.endings = [];
-
-        var url = narutoEnding.segments(MAL_ID, current.episode) + '&duration=' + encodeURIComponent(video.duration);
-        var options = { dataType: 'text' };
-        var done = function (text) {
-          if (state !== current || current.key !== key) return;
-          try {
-            var str = typeof text === 'string' ? text : JSON.stringify(text);
-            var json = JSON.parse(str.slice(str.indexOf('{'), str.lastIndexOf('}') + 1));
-            current.endings = (json.data || []).filter(function (segment) {
-              return segment.type === 'ed' && segment.endTime - segment.startTime >= 87;
-            });
-          } catch (e) {}
-        };
-
-        current.network.clear();
-        current.network.timeout(1000 * 20);
-        // skip-times sends no CORS headers: fall back to the quality proxy.
-        current.network.silent(url, done, function () {
-          var proxy = (Lampa.Storage.get('online_mod_narutobased_quality_proxy', 'https://r.jina.ai/') || '') + '';
-          if (!proxy || state !== current) return;
-          var proxied = proxy.indexOf('{url}') !== -1 ? proxy.replace('{url}', encodeURIComponent(url)) : proxy + encodeURIComponent(url);
-          current.network.silent(proxied, done, function () {}, null, options);
-        }, null, options);
-      }
-
-      function tick() {
-        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function') return;
-        var video = Lampa.PlayerVideo.video();
-
-        if (state.video && state.video !== video) silence();
-        state.video = video;
-
-        if (!video || !(video.duration > 0) || !isFinite(video.duration)) return silence();
-
-        loadSegments(video);
-
-        var audio = state.audio;
-        var time = video.currentTime;
-        var ending = state.endings.filter(function (segment) {
-          return time >= segment.startTime && time < endOf(segment);
-        })[0];
-        var offset = ending ? time - ending.startTime : -1;
-
-        if (!ending || state.failed || video.paused || video.seeking || video.ended || video.readyState < 3 || (audio.duration && offset >= audio.duration)) return silence();
-        // The user muted the video himself: keep the replacement silent too.
-        if (video.muted && !state.muted) return silence();
-        // Do not cut the original sound before the replacement can play.
-        if (!state.muted && audio.readyState < 2) return;
-
-        audio.volume = video.volume;
-        audio.playbackRate = video.playbackRate;
-        if (Math.abs(audio.currentTime - offset) > 0.3) audio.currentTime = offset;
-
-        video.muted = true;
-        state.muted = true;
-
-        if (audio.paused) {
-          var current = state;
-          var playing = audio.play();
-          if (playing && playing.catch) playing.catch(function () {
-            if (state !== current) return;
-            current.failed = true;
-            silence();
-          });
-        }
-      }
-
-      function start(data) {
-        if (!data || !data.naruto_mal_id) data = pending || data;
-        stop();
-        if (!data || data.naruto_mal_id !== MAL_ID || data.naruto_episode == 1 || isExternalAndroidPlayer()) return;
-        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function' || typeof Audio === 'undefined') return;
-
-        var audio = new Audio();
-        audio.preload = 'auto';
-        audio.src = narutoEnding.music();
-
-        var current = state = {
-          audio: audio,
-          episode: data.naruto_episode,
-          network: new Lampa.Reguest(),
-          endings: [],
-          key: '',
-          muted: false,
-          failed: false,
-          video: null
-        };
-
-        audio.addEventListener('error', function () {
-          if (state !== current) return;
-          current.failed = true;
-          silence();
-        });
-
-        current.timer = setInterval(tick, 100);
-      }
-
-      return {
-        malId: MAL_ID,
-        music: function () {
-          return site() + MUSIC;
-        },
-        segments: function (malId, episode) {
-          return site() + '/api/player/skip-times?malId=' + malId + '&episode=' + encodeURIComponent(episode);
-        },
-        watch: function () {
-          if (watching || !Lampa.Player || !Lampa.Player.listener) return;
-          watching = true;
-          Lampa.Player.listener.follow('start', start);
-          Lampa.Player.listener.follow('destroy', stop);
-        },
-        play: function (element) {
-          pending = { naruto_mal_id: element.malId, naruto_episode: element.episode };
-          narutoEnding.watch();
-          // Fallback: if Lampa does not fire 'start' for this item, start manually.
-          setTimeout(function () {
-            if (!state && pending && pending.naruto_mal_id === MAL_ID && pending.naruto_episode !== 1) {
-              start(pending);
-            }
-          }, 1500);
-        }
-      };
-    })();
+    /**
+     * Steel Ball Run (MAL 61469): the site's own player swaps the ending song
+     * (muted video + replacement track over the ED segment from skip-times).
+     * The mp4 Lampa plays still has the original song, so do the same here.
+     * Lampa's own player only: an external player gets just the URL.
+     */
 
 
     function startsWith(str, searchString) {
@@ -14170,7 +13989,7 @@
                 var media = translations[v_id];
                 filtred.push({
                   title: component.formatEpisodeTitle(s_num, e_num),
-                  quality: '360p ~ 1080p' + (media.quality ? ' / ' + media.quality : ''),
+                  quality: (media.uhd ? '360p ~ 2160p' : '360p ~ 1080p') + (media.quality ? ' / ' + media.quality : ''),
                   info: ' / ' + Lampa.Utils.shortText(voice, 50),
                   season: s_num,
                   episode: e_num,
@@ -14190,7 +14009,7 @@
                 var _media = qualities[quality];
                 filtred.push({
                   title: (_media.translation || select_title) + (_media.directors_cut ? ' (Режиссёрская версия)' : ''),
-                  quality: '360p ~ 1080p' + (_media.quality ? ' / ' + _media.quality : ''),
+                  quality: (_media.uhd ? '360p ~ 2160p' : '360p ~ 1080p') + (_media.quality ? ' / ' + _media.quality : ''),
                   info: '',
                   media: _media
                 });
@@ -14264,7 +14083,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
-                url: component.getDefaultQuality(element.qualitys, element.stream),
+                url: component.getDefaultQuality(element.qualitys, element.stream, '2160'),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
                 timeline: element.timeline,
@@ -14280,7 +14099,7 @@
                     var cell = {
                       url: function url(call) {
                         getStream(elem, function (elem) {
-                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
+                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, '2160');
                           cell.quality = component.renameQualityMap(elem.qualitys);
                           cell.subtitles = elem.subtitles;
                           call();
@@ -14384,6 +14203,384 @@
     alloha.hideSettings = function (body) {
       $('[data-component="online_mod_alloha"]', body).hide();
     };
+
+    // Turbo (obrut.show via onomovie). Uses the Alloha helper server: obrut hides its playlist
+    // behind a "confirm you are human" checkbox, which the user ticks once in a window served
+    // through the helper; the helper then keeps that approval and reads playlists itself.
+    function turbo(component, _object, config) {
+      var network = new Lampa.Reguest();
+      var extract = {
+        embed: '',
+        seasons: null,
+        movie: null
+      };
+      var object = _object;
+      var select_title = '';
+      var server = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/\/+$/, '');
+      var filter_items = {};
+      var choice = {
+        season: 0,
+        voice: 0,
+        voice_name: ''
+      };
+      var poll = null;
+
+      function getJson(url, ok, err) {
+        network.clear();
+        network.timeout(25000);
+        network["native"](url, function (res) {
+          if (typeof res === 'string') {
+            try {
+              res = JSON.parse(res);
+            } catch (e) {
+              res = null;
+            }
+          }
+          ok(res);
+        }, function (a, c) {
+          err(network.errorDecode(a, c));
+        }, false, {
+          dataType: 'text'
+        });
+      }
+
+      this.search = function (_object, kinopoisk_id) {
+        object = _object;
+        select_title = object.search || object.movie.title;
+        if (!server) return component.empty('Turbo работает через сервер Alloha: укажите его адрес в настройках Alloha');
+        var kp = parseInt(kinopoisk_id, 10) || 0;
+        var imdb = object.movie.imdb_id || '';
+        if (!kp && !imdb) return component.emptyForQuery(select_title);
+        var none = function () {
+          component.emptyForQuery(select_title);
+        };
+        var find = function (api, next) {
+          getJson('https://onomovie.ru/api/players?' + api, function (json) {
+            var p = (json && json.data || []).filter(function (x) {
+              return x.type === 'Turbo' && x.iframeUrl;
+            })[0];
+            p ? load(p.iframeUrl) : next();
+          }, component.empty.bind(component));
+        };
+        find(kp ? 'kinopoisk=' + kp : 'imdb=' + imdb, function () {
+          kp && imdb ? find('imdb=' + imdb, none) : none();
+        });
+      };
+
+      function load(embed) {
+        extract.embed = embed;
+        getJson(server + '/turbo/playlist?url=' + encodeURIComponent(embed), function (res) {
+          // No approval yet, or it expired: ask for the checkbox again instead of failing.
+          if (res && res.verify) return verify(embed);
+          if (!(res && res.file && res.file.length)) return component.emptyForQuery(select_title);
+          shape(res.file);
+          component.loading(false);
+          filter();
+          append(filtred());
+        }, component.empty.bind(component));
+      }
+
+      function verify(embed) {
+        component.loading(false);
+        var controller = Lampa.Controller.enabled().name;
+        var html = $('<div style="height:70vh"><iframe src="' + server + '/turbo/verify?url=' + encodeURIComponent(embed) + '" style="width:100%;height:100%;border:0;border-radius:.6em;background:#111"></iframe></div>');
+        var stop = function () {
+          clearInterval(poll);
+          poll = null;
+          Lampa.Modal.close();
+          Lampa.Controller.toggle(controller);
+        };
+        Lampa.Modal.open({
+          title: 'Turbo: поставьте галочку «Подтвердите, что вы человек»',
+          html: html,
+          size: 'large',
+          onBack: function onBack() {
+            stop();
+            component.empty('Turbo ждёт подтверждения: откройте балансер снова');
+          }
+        });
+        poll = setInterval(function () {
+          var net = new Lampa.Reguest();
+          net.timeout(10000);
+          net["native"](server + '/turbo/status', function (res) {
+            if (typeof res === 'string') {
+              try {
+                res = JSON.parse(res);
+              } catch (e) {
+                res = null;
+              }
+            }
+            if (!poll || !(res && res.approved)) return;
+            stop();
+            component.loading(true);
+            load(embed);
+          }, function () {}, false, {
+            dataType: 'text'
+          });
+        }, 2000);
+      }
+
+      // Series: seasons → episodes → voices. Films: a flat voice list, sometimes one level down.
+      function shape(file) {
+        var first = file[0] || {};
+        var node = (first.folder || [])[0] || {};
+        extract.seasons = null;
+        extract.movie = null;
+        if (!first.folder && first.file) extract.movie = file;else if (!node.folder) extract.movie = first.folder || [];else extract.seasons = file;
+      }
+
+      function episodeNum(ep, i) {
+        var m = String(ep.title || '').match(/(\d+)/);
+        return m ? parseInt(m[1], 10) : i + 1;
+      }
+
+      this.extendChoice = function (saved) {
+        Lampa.Arrays.extend(choice, saved, true);
+      };
+
+      this.reset = function () {
+        component.reset();
+        choice = {
+          season: 0,
+          voice: 0,
+          voice_name: ''
+        };
+        filter();
+        append(filtred());
+        component.saveChoice(choice);
+      };
+
+      this.filter = function (type, a, b) {
+        choice[a.stype] = b.index;
+        if (a.stype == 'voice') choice.voice_name = filter_items.voice[b.index];
+        component.reset();
+        filter();
+        append(filtred());
+        component.saveChoice(choice);
+      };
+
+      this.destroy = function () {
+        clearInterval(poll);
+        poll = null;
+        network.clear();
+        extract = null;
+      };
+
+      function filter() {
+        filter_items = {
+          season: [],
+          voice: [],
+          voice_note: []
+        };
+
+        if (extract.seasons) {
+          filter_items.season = extract.seasons.map(function (s, i) {
+            return String(s.title || '').replace(/^Season/i, Lampa.Lang.translate('torrent_serial_season')) || Lampa.Lang.translate('torrent_serial_season') + ' ' + (i + 1);
+          });
+          if (!filter_items.season[choice.season]) choice.season = 0;
+          var eps = {};
+          (extract.seasons[choice.season].folder || []).forEach(function (ep, i) {
+            var n = episodeNum(ep, i);
+            (ep.folder || []).forEach(function (v) {
+              if (filter_items.voice.indexOf(v.title) == -1) filter_items.voice.push(v.title);
+              (eps[v.title] = eps[v.title] || []).push(n);
+            });
+          });
+          // Same "(1-5,7-10 эп.)" note as Kodik.
+          filter_items.voice.forEach(function (name) {
+            var nums = (eps[name] || []).sort(function (a, b) {
+              return a - b;
+            });
+            var ranges = [];
+            var from = nums[0];
+            var to = nums[0];
+            for (var e = 1; e < nums.length; e++) {
+              if (nums[e] === to + 1) {
+                to = nums[e];
+                continue;
+              }
+              ranges.push(from === to ? '' + from : from + '-' + to);
+              from = to = nums[e];
+            }
+            if (nums.length) ranges.push(from === to ? '' + from : from + '-' + to);
+            filter_items.voice_note.push(ranges.length ? ranges.join(',') + ' эп.' : '');
+          });
+        }
+
+        if (!filter_items.voice[choice.voice]) choice.voice = 0;
+
+        if (choice.voice_name) {
+          var inx = filter_items.voice.indexOf(choice.voice_name);
+          if (inx == -1) choice.voice = 0;else if (inx !== choice.voice) choice.voice = inx;
+        }
+
+        component.filter(filter_items, choice);
+      }
+
+      function qualityLabels(file) {
+        return String(file || '').split(',').map(function (part) {
+          return (part.match(/^\s*\[([^\]]+)\]/) || [])[1];
+        }).filter(function (l) {
+          return l && !/auto/i.test(l);
+        });
+      }
+
+      function filtred() {
+        var filtred = [];
+
+        if (extract.seasons) {
+          var season = extract.seasons[choice.season];
+          var voice = filter_items.voice[choice.voice];
+          if (!season || !voice) return filtred;
+          (season.folder || []).forEach(function (ep, i) {
+            var media = (ep.folder || []).filter(function (v) {
+              return v.title === voice;
+            })[0];
+            if (!media) return;
+            var n = episodeNum(ep, i);
+            var labels = qualityLabels(media.file);
+            filtred.push({
+              title: component.formatEpisodeTitle(choice.season + 1, n),
+              quality: labels.length ? labels[labels.length - 1] : '',
+              info: ' / ' + Lampa.Utils.shortText(voice, 50),
+              season: choice.season + 1,
+              episode: n,
+              file: media.file
+            });
+          });
+        } else if (extract.movie) {
+          extract.movie.forEach(function (media) {
+            var labels = qualityLabels(media.file);
+            filtred.push({
+              title: media.title || select_title,
+              quality: labels.length ? labels[labels.length - 1] : '',
+              info: '',
+              file: media.file
+            });
+          });
+        }
+
+        return filtred;
+      }
+
+      // "[720p]url or mirror,[Auto]url" → quality map through the helper (it adds obrut's Referer).
+      function getStream(element, call, error) {
+        if (element.stream) return call(element);
+        var map = {};
+        var auto = '';
+        String(element.file || '').split(',').forEach(function (part) {
+          var m = part.match(/^\s*\[([^\]]+)\]\s*(\S+)/);
+          if (!m) return;
+          var url = server + '/turbo/stream?u=' + encodeURIComponent(m[2]);
+          if (/auto/i.test(m[1])) auto = url;else map[m[1]] = url;
+        });
+        var labels = Object.keys(map).sort(function (a, b) {
+          return parseInt(b, 10) - parseInt(a, 10);
+        });
+        element.stream = auto || labels.length && map[labels[0]] || '';
+        element.qualitys = labels.length ? map : false;
+        element.subtitles = false;
+        element.stream ? call(element) : error();
+      }
+
+      function append(items) {
+        component.reset();
+        var viewed = Lampa.Storage.cache('online_view', 5000, []);
+        var last_episode = component.getLastEpisode(items);
+        items.forEach(function (element) {
+          if (element.season) {
+            element.translate_episode_end = last_episode;
+            element.translate_voice = filter_items.voice[choice.voice];
+          }
+
+          var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
+          var view = Lampa.Timeline.view(hash);
+          var item = Lampa.Template.get('online_mod', element);
+          var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
+          element.timeline = view;
+          item.append(Lampa.Timeline.render(view));
+
+          if (Lampa.Timeline.details) {
+            item.find('.online__quality').append(Lampa.Timeline.details(view, ' / '));
+          }
+
+          if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+          item.on('hover:enter', function () {
+            if (element.loading) return;
+            if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+            element.loading = true;
+            getStream(element, function (element) {
+              element.loading = false;
+              var first = {
+                url: component.getDefaultQuality(element.qualitys, element.stream),
+                quality: component.renameQualityMap(element.qualitys),
+                subtitles: element.subtitles,
+                timeline: element.timeline,
+                title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
+              };
+
+              if (element.season && Lampa.Platform.version) {
+                var playlist = [];
+                items.forEach(function (elem) {
+                  if (elem == element) {
+                    playlist.push(first);
+                  } else {
+                    var cell = {
+                      url: function url(call) {
+                        getStream(elem, function (elem) {
+                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
+                          cell.quality = component.renameQualityMap(elem.qualitys);
+                          cell.subtitles = elem.subtitles;
+                          call();
+                        }, function () {
+                          cell.url = '';
+                          call();
+                        });
+                      },
+                      timeline: elem.timeline,
+                      title: elem.title
+                    };
+                    playlist.push(cell);
+                  }
+                });
+                playWithoutPreroll(first, playlist);
+              } else {
+                playWithoutPreroll(first, [first]);
+              }
+
+              if (viewed.indexOf(hash_file) == -1) {
+                viewed.push(hash_file);
+                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                Lampa.Storage.set('online_view', viewed);
+              }
+            }, function () {
+              element.loading = false;
+              Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+            });
+          });
+          component.append(item);
+          component.contextmenu({
+            item: item,
+            view: view,
+            viewed: viewed,
+            hash_file: hash_file,
+            element: element,
+            file: function file(call) {
+              getStream(element, function (element) {
+                call({
+                  file: element.stream,
+                  quality: element.qualitys
+                });
+              }, function () {
+                Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+              });
+            }
+          });
+        });
+        component.start(true);
+      }
+    }
+
 
     function kinopub(component, _object, config) {
       var network = new Lampa.Reguest();
@@ -15784,8 +15981,6 @@
           naruto_episode: element.episode
         };
 
-        narutoEnding.play(element);
-
         if (external) {
           var dddQualities = [{ name: 'Auto', url: autoUrl }];
           var used = {};
@@ -15850,9 +16045,7 @@
                 timeline: elem.timeline,
                 title: elem.title,
                 slug: elem.slug,
-                language: elem.language,
-                naruto_mal_id: elem.malId,
-                naruto_episode: elem.episode
+                language: elem.language
               });
               return;
             }
@@ -16422,6 +16615,15 @@
       name: 'alloha',
       title: 'Alloha',
       module: alloha,
+      config: {},
+      search: false,
+      kp: true,
+      imdb: true,
+      disabled: false
+    }, {
+      name: 'turbo',
+      title: 'Turbo',
+      module: turbo,
       config: {},
       search: false,
       kp: true,
@@ -17393,7 +17595,8 @@
         }
       };
 
-      this.getDefaultQuality = function (qualityMap, defValue) {
+      // unsetDefault: what to prefer while the user has never picked a quality in the settings.
+      this.getDefaultQuality = function (qualityMap, defValue, unsetDefault) {
         {
           var needHackHlsLink = function needHackHlsLink(link) {
             return link && endsWith(link, '.m3u8') && link.lastIndexOf('?') <= link.lastIndexOf('/');
@@ -17416,7 +17619,7 @@
           var preferably = forcedQuality;
 
           if (!preferably) {
-            preferably = Lampa.Storage.get('video_quality_default', '1080') + 'p';
+            preferably = Lampa.Storage.get('video_quality_default', unsetDefault || '1080') + 'p';
             if (preferably === '1080p') preferably = '1080p Ultra';
           }
 
