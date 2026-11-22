@@ -13,14 +13,10 @@
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 300"><rect width="200" height="300" fill="#26282b"/>' +
     '<rect x="45" y="95" width="110" height="110" rx="18" fill="none" stroke="#fff" stroke-width="8"/>' +
     '<g fill="#fff"><circle cx="75" cy="125" r="10"/><circle cx="100" cy="150" r="10"/><circle cx="125" cy="175" r="10"/></g></svg>');
-  var YEAR = new Date().getFullYear();
-  // yani seasons are quarters: 1 winter (Jan–Mar) … 4 autumn (Oct–Dec).
-  var SEASON = Math.floor(new Date().getMonth() / 3) + 1;
-  var SEASON_NAME = ['зимнего', 'весеннего', 'летнего', 'осеннего'][SEASON - 1];
   var SECTIONS = [
     { title: 'Онгоинги', q: 'status=ongoing&sort=views&sort_forward=false' },
     { title: 'Случайное', q: 'sort=random', random: true },
-    { title: 'Аниме ' + SEASON_NAME + ' сезона', q: 'season=' + SEASON + '&from_year=' + YEAR + '&to_year=' + YEAR + '&sort=views&sort_forward=false' },
+    { title: 'Аниме сезона', feed: true },
     { title: 'Популярное', q: 'sort=rating_counters&sort_forward=false' },
     { title: 'Топ 100', q: 'sort=top&sort_forward=true', max: 100 },
     { title: 'Фильмы', q: 'types=movie&sort=top&sort_forward=true' }
@@ -403,6 +399,18 @@
     category: function (params, oncomplete, onerror) {
       var parts = SECTIONS.map(function (s) {
         return function (call) {
+          // Current season comes from yani's own home feed: same titles, switches season by itself.
+          if (s.feed) return get('/feed', function (feed) {
+            var top = feed && feed.top_carousel;
+            if (!top || !top.items || !top.items.length) return call();
+            var year = 2000 + top.year;
+            var q = 'season=' + top.season + '&from_year=' + year + '&to_year=' + year + '&sort=views&sort_forward=false';
+            enrich(top.items.map(toCard), function (cards) {
+              call({ title: s.title, url: q, source: 'yani', results: cards, total_pages: 2 });
+            });
+          }, function () {
+            call();
+          });
           get('/anime?limit=' + LIMIT + '&' + s.q, function (list) {
             enrich(list.map(toCard), function (cards) {
               if (s.random) cards.unshift(randomCard());
