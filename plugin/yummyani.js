@@ -255,22 +255,55 @@
       })).map(norm).filter(function (t) {
         return t.length >= 3;
       });
-      var sameName = function (a) {
-        var t = norm(a.title);
-        return t.length >= 3 && names.some(function (n) {
-          return n === t || n.indexOf(t) === 0 || t.indexOf(n) === 0;
+      // 2 = same name, 1 = one name starts the other ("Title" vs "Title | Часть 2"), 0 = other anime.
+      var score = function (titles) {
+        var best = 0;
+        titles.forEach(function (title) {
+          var t = norm(title);
+          if (t.length < 3) return;
+          names.forEach(function (n) {
+            if (n === t) best = 2;else if (best < 1 && (n.indexOf(t) === 0 || t.indexOf(n) === 0)) best = 1;
+          });
         });
+        return best;
       };
 
       (function next(i) {
         if (i >= queries.length) return done(null);
         get('/search?limit=10&q=' + encodeURIComponent(queries[i]), function (list) {
-          var near = list.filter(function (a) { return Math.abs((a.year || 0) - year) <= 1 && sameName(a); });
-          // "Title" beats "Title | Часть 2": exact name first, then same type and year.
-          var exact = near.filter(function (a) { return names.indexOf(norm(a.title)) >= 0; });
-          var pool = exact.length ? exact : near;
-          var hit = pool.filter(function (a) { return (a.type && a.type.alias !== 'movie') === tv && a.year === year; })[0] || pool[0];
-          hit ? done(hit.anime_url) : next(i + 1);
+          var near = list.filter(function (a) {
+            return Math.abs((a.year || 0) - year) <= 1;
+          }).slice(0, 5);
+          if (!near.length) return next(i + 1);
+          var scores = [];
+          var left = near.length;
+
+          var pick = function () {
+            var top = Math.max.apply(null, scores);
+            if (!top) return next(i + 1);
+            var pool = near.filter(function (a, k) {
+              return scores[k] === top;
+            });
+            var hit = pool.filter(function (a) {
+              return (a.type && a.type.alias !== 'movie') === tv && a.year === year;
+            })[0] || pool[0];
+            done(hit.anime_url);
+          };
+
+          // Search results carry only the Russian title; other languages live in the anime record.
+          near.forEach(function (a, k) {
+            var own = score([a.title]);
+            var settle = function (value) {
+              scores[k] = value;
+              if (--left === 0) pick();
+            };
+            if (own === 2) return settle(2);
+            get('/anime/' + a.anime_url + '?need_videos=false', function (full) {
+              settle(Math.max(own, score([full.title].concat(full.other_titles || []))));
+            }, function () {
+              settle(own);
+            });
+          });
         }, function () {
           next(i + 1);
         });
