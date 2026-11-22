@@ -339,11 +339,38 @@
       if (have_positions) setDddHeader(first, 'X-DDD-Positions', JSON.stringify(positions));
     }
 
+    /**
+     * Ending music replacement for the external player (DDD): the player mutes
+     * the video on the ending segment and plays the music over it, so it needs
+     * the track and the segment list per playlist item.
+     */
+    function attachAudioOverlay(first, playlist) {
+      if (!first || !isExternalAndroidPlayer()) return;
+
+      var items = {};
+      var count = 0;
+
+      (playlist || []).forEach(function (item, index) {
+        if (!item || item.naruto_mal_id !== narutoEnding.malId || item.naruto_episode == 1) return;
+
+        items[String(index)] = {
+          music: narutoEnding.music(),
+          segments: narutoEnding.segments(item.naruto_mal_id, item.naruto_episode)
+        };
+        count++;
+      });
+
+      if (!count) return;
+
+      setDddHeader(first, 'X-DDD-Audio-Overlay', JSON.stringify(items));
+    }
+
     function startPlayer(first, playlist) {
       if (!first) return;
 
       first.continue_play = true;
       attachExternalQualities(first);
+      attachAudioOverlay(first, playlist && playlist.length ? playlist : [first]);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
@@ -383,6 +410,170 @@
 
       startPlayer(first, playlist);
     }
+
+    var narutoEnding = (function () {
+      var MAL_ID = 61469;
+      var MUSIC = '/api/player/ending-music/steel-ball-run-the-chain-v1.m4a';
+      var watching = false;
+      var state = null;
+      var pending = null;
+
+      function site() {
+        return ((Lampa.Storage.get('online_mod_narutobased_site', '') || '') + '').replace(/\/+$/, '') || 'https://anime.home.kopenkin.tech';
+      }
+
+      // Same window as the site: the replacement covers at most 90 seconds.
+      function endOf(segment) {
+        return segment.endTime - segment.startTime <= 93 ? segment.endTime : segment.startTime + 90;
+      }
+
+      function silence() {
+        if (!state) return;
+        if (!state.audio.paused) state.audio.pause();
+        if (state.muted && state.video) state.video.muted = false;
+        state.muted = false;
+      }
+
+      function stop() {
+        if (!state) return;
+        clearInterval(state.timer);
+        state.network.clear();
+        silence();
+        state.audio.removeAttribute('src');
+        state = null;
+      }
+
+      function loadSegments(video) {
+        var key = (video.currentSrc || video.src) + ':' + video.duration;
+        if (state.key === key) return;
+
+        var current = state;
+        current.key = key;
+        current.endings = [];
+
+        var url = narutoEnding.segments(MAL_ID, current.episode) + '&duration=' + encodeURIComponent(video.duration);
+        var options = { dataType: 'text' };
+        var done = function (text) {
+          if (state !== current || current.key !== key) return;
+          try {
+            var str = typeof text === 'string' ? text : JSON.stringify(text);
+            var json = JSON.parse(str.slice(str.indexOf('{'), str.lastIndexOf('}') + 1));
+            current.endings = (json.data || []).filter(function (segment) {
+              return segment.type === 'ed' && segment.endTime - segment.startTime >= 87;
+            });
+          } catch (e) {}
+        };
+
+        current.network.clear();
+        current.network.timeout(1000 * 20);
+        // skip-times sends no CORS headers: fall back to the quality proxy.
+        current.network.silent(url, done, function () {
+          var proxy = (Lampa.Storage.get('online_mod_narutobased_quality_proxy', 'https://r.jina.ai/') || '') + '';
+          if (!proxy || state !== current) return;
+          var proxied = proxy.indexOf('{url}') !== -1 ? proxy.replace('{url}', encodeURIComponent(url)) : proxy + encodeURIComponent(url);
+          current.network.silent(proxied, done, function () {}, null, options);
+        }, null, options);
+      }
+
+      function tick() {
+        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function') return;
+        var video = Lampa.PlayerVideo.video();
+
+        if (state.video && state.video !== video) silence();
+        state.video = video;
+
+        if (!video || !(video.duration > 0) || !isFinite(video.duration)) return silence();
+
+        loadSegments(video);
+
+        var audio = state.audio;
+        var time = video.currentTime;
+        var ending = state.endings.filter(function (segment) {
+          return time >= segment.startTime && time < endOf(segment);
+        })[0];
+        var offset = ending ? time - ending.startTime : -1;
+
+        if (!ending || state.failed || video.paused || video.seeking || video.ended || video.readyState < 3 || (audio.duration && offset >= audio.duration)) return silence();
+        // The user muted the video himself: keep the replacement silent too.
+        if (video.muted && !state.muted) return silence();
+        // Do not cut the original sound before the replacement can play.
+        if (!state.muted && audio.readyState < 2) return;
+
+        audio.volume = video.volume;
+        audio.playbackRate = video.playbackRate;
+        if (Math.abs(audio.currentTime - offset) > 0.3) audio.currentTime = offset;
+
+        video.muted = true;
+        state.muted = true;
+
+        if (audio.paused) {
+          var current = state;
+          var playing = audio.play();
+          if (playing && playing.catch) playing.catch(function () {
+            if (state !== current) return;
+            current.failed = true;
+            silence();
+          });
+        }
+      }
+
+      function start(data) {
+        if (!data || !data.naruto_mal_id) data = pending || data;
+        stop();
+        if (!data || data.naruto_mal_id !== MAL_ID || data.naruto_episode == 1 || isExternalAndroidPlayer()) return;
+        if (!Lampa.PlayerVideo || typeof Lampa.PlayerVideo.video !== 'function' || typeof Audio === 'undefined') return;
+
+        var audio = new Audio();
+        audio.preload = 'auto';
+        audio.src = narutoEnding.music();
+
+        var current = state = {
+          audio: audio,
+          episode: data.naruto_episode,
+          network: new Lampa.Reguest(),
+          endings: [],
+          key: '',
+          muted: false,
+          failed: false,
+          video: null
+        };
+
+        audio.addEventListener('error', function () {
+          if (state !== current) return;
+          current.failed = true;
+          silence();
+        });
+
+        current.timer = setInterval(tick, 100);
+      }
+
+      return {
+        malId: MAL_ID,
+        music: function () {
+          return site() + MUSIC;
+        },
+        segments: function (malId, episode) {
+          return site() + '/api/player/skip-times?malId=' + malId + '&episode=' + encodeURIComponent(episode);
+        },
+        watch: function () {
+          if (watching || !Lampa.Player || !Lampa.Player.listener) return;
+          watching = true;
+          Lampa.Player.listener.follow('start', start);
+          Lampa.Player.listener.follow('destroy', stop);
+        },
+        play: function (element) {
+          pending = { naruto_mal_id: element.malId, naruto_episode: element.episode };
+          narutoEnding.watch();
+          // Fallback: if Lampa does not fire 'start' for this item, start manually.
+          setTimeout(function () {
+            if (!state && pending && pending.naruto_mal_id === MAL_ID && pending.naruto_episode !== 1) {
+              start(pending);
+            }
+          }, 1500);
+        }
+      };
+    })();
+
 
     function startsWith(str, searchString) {
       return str.lastIndexOf(searchString, 0) === 0;
@@ -15142,6 +15333,7 @@
             info: ' / ' + languageLabel(language),
             season: 0,
             episode: episode.episodeNumber,
+            malId: episode.malId,
             trackingKey: episode.trackingKey || episode.slug,
             slug: episode.slug,
             language: language,
@@ -15579,8 +15771,12 @@
           timeline: element.timeline,
           title: element.title,
           slug: element.slug,
-          language: element.language
+          language: element.language,
+          naruto_mal_id: element.malId,
+          naruto_episode: element.episode
         };
+
+        narutoEnding.play(element);
 
         if (external) {
           var dddQualities = [{ name: 'Auto', url: autoUrl }];
@@ -15620,7 +15816,9 @@
             timeline: first.timeline,
             title: first.title,
             slug: first.slug,
-            language: first.language
+            language: first.language,
+            naruto_mal_id: first.naruto_mal_id,
+            naruto_episode: first.naruto_episode
           });
         };
 
@@ -15644,7 +15842,9 @@
                 timeline: elem.timeline,
                 title: elem.title,
                 slug: elem.slug,
-                language: elem.language
+                language: elem.language,
+                naruto_mal_id: elem.malId,
+                naruto_episode: elem.episode
               });
               return;
             }
@@ -15667,7 +15867,9 @@
               timeline: elem.timeline,
               title: elem.title,
               slug: elem.slug,
-              language: elem.language
+              language: elem.language,
+              naruto_mal_id: elem.malId,
+              naruto_episode: elem.episode
             };
 
             playlist.push(cell);
@@ -15708,6 +15910,7 @@
             info: ' / ' + languageLabel(language),
             season: season_number,
             episode: episode.episodeNumber,
+            malId: episode.malId,
             trackingKey: episode.trackingKey || episode.slug,
             slug: episode.slug,
             language: language,
