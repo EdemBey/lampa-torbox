@@ -13880,12 +13880,18 @@
 
       this.filter = function (type, a, b) {
         choice[a.stype] = b.index;
-        if (a.stype == 'voice') choice.voice_name = filter_items.voice[b.index];
+        if (a.stype == 'voice') {
+          choice.voice_name = filter_items.voice[b.index];
+          // A new voice asks for its track again.
+          choice.audio = 0;
+          choice.audio_name = '';
+        }
         if (a.stype == 'audio') choice.audio_name = filter_items.audio[b.index];
         component.reset();
         filter();
         append(filtred());
         probeAudios();
+        askAudio();
         component.saveChoice(choice);
       };
       /**
@@ -14049,6 +14055,44 @@
 
         return filtred;
       }
+      // The "Дорожка" filter row is easy to miss, so a voice with several tracks asks once, until a track is picked.
+      function askAudio() {
+        if (choice.audio_name || !filter_items.audio || filter_items.audio.length < 2) return;
+        // Waits for the filter menu that triggered this to finish closing.
+        setTimeout(function () {
+          if (!extract || choice.audio_name || !filter_items.audio || filter_items.audio.length < 2) return;
+          // The track list can arrive late: not over the player, and not on a screen the user moved on to.
+          if (!component.inActivity() || Lampa.Activity.active().activity !== component.activity) return;
+          if (Lampa.Player && typeof Lampa.Player.opened === 'function' && Lampa.Player.opened()) return;
+          var enabled = Lampa.Controller.enabled().name;
+          if (enabled === 'select' || enabled === 'filter') enabled = 'content';
+          var pick = function pick(index) {
+            choice.audio = index;
+            choice.audio_name = filter_items.audio[index];
+            component.reset();
+            filter();
+            append(filtred());
+            component.saveChoice(choice);
+            Lampa.Controller.toggle(enabled);
+          };
+          Lampa.Select.show({
+            title: Lampa.Lang.translate('online_mod_audio_track') + ': ' + filter_items.voice[choice.voice],
+            items: filter_items.audio.map(function (title, i) {
+              return {
+                title: title,
+                selected: i == choice.audio,
+                index: i
+              };
+            }),
+            onBack: function onBack() {
+              pick(choice.audio);
+            },
+            onSelect: function onSelect(a) {
+              pick(a.index);
+            }
+          });
+        }, 300);
+      }
       // A standalone voice file can carry several audio tracks; the helper lists them once per voice.
       function probeAudios() {
         if (!extract || !extract.pl || extract.pl.type !== 'serial') return;
@@ -14090,6 +14134,7 @@
             filter();
             // The list already plays the default track; it is rebuilt (losing focus) only for a remembered other one.
             if (choice.audio) append(filtred());
+            askAudio();
           }
         }, function () {
           if (extract !== currentExtract || !extract || !extract.audios) return;
