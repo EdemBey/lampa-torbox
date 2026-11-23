@@ -9,6 +9,8 @@ import { Readable, pipeline } from 'node:stream';
 
 const TIMEOUT = 20000;
 const PARENT = 'https://onomovie.ru/';
+// cfetch drops a header given as ''; Chrome client hints would contradict the user's own User-Agent.
+const NO_HINTS = { 'Sec-Ch-Ua': '', 'Sec-Ch-Ua-Mobile': '', 'Sec-Ch-Ua-Platform': '' };
 
 // One user per helper: the obrut host, the approval cookies and the browser that earned them.
 const state = { host: '', cookies: new Map(), ua: '', approved: false };
@@ -100,9 +102,9 @@ function slim(list) {
   });
 }
 
-async function playlist(embed) {
-  const up = await fetch(embed, {
-    headers: { Referer: PARENT, 'User-Agent': state.ua || 'Mozilla/5.0', Cookie: cookieHeader('') },
+async function playlist(embed, get = fetch) {
+  const up = await get(embed, {
+    headers: { Referer: PARENT, 'User-Agent': state.ua || 'Mozilla/5.0', Cookie: cookieHeader(''), ...NO_HINTS },
     signal: AbortSignal.timeout(TIMEOUT),
   });
   rememberCookies(up.headers);
@@ -122,7 +124,7 @@ const json = (res, status, body) => {
 };
 
 // Returns true when the request was a Turbo one.
-export async function handleTurbo(req, res, url, base) {
+export async function handleTurbo(req, res, url, base, get = fetch) {
   try {
     const q = url.searchParams;
     const path = url.pathname;
@@ -141,7 +143,7 @@ export async function handleTurbo(req, res, url, base) {
         res.end();
         return true;
       }
-      json(res, 200, await playlist(embed.href));
+      json(res, 200, await playlist(embed.href, get));
       return true;
     }
 
@@ -156,9 +158,9 @@ export async function handleTurbo(req, res, url, base) {
       try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad stream url' }); return true; }
       if (target.protocol !== 'https:' || !isTurboHost(target.hostname)) { json(res, 400, { error: 'not a turbo stream' }); return true; }
       // The stream link answers only with obrut's own Referer and hands back a public CDN url.
-      const up = await fetch(target.href, {
+      const up = await get(target.href, {
         redirect: 'manual',
-        headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0' },
+        headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
         signal: AbortSignal.timeout(TIMEOUT),
       });
       const location = up.headers.get('location');
@@ -167,18 +169,20 @@ export async function handleTurbo(req, res, url, base) {
         const cdnHost = new URL(location, target.href).hostname;
         if (!isCdnHost(cdnHost)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
         const plUrl = new URL(location, target.href).href;
-        let r = await fetch(plUrl, {
+        let fetchedUrl = plUrl;
+        let r = await get(plUrl, {
           redirect: 'manual',
-          headers: { 'User-Agent': state.ua || 'Mozilla/5.0' },
+          headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
           signal: AbortSignal.timeout(TIMEOUT),
         });
         if (r.status >= 300 && r.status < 400) {
           const loc2 = r.headers.get('location');
           await r.body?.cancel();
           if (!loc2 || !isCdnHost(new URL(loc2, plUrl).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-          r = await fetch(new URL(loc2, plUrl).href, {
+          fetchedUrl = new URL(loc2, plUrl).href;
+          r = await get(fetchedUrl, {
             redirect: 'manual',
-            headers: { 'User-Agent': state.ua || 'Mozilla/5.0' },
+            headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
             signal: AbortSignal.timeout(TIMEOUT),
           });
         }
@@ -190,7 +194,7 @@ export async function handleTurbo(req, res, url, base) {
         const body = await r.text();
         if (body.includes('#EXTM3U')) {
           res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' });
-          res.end(rewritePlaylist(body, r.url, base));
+          res.end(rewritePlaylist(body, fetchedUrl, base));
         } else json(res, 502, { error: 'playlist: ' + r.status });
       } else json(res, 502, { error: 'stream: ' + up.status });
       return true;
@@ -200,18 +204,20 @@ export async function handleTurbo(req, res, url, base) {
       let target;
       try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad hls url' }); return true; }
       if (target.protocol !== 'https:' || !isCdnHost(target.hostname)) { json(res, 400, { error: 'not a superdupercdn url' }); return true; }
-      let r = await fetch(target.href, {
+      let fetchedUrl = target.href;
+      let r = await get(target.href, {
         redirect: 'manual',
-        headers: { 'User-Agent': state.ua || 'Mozilla/5.0' },
+        headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
         signal: AbortSignal.timeout(TIMEOUT),
       });
       if (r.status >= 300 && r.status < 400) {
         const loc = r.headers.get('location');
         await r.body?.cancel();
         if (!loc || !isCdnHost(new URL(loc, target.href).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        r = await fetch(new URL(loc, target.href).href, {
+        fetchedUrl = new URL(loc, target.href).href;
+        r = await get(fetchedUrl, {
           redirect: 'manual',
-          headers: { 'User-Agent': state.ua || 'Mozilla/5.0' },
+          headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
           signal: AbortSignal.timeout(TIMEOUT),
         });
       }
@@ -223,7 +229,7 @@ export async function handleTurbo(req, res, url, base) {
       const body = await r.text();
       if (body.includes('#EXTM3U')) {
         res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' });
-        res.end(rewritePlaylist(body, r.url, base));
+        res.end(rewritePlaylist(body, fetchedUrl, base));
       } else json(res, 502, { error: 'playlist: ' + r.status });
       return true;
     }
@@ -232,14 +238,14 @@ export async function handleTurbo(req, res, url, base) {
       let target;
       try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad seg url' }); return true; }
       if (target.protocol !== 'https:' || !isCdnHost(target.hostname)) { json(res, 400, { error: 'not a superdupercdn url' }); return true; }
-      const headers = { 'User-Agent': state.ua || 'Mozilla/5.0' };
+      const headers = { 'User-Agent': state.ua || 'Mozilla/5.0', 'Accept-Encoding': '', ...NO_HINTS };
       if (req.headers.range) headers.Range = req.headers.range;
-      let up = await fetch(target.href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
+      let up = await get(target.href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
       if (up.status >= 300 && up.status < 400) {
         const loc = up.headers.get('location');
         await up.body?.cancel();
         if (!loc || !isCdnHost(new URL(loc, target.href).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        up = await fetch(new URL(loc, target.href).href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
+        up = await get(new URL(loc, target.href).href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
       }
       if (res.destroyed) { await up.body?.cancel(); return true; }
       const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': up.headers.get('content-type') || 'video/mp2t' };
@@ -262,6 +268,7 @@ export async function handleTurbo(req, res, url, base) {
         'Accept-Language': req.headers['accept-language'] || 'ru',
         Cookie: cookieHeader(req.headers.cookie),
         Referer: path.startsWith('/embed/') ? PARENT : 'https://' + state.host + '/',
+        ...NO_HINTS,
       };
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
       if (req.method === 'POST') headers.Origin = 'https://' + state.host;
@@ -278,7 +285,7 @@ export async function handleTurbo(req, res, url, base) {
         req.on('end', () => { if (!overflow) ok(Buffer.concat(parts)); });
       }) : undefined;
       if (body === null) { json(res, 413, { error: 'body too large' }); return true; }
-      const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
+      const up = await get(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
       rememberCookies(up.headers);
       const buf = Buffer.from(await up.arrayBuffer());
       // The player itself came back: whatever cookies made that work are the approval.
