@@ -34,7 +34,11 @@ stop_tunnel() {
 }
 
 if [ -f /opt/wireproxy.conf ]; then
-  export NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:40000
+  # Turbo's CDN stalls after ~16 KB over WARP and its links are bound to the IP that asked obrut,
+  # so the whole Turbo chain (obrut + CDN) goes out directly, like it does from a home machine.
+  # Leading dots are required: Node's undici only matches an exact host or a "." suffix, so a bare
+  # "obrut.show" does not cover cdn-xxxx.obrut.show.
+  export NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:40000 NO_PROXY=.obrut.show,.superdupercdn.com no_proxy=.obrut.show,.superdupercdn.com
 
   # Alloha only hands out usable stream tokens to residential-looking IPs. The tunnel also
   # wedges now and then without exiting — DNS inside it times out and every request fails —
