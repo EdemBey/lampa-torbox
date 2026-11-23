@@ -14562,7 +14562,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
-                url: component.getDefaultQuality(element.qualitys, element.stream),
+                url: component.getDefaultQuality(element.qualitys, element.stream, undefined, true),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
                 timeline: element.timeline,
@@ -14578,7 +14578,7 @@
                     var cell = {
                       url: function url(call) {
                         getStream(elem, function (elem) {
-                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
+                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, undefined, true);
                           cell.quality = component.renameQualityMap(elem.qualitys);
                           cell.subtitles = elem.subtitles;
                           call();
@@ -17645,8 +17645,9 @@
       };
 
       // unsetDefault: what to prefer while the user has never picked a quality in the settings.
-      this.getDefaultQuality = function (qualityMap, defValue, unsetDefault) {
-        {
+      // keepLinks: skip the "?" hack below; Turbo's CDN edge stalls on a trailing "?".
+      this.getDefaultQuality = function (qualityMap, defValue, unsetDefault, keepLinks) {
+        if (!keepLinks) {
           var needHackHlsLink = function needHackHlsLink(link) {
             return link && endsWith(link, '.m3u8') && link.lastIndexOf('?') <= link.lastIndexOf('/');
           };
