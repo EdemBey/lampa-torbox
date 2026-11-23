@@ -97,7 +97,7 @@ export function episodeKey(src) {
 // An unknown or missing label falls back to the default track.
 // shortcut: two unnamed tracks of one language ("(English) 10" and "(English) 11") can swap after a
 // renumber; pick by order among same-bare labels if a voice like that shows up.
-const bareLabel = (s) => String(s || '').replace(/\s+\d+$/, '');
+export const bareLabel = (s) => String(s || '').replace(/\s+\d+$/, '');
 export function sourceFor(info, src) {
   const sources = (info && Array.isArray(info.sources)) ? info.sources : [];
   let raw = null;

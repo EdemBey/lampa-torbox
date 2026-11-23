@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
-import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
+import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
@@ -674,6 +674,23 @@ http.createServer(async (req, res) => {
       // This costs the /bnsi of the episode asked about; only playback of that same episode reuses it.
       const info = await iframeInfo(src);
       return send(res, 200, JSON.stringify(info.sources.map((x) => ({ label: x.label, audioId: x.audioId, default: x.default }))), 'application/json; charset=utf-8');
+    }
+    if (url.pathname === '/voiceovers') {
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      // For an external player (DDD), which cannot ask the plugin: every track of this episode as
+      // a ready stream with its own quality list. It asks when the episode starts, so the resolve
+      // is the one playback needs anyway. `id` survives Alloha renumbering a track between episodes.
+      const info = await iframeInfo(src);
+      const chosen = sourceFor(info, src);
+      const bare = src.replace(/&audio=[^&]*/g, '');
+      const voiceovers = info.sources.filter((x) => x.label).map((x) => {
+        const s = encodeURIComponent(bare + '&audio=' + encodeURIComponent(x.label));
+        return {
+          id: bareLabel(x.label), name: x.label, selected: x === chosen, url: `${base}/stream.m3u8?url=${s}`,
+          qualities: QUALITIES.filter((label) => x.qualities[label]).reverse().map((label) => ({ name: label + 'p', url: `${base}/play.m3u8?q=${label}&url=${s}` })),
+        };
+      });
+      return send(res, 200, JSON.stringify({ voiceovers }), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/subs') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
