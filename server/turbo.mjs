@@ -160,9 +160,10 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
       try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad stream url' }); return true; }
       if (target.protocol !== 'https:' || !isTurboHost(target.hostname)) { json(res, 400, { error: 'not a turbo stream' }); return true; }
       // The stream link answers only with obrut's own Referer and hands back a public CDN url.
-      const up = await get(target.href, {
+      // obrut itself answers 404 to curl-impersonate (like the checkbox POST); only the CDN goes through cfetch.
+      const up = await fetch(target.href, {
         redirect: 'manual',
-        headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
+        headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0' },
         signal: AbortSignal.timeout(TIMEOUT),
       });
       const location = up.headers.get('location');
