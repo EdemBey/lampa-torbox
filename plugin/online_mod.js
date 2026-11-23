@@ -25,6 +25,7 @@
 //22.11.2026 - Alloha: real quality list per episode, 4K by default when Alloha has it
 //23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) in a separate "Дорожка" filter
 //23.11.2026 - Alloha: subtitles (all tracks Alloha lists for the file) in the player
+//23.11.2026 - Alloha: switch the voice's inner tracks from the player's audio track menu
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -13834,7 +13835,8 @@
             iframe: iframe,
             pl: pl && pl.all ? pl : {},
             audios: {},
-            subs: {}
+            subs: {},
+            tracks: {}
           };
 
           if (pl && pl.all && Object.keys(pl.all).length) {
@@ -13914,7 +13916,8 @@
           iframe: url,
           pl: {},
           audios: {},
-          subs: {}
+          subs: {},
+          tracks: {}
         };
 
         if (pl && pl.all && Object.keys(pl.all).length) {
@@ -13996,6 +13999,10 @@
         if (!filter_items.audio[choice.audio]) choice.audio = 0;
         if (choice.audio_name) {
           var a_inx = filter_items.audio.indexOf(choice.audio_name);
+          // A track picked in the player may carry another episode's number ("(English) 9" vs "10").
+          for (var j = 0; j < filter_items.audio.length && a_inx == -1; j++) {
+            if (bareLabel(filter_items.audio[j]) === bareLabel(choice.audio_name)) a_inx = j;
+          }
           choice.audio = a_inx != -1 ? a_inx : 0;
         }
 
@@ -14030,7 +14037,8 @@
                   episode: e_num,
                   media: media,
                   // The helper picks the track by label: Alloha renumbers tracks from episode to episode.
-                  audio: filter_items.audio[choice.audio]
+                  // A voice without the "Дорожка" row keeps a track picked in the player.
+                  audio: filter_items.audio.length ? filter_items.audio[choice.audio] : choice.audio_name || undefined
                 });
               }
             }
@@ -14183,29 +14191,107 @@
       }
       // Subtitles are listed once per voice file, from the episode the user starts: that resolve is
       // the one playback needs anyway. Other episodes get the same labels, loaded when they play.
-      function loadSubs(element, done) {
+      function loadList(path, store, element, done) {
         var key = element.media && element.media.id_translation;
-        if (!element.sub_url || !extract || !extract.subs || Array.isArray(extract.subs[key])) return done();
+        if (!element.sub_url || !extract || !extract[store] || Array.isArray(extract[store][key])) return done();
         var currentExtract = extract;
         var req = new Lampa.Reguest();
         req.timeout(15000);
-        var finish = function finish(arr) {
-          if (extract === currentExtract && extract) extract.subs[key] = arr;
-          done();
-        };
-        req["native"](server + '/subs?url=' + encodeURIComponent(element.sub_url), function (res) {
+        req["native"](server + path + '?url=' + encodeURIComponent(element.sub_url), function (res) {
           var arr = res;
           if (typeof res === 'string') {
             try { arr = JSON.parse(res); } catch (e) { arr = null; }
           }
-          finish(Array.isArray(arr) ? arr.filter(function (s) {
+          if (extract === currentExtract && extract) extract[store][key] = Array.isArray(arr) ? arr.filter(function (s) {
             return s && s.label;
-          }) : []);
+          }) : [];
+          done();
         }, function () {
-          // Not remembered: a cooldown on this episode must not cost the voice its subtitles.
+          // Not remembered: a cooldown on this episode must not cost the voice its list.
           done();
         }, false, {
           dataType: 'text'
+        });
+      }
+      // The second call reuses the episode the first one resolved, so it costs no extra /bnsi.
+      function loadSubs(element, done) {
+        loadList('/subs', 'subs', element, function () {
+          loadList('/audios', 'tracks', element, done);
+        });
+      }
+
+      function bareLabel(s) {
+        return String(s || '').replace(/\s+\d+$/, '');
+      }
+      // The player's audio track menu lists the file's tracks; picking one swaps the stream in place,
+      // the way Lampa switches quality, because each Alloha track is its own stream.
+      function voiceoversFor(element, data, items) {
+        var list = extract && extract.tracks && element.media && extract.tracks[element.media.id_translation];
+        if (!element.sub_url || !Array.isArray(list) || list.length < 2) return undefined;
+        var current = element.audio;
+        if (!current) list.forEach(function (a) {
+          if (a["default"]) current = a.label;
+        });
+        return list.map(function (a) {
+          return {
+            name: a.label,
+            selected: bareLabel(a.label) === bareLabel(current),
+            onSelect: function onSelect() {
+              switchAudio(element, data, items, a.label);
+            }
+          };
+        });
+      }
+
+      // Points a playlist entry and its quality menu (kept by reference) at another track.
+      // Returns the quality key and url of `now`, or of the entry's own url when `now` is not in it.
+      function retarget(e, data, label, now) {
+        var src = e.sub_url.replace(/&audio=[^&]*/g, '') + '&audio=' + encodeURIComponent(label);
+        var hit = { name: '', url: server + '/stream.m3u8?url=' + encodeURIComponent(src) };
+        for (var k in data.quality || {}) {
+          var old = data.quality[k];
+          var qm = String(old || '').match(/[?&]q=(\d+)/);
+          if (!qm) continue;
+          var next = server + '/play.m3u8?q=' + qm[1] + '&url=' + encodeURIComponent(src);
+          if (old === now || !hit.name && old === data.url) {
+            hit.name = k;
+            hit.url = next;
+          }
+          data.quality[k] = next;
+        }
+        data.url = hit.url;
+        e.audio = label;
+        e.sub_url = src;
+        e.stream = null;
+        return hit;
+      }
+
+      function switchAudio(element, data, items, label) {
+        if (!(Lampa.PlayerPanel && Lampa.PlayerPanel.listener)) return;
+        var now = Lampa.Player.playdata && Lampa.Player.playdata() ? Lampa.Player.playdata().url : data.url;
+        var hit = retarget(element, data, label, now);
+        // The playlist resolves its entries ahead of time, so the ones already resolved are rewritten;
+        // the rest resolve later with the new track.
+        items.forEach(function (e) {
+          if (e === element) return;
+          if (e.cell && e.sub_url && typeof e.cell.url === 'string') {
+            retarget(e, e.cell, label, null);
+            e.cell.voiceovers = voiceoversFor(e, e.cell, items);
+          } else {
+            e.audio = label;
+            e.stream = null;
+          }
+        });
+        choice.audio_name = label;
+        var inx = -1;
+        (filter_items.audio || []).forEach(function (t, i) {
+          if (inx == -1 && bareLabel(t) === bareLabel(label)) inx = i;
+        });
+        choice.audio = inx == -1 ? 0 : inx;
+        component.saveChoice(choice);
+        Lampa.PlayerPanel.listener.send('quality', {
+          name: hit.name || 'auto',
+          url: hit.url
         });
       }
 
@@ -14260,6 +14346,8 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
+              first.voiceovers = voiceoversFor(element, first, items);
+              element.cell = first;
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -14273,6 +14361,7 @@
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, '2160');
                           cell.quality = component.renameQualityMap(elem.qualitys);
                           cell.subtitles = subsFor(elem);
+                          cell.voiceovers = voiceoversFor(elem, cell, items);
                           call();
                         }, function () {
                           cell.url = '';
@@ -14282,6 +14371,7 @@
                       timeline: elem.timeline,
                       title: elem.title
                     };
+                    elem.cell = cell;
                     playlist.push(cell);
                   }
                 });
