@@ -13987,12 +13987,10 @@
 
         // The inner tracks of the chosen voice get their own filter row, shown only when there is a choice.
         filter_items.audio = [];
-        filter_items.audio_id = [];
         var audios = filter_items.voice_info[choice.voice] && extract.audios && extract.audios[filter_items.voice_info[choice.voice].id];
         if (Array.isArray(audios) && audios.length > 1) {
-          audios.forEach(function (a, i) {
-            filter_items.audio.push(a.label || '#' + (i + 1));
-            filter_items.audio_id.push(a.audioId);
+          audios.forEach(function (a) {
+            filter_items.audio.push(a.label);
           });
         }
         if (!filter_items.audio[choice.audio]) choice.audio = 0;
@@ -14031,7 +14029,8 @@
                   season: s_num,
                   episode: e_num,
                   media: media,
-                  audio: filter_items.audio_id[choice.audio]
+                  // The helper picks the track by label: Alloha renumbers tracks from episode to episode.
+                  audio: filter_items.audio[choice.audio]
                 });
               }
             }
@@ -14125,9 +14124,9 @@
             try { arr = JSON.parse(res); } catch (e) { arr = null; }
           }
           if (!Array.isArray(arr)) arr = [];
-          // Tracks without an id cannot be asked for; the default goes first so a fresh choice lands on it.
+          // Tracks are asked for by label, so unnamed ones are dropped; the default goes first so a fresh choice lands on it.
           arr = arr.filter(function (a) {
-            return a && a.audioId != null;
+            return a && a.label;
           });
           arr.sort(function (a, b) {
             return (b["default"] ? 1 : 0) - (a["default"] ? 1 : 0);

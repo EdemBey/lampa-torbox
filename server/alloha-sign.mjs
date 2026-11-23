@@ -90,12 +90,18 @@ export function episodeKey(src) {
   } catch { return String(src); }
 }
 
-// Pick one of the inner audio tracks of an already-resolved episode by Alloha's audioId, not by
-// position: the plugin learns the ids from one episode and other episodes may list fewer tracks
-// or order them differently. An unknown or missing id falls back to the default track.
+// Pick one of the inner audio tracks of an already-resolved episode by its label. Neither the
+// position nor Alloha's audioId is stable: the plugin learns the tracks from one episode, and the
+// next one can have a track fewer, which renumbers them ("(English) 10" there is "(English) 9"
+// with audioId 9 here, measured). So a trailing number is ignored when the exact label is gone.
+// An unknown or missing label falls back to the default track.
+// shortcut: two unnamed tracks of one language ("(English) 10" and "(English) 11") can swap after a
+// renumber; pick by order among same-bare labels if a voice like that shows up.
+const bareLabel = (s) => String(s || '').replace(/\s+\d+$/, '');
 export function sourceFor(info, src) {
   const sources = (info && Array.isArray(info.sources)) ? info.sources : [];
   let raw = null;
   try { raw = new URL(src).searchParams.get('audio'); } catch {}
-  return (raw && sources.find((x) => x.audioId === raw)) || sources.find((x) => x.default) || sources[0];
+  const hit = raw && (sources.find((x) => x.label === raw) || sources.find((x) => bareLabel(x.label) === bareLabel(raw)));
+  return hit || sources.find((x) => x.default) || sources[0];
 }
