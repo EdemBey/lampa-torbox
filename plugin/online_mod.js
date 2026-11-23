@@ -14473,7 +14473,7 @@
         return filtred;
       }
 
-      // "[720p]url,[Auto]url" → the helper asks obrut (with its Referer) and returns the CDN link; the player loads it directly.
+      // "[720p]url,[Auto]url" → one link is resolved and the other qualities are derived from it; the player loads it directly.
       // CDN links carry an hourly expiry, so a resolved set is reused for 30 minutes only.
       function getStream(element, call, error) {
         // shortcut: a playlist cell keeps the link it resolved first, so returning to an episode after an hour in the same player session gets an expired link; re-open the episode from the list if that shows up.
@@ -14484,11 +14484,44 @@
           if (m) parts.push({ label: m[1], url: m[2] });
         });
         if (!parts.length) return error();
-        var map = {};
-        var auto = '';
-        var left = parts.length;
-        var done = function () {
-          if (--left) return;
+        var pick = null;
+        parts.forEach(function (p) {
+          if (!pick && /auto/i.test(p.label)) pick = p;
+        });
+        if (!pick) {
+          var best = -Infinity;
+          parts.forEach(function (p) {
+            var n = parseInt(p.label, 10);
+            if (!isNaN(n) && n > best) { best = n; pick = p; }
+          });
+        }
+        if (!pick) pick = parts[0];
+        var hasAutoPart = false;
+        parts.forEach(function (p) { if (/auto/i.test(p.label)) hasAutoPart = true; });
+        var pickIsAuto = /auto/i.test(pick.label);
+        var net = new Lampa.Reguest();
+        net.timeout(20000);
+        net["native"](server + '/turbo/stream?json=1&u=' + encodeURIComponent(pick.url), function (res) {
+          if (typeof res === 'string') {
+            try {
+              res = JSON.parse(res);
+            } catch (e) {
+              res = null;
+            }
+          }
+          if (!res || !res.url) return error();
+          var base = res.url.slice(0, res.url.lastIndexOf('/') + 1);
+          var map = {};
+          var auto = '';
+          if (pickIsAuto) auto = res.url;
+          parts.forEach(function (p) {
+            if (/auto/i.test(p.label)) return;
+            var n = parseInt(p.label, 10);
+            if (isNaN(n)) return;
+            if (p.label === pick.label) map[p.label] = res.url;
+            else map[p.label] = base + n + '.mp4:hls:manifest.m3u8';
+          });
+          if (!pickIsAuto && hasAutoPart) auto = base + 'hls.m3u8';
           var labels = Object.keys(map).sort(function (a, b) {
             return parseInt(b, 10) - parseInt(a, 10);
           });
@@ -14497,26 +14530,7 @@
           element.qualitys = labels.length ? map : false;
           element.subtitles = false;
           element.stream ? call(element) : error();
-        };
-        parts.forEach(function (p) {
-          var net = new Lampa.Reguest();
-          net.timeout(20000);
-          net["native"](server + '/turbo/stream?json=1&u=' + encodeURIComponent(p.url), function (res) {
-            if (typeof res === 'string') {
-              try {
-                res = JSON.parse(res);
-              } catch (e) {
-                res = null;
-              }
-            }
-            if (res && res.url) {
-              if (/auto/i.test(p.label)) auto = res.url;else map[p.label] = res.url;
-            }
-            done();
-          }, done, false, {
-            dataType: 'text'
-          });
-        });
+        }, function () { error(); }, false, { dataType: 'text' });
       }
 
       function append(items) {
