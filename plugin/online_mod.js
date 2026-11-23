@@ -29,6 +29,7 @@
 //23.11.2026 - Alloha: tracks and subtitles are listed per episode (later episodes can be another file)
 //23.11.2026 - External Android player: playlist entries keep their subtitles
 //23.11.2026 - Alloha: voiceovers for the DDD player (X-DDD-Voiceover-Path)
+//23.11.2026 - Alloha: 4K mark and episode range next to each voice (4K, 1-12 эп.); range shared with Kodik and Turbo
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -439,6 +440,24 @@
       var start = str.length - searchString.length;
       if (start < 0) return false;
       return str.indexOf(searchString, start) === start;
+    }
+
+    // Episode numbers -> "1-5,7-10 эп." (shown next to a voice in the filter).
+    function episodeRanges(nums) {
+      nums = nums.slice().sort(function (a, b) {
+        return a - b;
+      });
+      var ranges = [];
+
+      for (var i = 0; i < nums.length; i++) {
+        var from = nums[i];
+
+        while (i + 1 < nums.length && nums[i + 1] <= nums[i] + 1) i++;
+
+        ranges.push(from === nums[i] ? '' + from : from + '-' + nums[i]);
+      }
+
+      return ranges.length ? ranges.join(',') + ' эп.' : '';
     }
 
     var myIp = '';
@@ -13417,25 +13436,7 @@
             }
           });
           filter_items.voice_info.forEach(function (v) {
-            var nums = Object.keys(eps_by[v.id] || {}).map(Number).sort(function (a, b) {
-              return a - b;
-            });
-            if (!nums.length) return filter_items.voice_note.push('');
-            // 1-11, or with gaps: 1-5,7-10
-            var ranges = [];
-            var from = nums[0];
-            var to = nums[0];
-
-            for (var e = 1; e < nums.length; e++) {
-              if (nums[e] === to + 1) {
-                to = nums[e];
-                continue;
-              }
-              ranges.push(from === to ? '' + from : from + '-' + to);
-              from = to = nums[e];
-            }
-            ranges.push(from === to ? '' + from : from + '-' + to);
-            filter_items.voice_note.push(ranges.join(',') + ' эп.');
+            filter_items.voice_note.push(episodeRanges(Object.keys(eps_by[v.id] || {}).map(Number)));
           });
         }
 
@@ -13971,7 +13972,8 @@
           season: [],
           season_num: [],
           voice: [],
-          voice_info: []
+          voice_info: [],
+          voice_note: []
         };
 
         if (extract.pl.type === 'serial') {
@@ -13991,6 +13993,8 @@
         if (filter_items.season[choice.season]) {
           var _s_num = filter_items.season_num[choice.season];
           var episodes = extract.pl.all[_s_num] || {};
+          var eps_by = {};
+          var uhd_by = {};
 
           for (var e_num in episodes) {
             var translations = episodes[e_num] || {};
@@ -14004,12 +14008,18 @@
                   id: v_id
                 });
               }
+              (eps_by[v_id] = eps_by[v_id] || []).push(parseInt(e_num, 10));
+              if (translations[v_id].uhd) uhd_by[v_id] = true;
             };
 
             for (var v_id in translations) {
               _loop(v_id);
             }
           }
+
+          filter_items.voice_info.forEach(function (v) {
+            filter_items.voice_note.push([uhd_by[v.id] ? '4K' : '', episodeRanges(eps_by[v.id] || [])].filter(Boolean).join(', '));
+          });
         }
 
         if (!filter_items.voice[choice.voice]) choice.voice = 0;
@@ -14686,24 +14696,8 @@
               (eps[v.title] = eps[v.title] || []).push(n);
             });
           });
-          // Same "(1-5,7-10 эп.)" note as Kodik.
           filter_items.voice.forEach(function (name) {
-            var nums = (eps[name] || []).sort(function (a, b) {
-              return a - b;
-            });
-            var ranges = [];
-            var from = nums[0];
-            var to = nums[0];
-            for (var e = 1; e < nums.length; e++) {
-              if (nums[e] === to + 1) {
-                to = nums[e];
-                continue;
-              }
-              ranges.push(from === to ? '' + from : from + '-' + to);
-              from = to = nums[e];
-            }
-            if (nums.length) ranges.push(from === to ? '' + from : from + '-' + to);
-            filter_items.voice_note.push(ranges.length ? ranges.join(',') + ' эп.' : '');
+            filter_items.voice_note.push(episodeRanges(eps[name] || []));
           });
         }
 
