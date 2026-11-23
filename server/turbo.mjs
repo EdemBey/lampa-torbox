@@ -18,6 +18,17 @@ const state = { host: '', cookies: new Map(), ua: '', approved: false };
 const isTurboHost = (h) => /(^|\.)obrut\.show$/i.test(h || '');
 export const isCdnHost = (h) => /(^|\.)superdupercdn\.com$/i.test(h || '');
 
+// Injected into every proxied check-page HTML so the Lampa modal's remote-driven
+// cursor can be turned into real pointer/mouse events inside the page.
+export const CURSOR_JS = '<script>(function(){var a=Element.prototype.attachShadow;if(a)Element.prototype.attachShadow=function(o){return a.call(this,Object.assign({},o,{mode:"open"}));};if(/\\/include\\//.test(location.pathname))return;window.addEventListener("message",function(e){if(e.source!==parent)return;var p=e.data&&e.data.turboCursor;if(!p)return;var doc=document,root=null,x=p.x,y=p.y,el,i=0;while(i++<10){el=(root||doc).elementFromPoint(x,y);if(!el)break;if(el.tagName==="IFRAME"){try{if(el.contentDocument){var r=el.getBoundingClientRect();x-=r.left;y-=r.top;doc=el.contentDocument;root=null;continue;}}catch(err){}}if(el.shadowRoot){var se=el.shadowRoot.elementFromPoint(x,y);if(se&&se!==el){root=el.shadowRoot;continue;}}break;}if(!el)return;var V=doc.defaultView;var PE=V.PointerEvent||V.MouseEvent;var ME=V.MouseEvent;function fire(type,Ctor,down,delay){setTimeout(function(){var ev=new Ctor(type,{bubbles:true,cancelable:true,composed:true,view:V,clientX:x,clientY:y,screenX:x,screenY:y,button:0,buttons:(down?1:0),pointerId:1,pointerType:"mouse",isPrimary:true,detail:1});el.dispatchEvent(ev);},delay);}var j1=60+Math.floor(Math.random()*61);fire("pointerover",PE,false,0);fire("pointerenter",PE,false,0);fire("mouseover",ME,false,0);fire("mouseenter",ME,false,0);fire("pointermove",PE,false,0);fire("mousemove",ME,false,0);fire("pointerdown",PE,true,j1);fire("mousedown",ME,true,j1);setTimeout(function(){if(el.focus)try{el.focus();}catch(e){}},j1);var j2=j1+80+Math.floor(Math.random()*71);fire("pointerup",PE,false,j2);fire("mouseup",ME,false,j2);fire("click",ME,false,j2+10);});})();</script>';
+
+export function injectCursor(html) {
+  const s = String(html);
+  const m = s.match(/<head(\s[^>]*)?>/i);
+  if (!m) return CURSOR_JS + s;
+  return s.replace(/<head(\s[^>]*)?>/i, (match) => match + CURSOR_JS);
+}
+
 export function browserCookie(setCookie, https) {
   // Always drop obrut's domain attribute so the browser treats it as this origin's cookie.
   let s = String(setCookie).replace(/;\s*domain=[^;]*/i, '');
@@ -304,8 +315,18 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
       const secure = base.startsWith('https:');
       const cookies = (up.headers.getSetCookie ? up.headers.getSetCookie() : []).map((c) => browserCookie(c, secure));
       if (cookies.length) out['Set-Cookie'] = cookies;
+      let finalBuf = buf;
+      const ct = up.headers.get('content-type') || '';
+      if (ct.includes('text/html') && (/^\/embed\//.test(path) || /^\/include\//.test(path))) {
+        const str = buf.toString('utf8');
+        if (!str.includes('new Player("')) {
+          finalBuf = Buffer.from(injectCursor(str));
+          // The script pushes any <meta charset> past the first 1024 bytes the browser sniffs.
+          out['Content-Type'] = 'text/html; charset=utf-8';
+        }
+      }
       res.writeHead(up.status, out);
-      res.end(buf);
+      res.end(finalBuf);
       return true;
     }
 

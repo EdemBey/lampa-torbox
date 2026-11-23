@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { decodePlaylist, rewritePlaylist, browserCookie } from './turbo.mjs';
+import { decodePlaylist, rewritePlaylist, browserCookie, injectCursor } from './turbo.mjs';
 
 // Build a PlayerJS-style blob: junk prefix + base64 JSON with "//" + btoa("c/c/c") markers spliced in.
 const cfg = { lang: 'en', file: [{ title: 'Season 1', folder: [{ title: 'Episode 1', folder: [{ title: '(RU) DUB', file: '[720p]https://cdn-x.obrut.show/stream/a,[Auto]https://cdn-x.obrut.show/stream/b' }] }] }] };
@@ -49,3 +49,13 @@ const qLine = 'seg.ts?x=a.m3u8';
 const qAbs = 'https://nova.z.superdupercdn.com/a/b/seg.ts?x=a.m3u8';
 assert.equal(rewritePlaylist(qLine, playlistUrl, base), base + '/turbo/seg?u=' + encodeURIComponent(qAbs));
 console.log('turbo query-m3u8 OK');
+
+// injectCursor
+const inj = injectCursor('<html><head><title>x</title></head></html>');
+assert.ok(inj.indexOf('<script') > inj.indexOf('<head>'), 'script after head');
+assert.ok(inj.indexOf('<script') < inj.indexOf('<title>'), 'script before title');
+const inj2 = injectCursor('<div>');
+assert.ok(inj2.startsWith('<script'), 'prepend when no head');
+const inj3 = injectCursor('<html><head><header>h</header></head></html>');
+assert.ok(inj3.indexOf('<script') < inj3.indexOf('<header>'), 'header tag is not head');
+console.log('turbo injectCursor OK');
