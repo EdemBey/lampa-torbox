@@ -27,6 +27,7 @@
 //23.11.2026 - Alloha: subtitles (all tracks Alloha lists for the file) in the player
 //23.11.2026 - Alloha: switch the voice's inner tracks from the player's audio track menu
 //23.11.2026 - Alloha: tracks and subtitles are listed per episode (later episodes can be another file)
+//23.11.2026 - External Android player: playlist entries keep their subtitles
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -147,15 +148,31 @@
     }
 
     function sanitizePlaylist(first, playlist) {
-      return playlist.map(function (item) {
-        if (item === first) {
-          return { url: first.url, title: first.title, timeline: first.timeline };
-        }
-
-        return { url: item.url, title: item.title, timeline: item.timeline };
+      var list = playlist.map(function (item) {
+        var out = { url: item.url, title: item.title, timeline: item.timeline };
+        // Lampa Android takes each entry's subtitles from this list (video_list.subtitles), not from
+        // the item that starts playback, so dropping them here loses them for the external player.
+        // Its parser throws on an entry without url or label and then drops the whole playlist.
+        var subs = Array.isArray(item.subtitles) ? item.subtitles.filter(function (s) {
+          return s && typeof s.url === 'string' && s.url && s.label != null;
+        }).map(function (s) {
+          return { label: String(s.label), url: s.url };
+        }) : [];
+        if (subs.length) out.subtitles = subs;
+        return out;
       }).filter(function (item) {
         return item.url;
       });
+      // Android hands the playlist over in one intent of about 1 MB at most, and past that the player
+      // does not start at all. A very long season keeps subtitles only for the episode that starts.
+      var size = 0;
+      list.forEach(function (item) {
+        if (item.subtitles) size += JSON.stringify(item.subtitles).length;
+      });
+      if (size > 200000) list.forEach(function (item) {
+        if (item.url !== first.url) delete item.subtitles;
+      });
+      return list;
     }
 
     function resolveLazyPlaylist(playlist, callback) {
