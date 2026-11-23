@@ -33,6 +33,7 @@
 //23.11.2026 - HDrezka in a browser: login and pages through the Alloha helper (rezka has no CORS and lets only app user agents past its bot check)
 //23.11.2026 - HDrezka in a browser without a server: Tampermonkey bridge (plugin/rezka-bridge.user.js)
 //23.11.2026 - Server address field also in the Turbo and HDrezka settings (same value as in Alloha)
+//23.11.2026 - HDrezka: seasons first (every season any voice has), voices follow the season with an episode range (one request per voice when a series opens)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -2107,6 +2108,7 @@
 
     function rezka2(component, _object, config) {
       var network = new Lampa.Reguest();
+      var loaders = [];
       var extract = {};
       var object = _object;
       var select_title = '';
@@ -2481,8 +2483,10 @@
 
 
       this.destroy = function () {
-        network.clear();
         extract = null;
+        network.clear();
+        for (var li = 0; li < loaders.length; li++) try { loaders[li].clear(); } catch (e) {}
+        loaders = [];
       };
 
       function getPage(url) {
@@ -2520,6 +2524,7 @@
         extract.season = [];
         extract.episode = [];
         extract.voice_data = {};
+        extract.all_loaded = false;
         extract.is_series = false;
         extract.film_id = '';
         extract.favs = '';
@@ -2663,39 +2668,53 @@
       }
 
       function getEpisodes(call) {
-        if (extract.is_series) {
-          filterVoice();
+        if (!extract.is_series || extract.all_loaded) return call();
+        var gen = loaders.gen = (loaders.gen || 0) + 1;
+        var last_error = '';
+        // HDrezka lists seasons per voice, and voices differ in seasons, so every voice is asked once up front.
+        var queue = extract.voice.slice();
+        var running = 0;
 
-          if (extract.voice[choice.voice]) {
-            var translator_id = extract.voice[choice.voice].id;
-            var data = extract.voice_data[translator_id];
-
-            if (data) {
-              extract.season = data.season;
-              extract.episode = data.episode;
-            } else {
-              var url = embed + 'ajax/get_cdn_series/?t=' + Date.now();
-              var postdata = 'id=' + encodeURIComponent(extract.film_id);
-              postdata += '&translator_id=' + encodeURIComponent(translator_id);
-              postdata += '&favs=' + encodeURIComponent(extract.favs);
-              postdata += '&action=get_episodes';
-              network.clear();
-              network.timeout(10000);
-              network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (json) {
-                extractEpisodes(json, translator_id);
-                call();
-              }, function (a, c) {
-                component.empty(network.errorDecode(a, c));
-              }, postdata, {
-                withCredentials: logged_in,
-                headers: headers
-              });
-              return;
-            }
+        var next = function next() {
+          if (!queue.length && !running) {
+            extract.all_loaded = true;
+            var any = extract.voice.some(function (v) {
+              return extract.voice_data[v.id] && extract.voice_data[v.id].season.length;
+            });
+            if (any) call();else component.empty(error_message || last_error || Lampa.Lang.translate('online_mod_nolink'));
+            return;
           }
-        }
 
-        call();
+          while (queue.length && running < 4) load(queue.shift());
+        };
+
+        var load = function load(voice) {
+          var loader = new Lampa.Reguest();
+          var url = embed + 'ajax/get_cdn_series/?t=' + Date.now();
+          var postdata = 'id=' + encodeURIComponent(extract.film_id);
+          postdata += '&translator_id=' + encodeURIComponent(voice.id);
+          postdata += '&favs=' + encodeURIComponent(extract.favs);
+          postdata += '&action=get_episodes';
+          loaders.push(loader);
+          running++;
+          loader.timeout(10000);
+          loader["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (json) {
+            if (!extract || loaders.gen !== gen) return;
+            running--;
+            extractEpisodes(json, voice.id);
+            next();
+          }, function (a, c) {
+            if (!extract || loaders.gen !== gen) return;
+            running--;
+            last_error = loader.errorDecode(a, c);
+            next();
+          }, postdata, {
+            withCredentials: logged_in,
+            headers: headers
+          });
+        };
+
+        next();
       }
 
       function extractEpisodes(json, translator_id) {
@@ -2728,60 +2747,83 @@
         }
 
         extract.voice_data[translator_id] = data;
-        extract.season = data.season;
-        extract.episode = data.episode;
       }
 
-      function filterVoice() {
-        var voice = extract.is_series ? extract.voice.map(function (v) {
-          return v.name;
-        }) : [];
-        if (!voice[choice.voice]) choice.voice = 0;
-
-        if (choice.voice_name) {
-          var inx = voice.indexOf(choice.voice_name);
-          if (inx == -1) choice.voice = 0;else if (inx !== choice.voice) {
-            choice.voice = inx;
-          }
-        }
-      }
       /**
        * Построить фильтр
        */
 
-
       function filter() {
         filter_items = {
-          season: extract.season.map(function (s) {
-            return s.name;
-          }),
-          season_id: extract.season.map(function (s) {
-            return s.id;
-          }),
-          voice: extract.is_series ? extract.voice.map(function (v) {
-            return v.name;
-          }) : []
+          season: [],
+          season_id: [],
+          voice: [],
+          voice_info: [],
+          voice_note: []
         };
+
+        if (extract.is_series) {
+          var seen = {};
+          extract.season = [];
+          extract.voice.forEach(function (v) {
+            var data = extract.voice_data[v.id];
+            (data && data.season || []).forEach(function (s) {
+              if (seen[s.id]) return;
+              seen[s.id] = true;
+              extract.season.push(s);
+            });
+          });
+          extract.season.sort(function (a, b) {
+            return parseInt(a.id) - parseInt(b.id);
+          });
+          filter_items.season = extract.season.map(function (s) {
+            return s.name;
+          });
+          filter_items.season_id = extract.season.map(function (s) {
+            return s.id;
+          });
+        }
+
         if (!filter_items.season[choice.season]) choice.season = 0;
+
+        if (choice.season_id) {
+          var s_inx = filter_items.season_id.indexOf(choice.season_id);
+          if (s_inx == -1) choice.season = 0;else choice.season = s_inx;
+        }
+
+        if (extract.is_series) {
+          var season_id = filter_items.season_id[choice.season];
+          extract.voice.forEach(function (v) {
+            var data = extract.voice_data[v.id];
+            var nums = [];
+            (data && data.episode || []).forEach(function (e) {
+              if (e.season_id == season_id) nums.push(parseInt(e.episode_id));
+            });
+            if (!nums.length) return;
+            filter_items.voice.push(v.name);
+            filter_items.voice_info.push({
+              id: v.id
+            });
+            filter_items.voice_note.push(episodeRanges(nums));
+          });
+        }
+
         if (!filter_items.voice[choice.voice]) choice.voice = 0;
 
         if (choice.voice_name) {
-          var inx = filter_items.voice.indexOf(choice.voice_name);
-          if (inx == -1) choice.voice = 0;else if (inx !== choice.voice) {
-            choice.voice = inx;
-          }
+          var v_inx = filter_items.voice.indexOf(choice.voice_name);
+          if (v_inx == -1) choice.voice = 0;else choice.voice = v_inx;
         }
 
-        if (choice.season_id) {
-          var _inx = filter_items.season_id.indexOf(choice.season_id);
-
-          if (_inx == -1) choice.season = 0;else if (_inx !== choice.season) {
-            choice.season = _inx;
-          }
+        if (extract.is_series) {
+          var chosen = filter_items.voice_info[choice.voice];
+          var chosen_data = chosen && extract.voice_data[chosen.id];
+          extract.episode = chosen_data ? chosen_data.episode : [];
         }
 
         component.filter(filter_items, choice);
       }
+
       /**
        * Получить поток
        * @param {*} element
@@ -2997,11 +3039,7 @@
         var filtred = [];
 
         if (extract.is_series) {
-          var season_name = filter_items.season[choice.season];
-          var season_id;
-          extract.season.forEach(function (season) {
-            if (season.name == season_name) season_id = season.id;
-          });
+          var season_id = filter_items.season_id[choice.season];
           var voice = filter_items.voice[choice.voice];
           extract.episode.forEach(function (episode) {
             if (episode.season_id == season_id) {
