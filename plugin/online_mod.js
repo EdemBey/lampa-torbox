@@ -14288,54 +14288,27 @@
       function verify(embed) {
         component.loading(false);
         var controller = Lampa.Controller.enabled().name;
-        var html = $('<div style="height:70vh;position:relative"><iframe src="' + server + '/turbo/verify?url=' + encodeURIComponent(embed) + '" style="width:100%;height:100%;border:0;border-radius:.6em;background:#111"></iframe><div class="turbo-cursor" style="position:absolute;left:0;top:0;width:28px;height:28px;margin:-14px 0 0 -14px;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 2px rgba(0,0,0,.6);pointer-events:none;transition:left .08s,top .08s;z-index:2"></div></div>');
-        var cursor = html.find('.turbo-cursor');
-        var cx = 0, cy = 0, w = 0, h = 0, step = 12, pulseTimer = null;
+        var link = server + '/turbo/verify?url=' + encodeURIComponent(embed);
+        // A TV remote cannot tick a checkbox inside an iframe: the phone opens the same check through the server, which keeps the approval.
+        var html = $('<div style="display:flex;gap:1.5em;height:70vh"><style>.turbo-qr svg,.turbo-qr img{display:block;width:100%;height:auto}</style><iframe src="' + link + '" style="flex:1;min-width:0;height:100%;border:0;border-radius:.6em;background:#111"></iframe><div class="turbo-qr-box" style="width:15em;flex-shrink:0;text-align:center"><div class="turbo-qr" style="background:#fff;padding:.7em;border-radius:.6em"></div><div style="margin-top:1em;line-height:1.4">С пульта галочку не нажать? Отсканируйте код телефоном и поставьте галочку там — окно закроется само.</div></div></div>');
+        if (Lampa.Utils.qrcode) Lampa.Utils.qrcode(link, html.find('.turbo-qr'), function () {
+          html.find('.turbo-qr-box').remove();
+        });else html.find('.turbo-qr-box').remove();
         var stop = function () {
           clearInterval(poll);
           poll = null;
           Lampa.Modal.close();
           Lampa.Controller.toggle(controller);
         };
-        var back = function () {
-          stop();
-          component.empty('Turbo ждёт подтверждения: откройте балансер снова');
-        };
-        var move = function (dx, dy) {
-          cx = Math.max(0, Math.min(w, cx + dx * step));
-          cy = Math.max(0, Math.min(h, cy + dy * step));
-          cursor.css('left', cx + 'px');
-          cursor.css('top', cy + 'px');
-        };
-        var click = function () {
-          var f = html.find('iframe')[0];
-          if (f && f.contentWindow) f.contentWindow.postMessage({ turboCursor: { x: cx, y: cy } }, '*');
-          cursor.css('background', 'rgba(255,255,255,.5)');
-          if (pulseTimer) clearTimeout(pulseTimer);
-          pulseTimer = setTimeout(function () { cursor.css('background', ''); }, 200);
-        };
         Lampa.Modal.open({
-          title: 'Turbo: поставьте галочку «Подтвердите, что вы человек» (стрелки — курсор, OK — нажать)',
+          title: 'Turbo: поставьте галочку «Подтвердите, что вы человек»',
           html: html,
           size: 'large',
-          onBack: back
+          onBack: function onBack() {
+            stop();
+            component.empty('Turbo ждёт подтверждения: откройте балансер снова');
+          }
         });
-        w = html.width() || 300;
-        h = html.height() || 200;
-        step = Math.max(12, Math.round(Math.min(w, h) * 0.04));
-        cx = Math.round(w / 2);
-        cy = Math.round(h / 2);
-        move(0, 0);
-        Lampa.Controller.add('turbo_cursor', {
-          toggle: function toggle() {},
-          up: function up() { move(0, -1); },
-          down: function down() { move(0, 1); },
-          left: function left() { move(-1, 0); },
-          right: function right() { move(1, 0); },
-          enter: function enter() { click(); },
-          back: back
-        });
-        Lampa.Controller.toggle('turbo_cursor');
         poll = setInterval(function () {
           var net = new Lampa.Reguest();
           net.timeout(10000);
