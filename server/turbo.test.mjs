@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { decodePlaylist, rewritePlaylist, browserCookie } from './turbo.mjs';
+import { decodePlaylist, browserCookie, isCdnHost } from './turbo.mjs';
 
 // Build a PlayerJS-style blob: junk prefix + base64 JSON with "//" + btoa("c/c/c") markers spliced in.
 const cfg = { lang: 'en', file: [{ title: 'Season 1', folder: [{ title: 'Episode 1', folder: [{ title: '(RU) DUB', file: '[720p]https://cdn-x.obrut.show/stream/a,[Auto]https://cdn-x.obrut.show/stream/b' }] }] }] };
@@ -12,27 +12,6 @@ assert.deepEqual(decodePlaylist(html), cfg);
 assert.equal(decodePlaylist('<html>verify</html>'), null);
 console.log('turbo decode OK');
 
-const base = 'http://h';
-const playlistUrl = 'https://nova.z.superdupercdn.com/a/b/720.mp4:hls:manifest.m3u8';
-const segAbs = 'https://nova.z.superdupercdn.com/a/b/720.mp4:hls:seg-1-v1-a2.ts';
-
-// media playlist
-const media = '#EXTINF:6.000,\n./720.mp4:hls:seg-1-v1-a2.ts';
-const mediaOut = rewritePlaylist(media, playlistUrl, base);
-assert.equal(mediaOut, '#EXTINF:6.000,\n' + base + '/turbo/seg?u=' + encodeURIComponent(segAbs));
-
-// master playlist
-const master = './240.mp4:hls:manifest-v1-a2.m3u8';
-const masterAbs = 'https://nova.z.superdupercdn.com/a/b/240.mp4:hls:manifest-v1-a2.m3u8';
-assert.equal(rewritePlaylist(master, playlistUrl, base), base + '/turbo/hls?u=' + encodeURIComponent(masterAbs));
-
-// EXT-X-KEY URI
-const keyLine = '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"';
-const keyAbs = 'https://nova.z.superdupercdn.com/a/b/key.bin';
-assert.equal(rewritePlaylist(keyLine, playlistUrl, base), '#EXT-X-KEY:METHOD=AES-128,URI="' + base + '/turbo/seg?u=' + encodeURIComponent(keyAbs) + '"');
-
-console.log('turbo rewrite OK');
-
 // browserCookie
 const c1 = browserCookie('__Host-x=1; Path=/; Secure; SameSite=Lax; Domain=.obrut.show', false);
 assert.ok(/(^|;)\s*Secure\b/i.test(c1), 'keeps Secure');
@@ -44,8 +23,6 @@ assert.ok(/(^|;)\s*Secure\b/i.test(c2), 'Secure');
 assert.ok(!/Lax/i.test(c2), 'not Lax');
 console.log('turbo browserCookie OK');
 
-// rewritePlaylist: .ts with .m3u8 in query stays a segment
-const qLine = 'seg.ts?x=a.m3u8';
-const qAbs = 'https://nova.z.superdupercdn.com/a/b/seg.ts?x=a.m3u8';
-assert.equal(rewritePlaylist(qLine, playlistUrl, base), base + '/turbo/seg?u=' + encodeURIComponent(qAbs));
-console.log('turbo query-m3u8 OK');
+// CDN host check for the redirect hop
+assert.ok(isCdnHost('lucky.z.superdupercdn.com') && !isCdnHost('superdupercdn.com.evil.com'));
+console.log('turbo isCdnHost OK');

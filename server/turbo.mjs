@@ -5,12 +5,8 @@
 // so the checkbox runs in the user's browser while every request — and the approval cookie —
 // belongs to this server. After that the server reads playlists on its own until obrut
 // asks again, and online_mod then shows the checkbox again.
-import { Readable, pipeline } from 'node:stream';
-
 const TIMEOUT = 20000;
 const PARENT = 'https://onomovie.ru/';
-// cfetch drops a header given as ''; Chrome client hints would contradict the user's own User-Agent.
-const NO_HINTS = { 'Sec-Ch-Ua': '', 'Sec-Ch-Ua-Mobile': '', 'Sec-Ch-Ua-Platform': '' };
 // Shown instead of obrut's player once the check passes: the phone (or the TV iframe) only had to tick the box.
 const DONE_PAGE = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Turbo</title><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#111;color:#fff;font:600 1.3em system-ui,sans-serif;text-align:center"><div><div style="font-size:3em;color:#4caf50">✓</div>Готово, смотрите на телевизоре</div></body>';
 
@@ -71,28 +67,6 @@ export function decodePlaylist(html) {
   }
 }
 
-// Rewrite every URL in an HLS playlist so the browser fetches it through this helper
-// (no Origin/Referer reaches the CDN). Pure: no I/O.
-export function rewritePlaylist(text, playlistUrl, base) {
-  return String(text).split('\n').map((line) => {
-    const t = line.trim();
-    if (t === '' || t.startsWith('#')) {
-      // Rewrite URIs inside tags such as EXT-X-KEY / EXT-X-MAP / EXT-X-MEDIA.
-      if (t.startsWith('#') && /URI="/.test(line)) {
-        return line.replace(/URI="([^"]*)"/g, (_, uri) => {
-          const abs = new URL(uri, playlistUrl).href;
-          const to = new URL(abs).pathname.endsWith('.m3u8') ? '/turbo/hls' : '/turbo/seg';
-          return 'URI="' + base + to + '?u=' + encodeURIComponent(abs) + '"';
-        });
-      }
-      return line;
-    }
-    const abs = new URL(t, playlistUrl).href;
-    const to = new URL(abs).pathname.endsWith('.m3u8') ? '/turbo/hls' : '/turbo/seg';
-    return base + to + '?u=' + encodeURIComponent(abs);
-  }).join('\n');
-}
-
 // Only what online_mod needs: titles and quality strings, no ads or player options.
 function slim(list) {
   return (list || []).map((n) => {
@@ -126,7 +100,7 @@ const json = (res, status, body) => {
 };
 
 // Returns true when the request was a Turbo one.
-export async function handleTurbo(req, res, url, base, get = fetch) {
+export async function handleTurbo(req, res, url, base) {
   try {
     const q = url.searchParams;
     const path = url.pathname;
@@ -155,12 +129,11 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
       return true;
     }
 
+    // Only this hop needs obrut's Referer, which a browser cannot set; the player follows the CDN redirects itself.
     if (path === '/turbo/stream') {
       let target;
       try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad stream url' }); return true; }
       if (target.protocol !== 'https:' || !isTurboHost(target.hostname)) { json(res, 400, { error: 'not a turbo stream' }); return true; }
-      // The stream link answers only with obrut's own Referer and hands back a public CDN url.
-      // obrut itself answers 404 to curl-impersonate (like the checkbox POST); only the CDN goes through cfetch.
       const up = await fetch(target.href, {
         redirect: 'manual',
         headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0' },
@@ -169,95 +142,16 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
       const location = up.headers.get('location');
       await up.body?.cancel();
       if (up.status >= 300 && up.status < 400 && location) {
-        const cdnHost = new URL(location, target.href).hostname;
-        if (!isCdnHost(cdnHost)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        const plUrl = new URL(location, target.href).href;
-        let fetchedUrl = plUrl;
-        let r = await get(plUrl, {
-          redirect: 'manual',
-          headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
-          signal: AbortSignal.timeout(TIMEOUT),
-        });
-        if (r.status >= 300 && r.status < 400) {
-          const loc2 = r.headers.get('location');
-          await r.body?.cancel();
-          if (!loc2 || !isCdnHost(new URL(loc2, plUrl).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-          fetchedUrl = new URL(loc2, plUrl).href;
-          r = await get(fetchedUrl, {
-            redirect: 'manual',
-            headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
-            signal: AbortSignal.timeout(TIMEOUT),
-          });
-        }
-        if (Number(r.headers.get('content-length') || 0) > 5 * 1024 * 1024) {
-          await r.body?.cancel();
-          json(res, 502, { error: 'playlist too large' });
-          return true;
-        }
-        const body = await r.text();
-        if (body.includes('#EXTM3U')) {
-          res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' });
-          res.end(rewritePlaylist(body, fetchedUrl, base));
-        } else json(res, 502, { error: 'playlist: ' + r.status });
-      } else json(res, 502, { error: 'stream: ' + up.status });
-      return true;
-    }
-
-    if (path === '/turbo/hls') {
-      let target;
-      try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad hls url' }); return true; }
-      if (target.protocol !== 'https:' || !isCdnHost(target.hostname)) { json(res, 400, { error: 'not a superdupercdn url' }); return true; }
-      let fetchedUrl = target.href;
-      let r = await get(target.href, {
-        redirect: 'manual',
-        headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
-        signal: AbortSignal.timeout(TIMEOUT),
-      });
-      if (r.status >= 300 && r.status < 400) {
-        const loc = r.headers.get('location');
-        await r.body?.cancel();
-        if (!loc || !isCdnHost(new URL(loc, target.href).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        fetchedUrl = new URL(loc, target.href).href;
-        r = await get(fetchedUrl, {
-          redirect: 'manual',
-          headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...NO_HINTS },
-          signal: AbortSignal.timeout(TIMEOUT),
-        });
-      }
-      if (Number(r.headers.get('content-length') || 0) > 5 * 1024 * 1024) {
-        await r.body?.cancel();
-        json(res, 502, { error: 'playlist too large' });
+        const next = new URL(location, target.href);
+        if (!isCdnHost(next.hostname) || next.protocol !== 'https:') { json(res, 502, { error: 'unexpected stream host' }); return true; }
+        const cdn = new URL(location, target.href).href;
+        // Lampa asks with json=1 and hands the link to its player: a redirect from here to the CDN makes the browser send Origin: null, which the CDN refuses.
+        if (q.get('json')) { json(res, 200, { url: cdn }); return true; }
+        res.writeHead(302, { Location: cdn, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+        res.end();
         return true;
       }
-      const body = await r.text();
-      if (body.includes('#EXTM3U')) {
-        res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' });
-        res.end(rewritePlaylist(body, fetchedUrl, base));
-      } else json(res, 502, { error: 'playlist: ' + r.status });
-      return true;
-    }
-
-    if (path === '/turbo/seg') {
-      let target;
-      try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad seg url' }); return true; }
-      if (target.protocol !== 'https:' || !isCdnHost(target.hostname)) { json(res, 400, { error: 'not a superdupercdn url' }); return true; }
-      const headers = { 'User-Agent': state.ua || 'Mozilla/5.0', 'Accept-Encoding': '', ...NO_HINTS };
-      if (req.headers.range) headers.Range = req.headers.range;
-      let up = await get(target.href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
-      if (up.status >= 300 && up.status < 400) {
-        const loc = up.headers.get('location');
-        await up.body?.cancel();
-        if (!loc || !isCdnHost(new URL(loc, target.href).hostname)) { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        up = await get(new URL(loc, target.href).href, { headers, redirect: 'manual', signal: AbortSignal.timeout(45000) });
-      }
-      if (res.destroyed) { await up.body?.cancel(); return true; }
-      const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Content-Type': up.headers.get('content-type') || 'video/mp2t' };
-      for (const h of ['content-length', 'content-range', 'accept-ranges']) if (up.headers.get(h)) out[h] = up.headers.get(h);
-      res.writeHead(up.status, out);
-      if (!up.body) { res.end(); return true; }
-      const body = Readable.fromWeb(up.body);
-      body.on('error', () => res.destroy());
-      pipeline(body, res, () => {});
+      json(res, 502, { error: 'stream: ' + up.status });
       return true;
     }
 
