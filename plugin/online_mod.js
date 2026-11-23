@@ -24,6 +24,7 @@
 //12.11.2026 - DDD: stable item keys and Lampa positions for per-episode resume
 //22.11.2026 - Alloha: real quality list per episode, 4K by default when Alloha has it
 //23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) in a separate "Дорожка" filter
+//23.11.2026 - Alloha: subtitles (all tracks Alloha lists for the file) in the player
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -13832,7 +13833,8 @@
           extract = {
             iframe: iframe,
             pl: pl && pl.all ? pl : {},
-            audios: {}
+            audios: {},
+            subs: {}
           };
 
           if (pl && pl.all && Object.keys(pl.all).length) {
@@ -13911,7 +13913,8 @@
         extract = {
           iframe: url,
           pl: {},
-          audios: {}
+          audios: {},
+          subs: {}
         };
 
         if (pl && pl.all && Object.keys(pl.all).length) {
@@ -14156,6 +14159,7 @@
         if (element.season) url += '&season=' + element.season + '&episode=' + element.episode;
         if (element.audio != null) url += '&audio=' + encodeURIComponent(element.audio);
         element.stream = server + '/stream.m3u8?url=' + encodeURIComponent(url);
+        element.sub_url = url;
         element.subtitles = false;
         network.clear();
         network.timeout(40000);
@@ -14176,6 +14180,44 @@
           call(element);
         }, false, {
           dataType: 'text'
+        });
+      }
+      // Subtitles are listed once per voice file, from the episode the user starts: that resolve is
+      // the one playback needs anyway. Other episodes get the same labels, loaded when they play.
+      function loadSubs(element, done) {
+        var key = element.media && element.media.id_translation;
+        if (!element.sub_url || !extract || !extract.subs || Array.isArray(extract.subs[key])) return done();
+        var currentExtract = extract;
+        var req = new Lampa.Reguest();
+        req.timeout(15000);
+        var finish = function finish(arr) {
+          if (extract === currentExtract && extract) extract.subs[key] = arr;
+          done();
+        };
+        req["native"](server + '/subs?url=' + encodeURIComponent(element.sub_url), function (res) {
+          var arr = res;
+          if (typeof res === 'string') {
+            try { arr = JSON.parse(res); } catch (e) { arr = null; }
+          }
+          finish(Array.isArray(arr) ? arr.filter(function (s) {
+            return s && s.label;
+          }) : []);
+        }, function () {
+          // Not remembered: a cooldown on this episode must not cost the voice its subtitles.
+          done();
+        }, false, {
+          dataType: 'text'
+        });
+      }
+
+      function subsFor(element) {
+        var list = extract && extract.subs && element.media && extract.subs[element.media.id_translation];
+        if (!element.sub_url || !Array.isArray(list) || !list.length) return false;
+        return list.map(function (s) {
+          return {
+            label: s.label,
+            url: server + '/sub.vtt?label=' + encodeURIComponent(s.label) + '&url=' + encodeURIComponent(element.sub_url)
+          };
         });
       }
       /**
@@ -14210,11 +14252,12 @@
             if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
             element.loading = true;
             getStream(element, function (element) {
+              loadSubs(element, function () {
               element.loading = false;
               var first = {
                 url: component.getDefaultQuality(element.qualitys, element.stream, '2160'),
                 quality: component.renameQualityMap(element.qualitys),
-                subtitles: element.subtitles,
+                subtitles: subsFor(element),
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
@@ -14230,7 +14273,7 @@
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, '2160');
                           cell.quality = component.renameQualityMap(elem.qualitys);
-                          cell.subtitles = elem.subtitles;
+                          cell.subtitles = subsFor(elem);
                           call();
                         }, function () {
                           cell.url = '';
@@ -14253,6 +14296,7 @@
                 item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
                 Lampa.Storage.set('online_view', viewed);
               }
+              });
             }, function () {
               element.loading = false;
               Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
