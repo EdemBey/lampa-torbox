@@ -26,6 +26,7 @@
 //23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) in a separate "Дорожка" filter
 //23.11.2026 - Alloha: subtitles (all tracks Alloha lists for the file) in the player
 //23.11.2026 - Alloha: switch the voice's inner tracks from the player's audio track menu
+//23.11.2026 - Alloha: tracks and subtitles are listed per episode (later episodes can be another file)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -14032,7 +14033,8 @@
                 filtred.push({
                   title: component.formatEpisodeTitle(s_num, e_num),
                   quality: (media.uhd ? '360p ~ 2160p' : '360p ~ 1080p') + (media.quality ? ' / ' + media.quality : ''),
-                  info: ' / ' + Lampa.Utils.shortText(voice, 50) + (filter_items.audio[choice.audio] ? ' / ' + Lampa.Utils.shortText(filter_items.audio[choice.audio], 50) : ''),
+                  // The chosen track is not named here: whether an episode has it is known only once it plays.
+                  info: ' / ' + Lampa.Utils.shortText(voice, 50),
                   season: s_num,
                   episode: e_num,
                   media: media,
@@ -14189,10 +14191,15 @@
           dataType: 'text'
         });
       }
-      // Subtitles are listed once per voice file, from the episode the user starts: that resolve is
-      // the one playback needs anyway. Other episodes get the same labels, loaded when they play.
+      // Subtitles and tracks are listed per episode, when it is about to play: that resolve is the one
+      // playback needs anyway. Not per voice: later episodes can be another file with other tracks
+      // (measured: RHS has 9 tracks up to S2E5 and a single one from S2E6).
+      function listKey(element) {
+        return element.media ? element.media.id : null;
+      }
+
       function loadList(path, store, element, done) {
-        var key = element.media && element.media.id_translation;
+        var key = listKey(element);
         if (!element.sub_url || !extract || !extract[store] || Array.isArray(extract[store][key])) return done();
         var currentExtract = extract;
         var req = new Lampa.Reguest();
@@ -14226,15 +14233,15 @@
       // The player's audio track menu lists the file's tracks; picking one swaps the stream in place,
       // the way Lampa switches quality, because each Alloha track is its own stream.
       function voiceoversFor(element, data, items) {
-        var list = extract && extract.tracks && element.media && extract.tracks[element.media.id_translation];
+        var list = extract && extract.tracks && extract.tracks[listKey(element)];
         if (!element.sub_url || !Array.isArray(list) || list.length < 2) return undefined;
-        var current = element.audio;
-        if (!current) list.forEach(function (a) {
-          if (a["default"]) current = a.label;
-        });
         var cur = -1;
         list.forEach(function (a, i) {
-          if (cur == -1 && bareLabel(a.label) === bareLabel(current)) cur = i;
+          if (cur == -1 && element.audio && bareLabel(a.label) === bareLabel(element.audio)) cur = i;
+        });
+        // No track asked for, or this episode lacks it: the helper plays the default one.
+        if (cur == -1) list.forEach(function (a, i) {
+          if (cur == -1 && a["default"]) cur = i;
         });
         return list.map(function (a, i) {
           var track = {
@@ -14310,8 +14317,9 @@
         });
       }
 
-      function subsFor(element) {
-        var list = extract && extract.subs && element.media && extract.subs[element.media.id_translation];
+      // `like`: another episode whose list stands in for this one's.
+      function subsFor(element, like) {
+        var list = extract && extract.subs && extract.subs[listKey(like || element)];
         if (!element.sub_url || !Array.isArray(list) || !list.length) return false;
         return list.map(function (s) {
           return {
@@ -14373,11 +14381,19 @@
                     var cell = {
                       url: function url(call) {
                         getStream(elem, function (elem) {
-                          cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, '2160');
-                          cell.quality = component.renameQualityMap(elem.qualitys);
-                          cell.subtitles = subsFor(elem);
-                          cell.voiceovers = voiceoversFor(elem, cell, items);
-                          call();
+                          // An external player gets the whole season resolved up front, and a resolve per
+                          // episode there would hit Alloha's throttle.
+                          // shortcut: its other episodes reuse the started episode's subtitle list, which can
+                          // name subtitles a later file lacks; list them per episode if it ever resolves lazily.
+                          var external = isExternalAndroidPlayer();
+                          var ready = function ready() {
+                            cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, '2160');
+                            cell.quality = component.renameQualityMap(elem.qualitys);
+                            cell.subtitles = subsFor(elem, external && element);
+                            cell.voiceovers = voiceoversFor(elem, cell, items);
+                            call();
+                          };
+                          if (external) ready();else loadSubs(elem, ready);
                         }, function () {
                           cell.url = '';
                           call();
