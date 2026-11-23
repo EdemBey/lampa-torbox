@@ -11,6 +11,8 @@ const TIMEOUT = 20000;
 const PARENT = 'https://onomovie.ru/';
 // cfetch drops a header given as ''; Chrome client hints would contradict the user's own User-Agent.
 const NO_HINTS = { 'Sec-Ch-Ua': '', 'Sec-Ch-Ua-Mobile': '', 'Sec-Ch-Ua-Platform': '' };
+// Shown instead of obrut's player once the check passes: the phone (or the TV iframe) only had to tick the box.
+const DONE_PAGE = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Turbo</title><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#111;color:#fff;font:600 1.3em system-ui,sans-serif;text-align:center"><div><div style="font-size:3em;color:#4caf50">✓</div>Готово, смотрите на телевизоре</div></body>';
 
 // One user per helper: the obrut host, the approval cookies and the browser that earned them.
 const state = { host: '', cookies: new Map(), ua: '', approved: false };
@@ -287,7 +289,8 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
       // obrut answers the checkbox POST with 404 when it comes through curl-impersonate, so the check stays on Node fetch.
       const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
       rememberCookies(up.headers);
-      const buf = Buffer.from(await up.arrayBuffer());
+      let buf = Buffer.from(await up.arrayBuffer());
+      let done = false;
       // The player itself came back: whatever cookies made that work are the approval.
       if (path.startsWith('/embed/') && up.ok && buf.includes('new Player("')) {
         for (const part of String(req.headers.cookie || '').split(';')) {
@@ -295,8 +298,10 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
           if (i > 0) state.cookies.set(part.slice(0, i).trim(), part.slice(i + 1).trim());
         }
         state.approved = true;
+        buf = Buffer.from(DONE_PAGE);
+        done = true;
       }
-      const out = { 'Content-Type': up.headers.get('content-type') || 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
+      const out = { 'Content-Type': done ? 'text/html; charset=utf-8' : up.headers.get('content-type') || 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
       const location = up.headers.get('location');
       if (location) out.Location = location.replace(/^https:\/\/[^/]*obrut\.show/i, base);
       // Same cookies for the browser (without obrut's domain), so the checkbox script sees them.
