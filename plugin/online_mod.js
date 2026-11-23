@@ -28,6 +28,7 @@
 //23.11.2026 - Alloha: switch the voice's inner tracks from the player's audio track menu
 //23.11.2026 - Alloha: tracks and subtitles are listed per episode (later episodes can be another file)
 //23.11.2026 - External Android player: playlist entries keep their subtitles
+//23.11.2026 - Alloha: voiceovers for the DDD player (X-DDD-Voiceover-Path)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -367,6 +368,12 @@
 
       first.continue_play = true;
       attachExternalQualities(first);
+
+      // Voiceovers that are separate streams of one video (Alloha): DDD asks an item's own url
+      // with this path when it starts playing the item, so every episode gets its own list.
+      // One short header for the whole playlist, because a DDD that does not know it forwards it
+      // to the video server with every request.
+      if (isExternalAndroidPlayer() && first.voiceoverPath) setDddHeader(first, 'X-DDD-Voiceover-Path', first.voiceoverPath);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
@@ -14387,6 +14394,7 @@
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
               first.voiceovers = voiceoversFor(element, first, items);
+              first.voiceoverPath = server.replace(/^https?:\/\/[^\/]+/, '') + '/voiceovers';
               element.cell = first;
 
               if (element.season && Lampa.Platform.version) {
