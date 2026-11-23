@@ -159,7 +159,11 @@
         }).map(function (s) {
           return { label: String(s.label), url: s.url };
         }) : [];
-        if (subs.length) out.subtitles = subs;
+        if (subs.length) {
+          out.subs = subs;
+          // Lampa Android reads video_list.subtitles (optJSONArray "subtitles"), the same field the built-in player uses
+          out.subtitles = subs;
+        }
         return out;
       }).filter(function (item) {
         return item.url;
@@ -168,7 +172,7 @@
       // does not start at all. A very long season keeps subtitles only for the episode that starts.
       var size = 0;
       list.forEach(function (item) {
-        if (item.subtitles) size += JSON.stringify(item.subtitles).length;
+        if (item.subs) size += JSON.stringify(item.subs).length;
       });
       if (size > 200000) list.forEach(function (item) {
         if (item.url !== first.url) delete item.subtitles;
@@ -379,6 +383,11 @@
         attachQualitySources(first, playlist);
         attachResumeData(first, playlist);
         first.playlist = sanitizePlaylist(first, playlist);
+        // Lampa Android takes each item's subtitles from its own `subtitles` field (video_list.subtitles),
+        // not from the shared `subs`. Without this the external player gets no subtitles.
+        playlist.forEach(function (item) {
+          if (item && Array.isArray(item.subtitles) && item.subtitles.length) item.subs = item.subtitles;
+        });
       } else if (isExternalAndroidPlayer()) {
         attachResumeData(first, [first]);
       }
