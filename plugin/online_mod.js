@@ -14232,14 +14232,29 @@
         if (!current) list.forEach(function (a) {
           if (a["default"]) current = a.label;
         });
-        return list.map(function (a) {
-          return {
+        var cur = -1;
+        list.forEach(function (a, i) {
+          if (cur == -1 && bareLabel(a.label) === bareLabel(current)) cur = i;
+        });
+        return list.map(function (a, i) {
+          var track = {
             name: a.label,
-            selected: bareLabel(a.label) === bareLabel(current),
-            onSelect: function onSelect() {
-              switchAudio(element, data, items, a.label);
-            }
+            selected: i == cur
           };
+          // The menu turns `enabled` off on every track and on for the picked one, the way Lampa's own
+          // track lists work. An onSelect on the item would replace the menu's handler, which moves
+          // the check mark and gives the controls back to the player.
+          Object.defineProperty(track, 'enabled', {
+            set: function set(v) {
+              if (!v || i == cur) return;
+              cur = i;
+              switchAudio(element, data, items, a.label);
+            },
+            get: function get() {
+              return i == cur;
+            }
+          });
+          return track;
         });
       }
 
