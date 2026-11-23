@@ -31,9 +31,15 @@ https://edembey.github.io/lampa-torbox/ultra.js
 
 Фильм или сериал → **Онлайн** → выбрать источник. Балансеры: HDrezka, Filmix, CDNVideoHub, AniLibria.top, Kodik, Naruto Based, Alloha, Turbo. FanSerials — только на Android; Collaps — только когда Lampa открыта по http(s) с адреса без «lampa» в имени. Остальные балансеры исходного online_mod отключены.
 
-- **Alloha** и **Turbo** работают через свой сервер (см. [Сервер](#сервер)): его адрес указывается в настройках Alloha.
-- **HDrezka в браузере** (lampa.mx): сайт не пускает браузер напрямую. Нужен либо сервер Alloha (адрес в настройках Alloha), либо скрипт Tampermonkey: https://edembey.github.io/lampa-torbox/plugin/rezka-bridge.user.js (только Chrome).
-- **HDrezka** и **Filmix** могут попросить вход или токен в своих настройках.
+- **Alloha** и **Turbo** работают только через свой сервер (см. [Сервер](#сервер)).
+- **HDrezka** на Android работает напрямую. В браузере (lampa.mx) сайт не отвечает странице и показывает проверку на бота, поэтому нужен один из вариантов:
+  - свой сервер (см. [Сервер](#сервер));
+  - скрипт Tampermonkey (рассчитан на Chrome): https://edembey.github.io/lampa-torbox/plugin/rezka-bridge.user.js. Если скрипт установлен, он используется вместо сервера. Через него любой плагин на lampa.mx может пользоваться вашим входом в HDrezka.
+
+  Затем в браузере: Настройки → online_mod → HDrezka → логин, пароль → **Войти в HDrezka**.
+- **Filmix** просит токен в своих настройках.
+
+Поле **«Адрес своего сервера»** есть в настройках Alloha, Turbo и HDrezka (у HDrezka — только в браузере). Это одно и то же значение: достаточно заполнить его в любом из трёх разделов.
 
 ### TorBox
 
@@ -49,7 +55,7 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 ## Сервер
 
-`server/` — помощник для Alloha и Turbo (Node, порт 8790). Ходит к источникам через Cloudflare WARP (wireproxy) и curl-impersonate.
+`server/` — помощник для Alloha, Turbo и HDrezka в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo и HDrezka — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает), cookie и пароль в логи не пишет.
 
 Нужен `server/wireproxy.conf` (в git не хранится): WireGuard-профиль WARP (`wgcf register && wgcf generate`, затем скопировать `wgcf-profile.conf` в `server/wireproxy.conf`) и в конце секция
 
@@ -66,4 +72,12 @@ docker compose up -d
 docker compose logs tunnel | grep trycloudflare   # публичный https-адрес
 ```
 
-Этот адрес вставляется в Lampa: Настройки → online_mod → Alloha → адрес сервера.
+Этот адрес вставляется в Lampa: Настройки → online_mod → Alloha, Turbo или HDrezka → **Адрес своего сервера**.
+
+Обновление после `git pull`:
+
+```
+docker compose up -d --build alloha
+```
+
+Пересобирайте только `alloha`. Если перезапустится `tunnel`, адрес trycloudflare сменится и его придётся заново вписать в Lampa.
