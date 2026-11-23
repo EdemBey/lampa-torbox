@@ -102,9 +102,9 @@ function slim(list) {
   });
 }
 
-async function playlist(embed, get = fetch) {
-  const up = await get(embed, {
-    headers: { Referer: PARENT, 'User-Agent': state.ua || 'Mozilla/5.0', Cookie: cookieHeader(''), ...NO_HINTS },
+async function playlist(embed) {
+  const up = await fetch(embed, {
+    headers: { Referer: PARENT, 'User-Agent': state.ua || 'Mozilla/5.0', Cookie: cookieHeader('') },
     signal: AbortSignal.timeout(TIMEOUT),
   });
   rememberCookies(up.headers);
@@ -143,7 +143,7 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
         res.end();
         return true;
       }
-      json(res, 200, await playlist(embed.href, get));
+      json(res, 200, await playlist(embed.href));
       return true;
     }
 
@@ -268,7 +268,6 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
         'Accept-Language': req.headers['accept-language'] || 'ru',
         Cookie: cookieHeader(req.headers.cookie),
         Referer: path.startsWith('/embed/') ? PARENT : 'https://' + state.host + '/',
-        ...NO_HINTS,
       };
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
       if (req.method === 'POST') headers.Origin = 'https://' + state.host;
@@ -285,7 +284,8 @@ export async function handleTurbo(req, res, url, base, get = fetch) {
         req.on('end', () => { if (!overflow) ok(Buffer.concat(parts)); });
       }) : undefined;
       if (body === null) { json(res, 413, { error: 'body too large' }); return true; }
-      const up = await get(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
+      // obrut answers the checkbox POST with 404 when it comes through curl-impersonate, so the check stays on Node fetch.
+      const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
       rememberCookies(up.headers);
       const buf = Buffer.from(await up.arrayBuffer());
       // The player itself came back: whatever cookies made that work are the approval.
