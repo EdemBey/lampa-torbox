@@ -61,16 +61,27 @@ test('mapPlaylist gives the variants of a master playlist no position', () => {
   assert.deepEqual(seen, [undefined]);
 });
 
-test('sourceFor picks the audio track by audioId and falls back to the default', () => {
+test('sourceFor picks the audio track by label and falls back to the default', () => {
   const info = { sources: [
-    { label: 'first', audioId: '3', default: false, qualities: { 360: 'a' } },
-    { label: 'default', audioId: '1', default: true, qualities: { 360: 'b' } },
+    { label: '(Russian) MVO (HDRezka) 18+', audioId: '1', default: false, qualities: { 360: 'a' } },
+    { label: '(Russian) Dub (Red Head Sound) 18+', audioId: '2', default: true, qualities: { 360: 'b' } },
+    { label: '(English) 9', audioId: '9', default: false, qualities: { 360: 'c' } },
   ] };
-  assert.equal(sourceFor(info, 'https://x.live/embed?audio=3'), info.sources[0]);
-  assert.equal(sourceFor(info, 'https://x.live/embed?audio=1'), info.sources[1]);
+  const q = (label) => 'https://x.live/embed?audio=' + encodeURIComponent(label);
+  assert.equal(sourceFor(info, q('(Russian) MVO (HDRezka) 18+')), info.sources[0]);
+  assert.equal(sourceFor(info, q('(English) 9')), info.sources[2]);
+  // Learned from an episode with one track more.
+  assert.equal(sourceFor(info, q('(English) 10')), info.sources[2]);
+  // "18+" is part of the name, not a number to drop.
+  assert.equal(sourceFor(info, q('(Russian) MVO (HDRezka)')), info.sources[1]);
   assert.equal(sourceFor(info, 'https://x.live/embed'), info.sources[1]);
   assert.equal(sourceFor(info, 'https://x.live/embed?audio='), info.sources[1]);
-  assert.equal(sourceFor(info, 'https://x.live/embed?audio=5'), info.sources[1]);
-  assert.equal(sourceFor(info, 'not a url?audio=3'), info.sources[1]);
-  assert.equal(sourceFor({ sources: [{ audioId: null, qualities: {} }] }, 'https://x.live/embed').audioId, null);
+  assert.equal(sourceFor(info, q('(French) 3')), info.sources[1]);
+  assert.equal(sourceFor(info, 'not a url?audio=x'), info.sources[1]);
+  const both = { sources: [
+    { label: '(Russian) MVO (HDRezka)', default: true, qualities: { 360: 'a' } },
+    { label: '(Russian) MVO (HDRezka) 18+', default: false, qualities: { 360: 'b' } },
+  ] };
+  assert.equal(sourceFor(both, q('(Russian) MVO (HDRezka) 18+')), both.sources[1]);
+  assert.equal(sourceFor(both, q('(Russian) MVO (HDRezka)')), both.sources[0]);
 });
