@@ -32,6 +32,7 @@ https://edembey.github.io/lampa-torbox/ultra.js
 Фильм или сериал → **Онлайн** → выбрать источник. Балансеры: HDrezka, Filmix, CDNVideoHub, AniLibria.top, Kodik, Naruto Based, Alloha, Turbo. FanSerials — только на Android; Collaps — только когда Lampa открыта по http(s) с адреса без «lampa» в имени. Остальные балансеры исходного online_mod отключены.
 
 - **Alloha** и **Turbo** работают через свой сервер (см. [Сервер](#сервер)): его адрес указывается в настройках Alloha.
+- **HDrezka в браузере** (lampa.mx): сайт не пускает браузер напрямую. Нужен либо сервер Alloha (адрес в настройках Alloha), либо скрипт Tampermonkey: https://edembey.github.io/lampa-torbox/plugin/rezka-bridge.user.js (только Chrome).
 - **HDrezka** и **Filmix** могут попросить вход или токен в своих настройках.
 
 ### TorBox

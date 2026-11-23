@@ -31,6 +31,7 @@
 //23.11.2026 - Alloha: voiceovers for the DDD player (X-DDD-Voiceover-Path)
 //23.11.2026 - Alloha: 4K mark and episode range next to each voice (4K, 1-12 эп.); range shared with Kodik and Turbo
 //23.11.2026 - HDrezka in a browser: login and pages through the Alloha helper (rezka has no CORS and lets only app user agents past its bot check)
+//23.11.2026 - HDrezka in a browser without a server: Tampermonkey bridge (plugin/rezka-bridge.user.js)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -669,8 +670,9 @@
       if (name === 'cookie3') return user_proxy3;
       if (name === 'ip') return proxy3;
 
-      // A browser gets neither CORS nor past the bot check from HDrezka, so it goes through the Alloha helper when one is set.
+      // A browser gets neither CORS nor past the bot check from HDrezka: prefer the Tampermonkey bridge (plugin/rezka-bridge.user.js), then the Alloha helper when one is set.
       if (name === 'rezka2' && Lampa.Storage.field('online_mod_proxy_rezka2') !== true && !Lampa.Platform.is('android')) {
+        if (window.online_mod_rezka_bridge) return window.online_mod_rezka_bridge;
         var helper = (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
         if (helper) return helper + '/';
       }
@@ -3956,9 +3958,16 @@
           onChange: function onChange() {
             var rezka2_logout_status = $('.settings-param__status', rezka2_logout).removeClass('active error wait').addClass('wait');
             if (Utils.proxy('rezka2')) {
-              Lampa.Storage.set('online_mod_rezka2_cookie', '');
-              Lampa.Storage.set('online_mod_rezka2_status', 'false');
-              rezka2_logout_status.removeClass('active error wait').addClass('active');
+              var done = function () {
+                Lampa.Storage.set('online_mod_rezka2_cookie', '');
+                Lampa.Storage.set('online_mod_rezka2_status', 'false');
+                rezka2_logout_status.removeClass('active error wait').addClass('active');
+              };
+              if (window.online_mod_rezka_bridge) {
+                network$3.silent(window.online_mod_rezka_bridge + Utils.rezka2Host() + '/logout/', done, done, false, { dataType: 'text' });
+              } else {
+                done();
+              }
             } else {
               rezka2Logout(function () {
                 rezka2_logout_status.removeClass('active error wait').addClass('active');
