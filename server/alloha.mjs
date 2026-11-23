@@ -151,7 +151,8 @@ async function resolveInfo(src) {
   if (!bnsi.pnr || !bnsi.pnk) throw new Error('bnsi: no websocket session (Alloha refuses this client right now)');
 
   const defaultSource = sources.find((x) => x.default) || sources[0];
-  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, sources, audio: defaultSource.label || null, meta: {} };
+  const subtitles = (bnsi.tracks || []).filter((x) => x && x.src && x.label).map((x) => ({ label: x.label, default: !!x['default'], src: x.src }));
+  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, sources, subtitles, audio: defaultSource.label || null, meta: {} };
 }
 
 // Episodes resolved for playback, plus the in-flight and recently failed ones.
@@ -673,6 +674,32 @@ http.createServer(async (req, res) => {
       // This costs the /bnsi of the episode asked about; only playback of that same episode reuses it.
       const info = await iframeInfo(src);
       return send(res, 200, JSON.stringify(info.sources.map((x) => ({ label: x.label, audioId: x.audioId, default: x.default }))), 'application/json; charset=utf-8');
+    }
+    if (url.pathname === '/subs') {
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      // Same cost as /audios: the plugin asks only for the episode it is about to play.
+      const info = await iframeInfo(src);
+      return send(res, 200, JSON.stringify(info.subtitles.map((x) => ({ label: x.label, default: x.default }))), 'application/json; charset=utf-8');
+    }
+    if (url.pathname === '/sub.vtt') {
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      // By label, so the plugin can hand the player links for episodes it has not resolved yet;
+      // the resolve happens when the player loads the episode, which it needs anyway.
+      const info = await iframeInfo(src);
+      const sub = info.subtitles.find((x) => x.label === q.get('label'));
+      if (!sub) return send(res, 404, 'no such subtitles');
+      let target;
+      try { target = new URL(sub.src); } catch { return send(res, 502, 'bad subtitles url'); }
+      // Only Alloha's CDN: the helper is reachable from the internet and must not fetch arbitrary hosts.
+      if (target.protocol !== 'https:' || target.port || !/(^|\.)userplay\.live$/i.test(target.hostname)) return send(res, 502, 'bad subtitles url');
+      // The player loads them with a plain GET from its own page, full page url as Referer
+      // (measured); no session headers are needed.
+      const up = await cfetch(target.href, {
+        headers: { ...browser('cross-site'), Accept: '*/*', Origin: info.origin, Referer: info.src },
+        signal: AbortSignal.timeout(TIMEOUT),
+      });
+      const text = await up.text();
+      return send(res, up.ok ? 200 : 502, up.ok ? text : 'subtitles: ' + up.status, up.ok ? 'text/vtt; charset=utf-8' : undefined);
     }
     send(res, 404, 'not found');
   } catch (e) {
