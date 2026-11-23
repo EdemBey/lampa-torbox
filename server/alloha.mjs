@@ -9,6 +9,7 @@ import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
 import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
+import { handleRezka, isRezkaPath } from './rezka.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 // Alloha drops a session a few minutes in when its requests do not come from a browser, and
@@ -603,12 +604,12 @@ http.createServer(async (req, res) => {
   const proto = /^https$/i.test(req.headers['x-forwarded-proto'] || '') ? 'https' : 'http';
   const host = /^[a-z0-9.:[\]-]+$/i.test(req.headers.host || '') ? req.headers.host : '127.0.0.1:' + PORT;
   const base = `${proto}://${host}`;
-  if (url.pathname !== '/s') console.log(new Date().toISOString().slice(11, 19), req.method, url.pathname, q.get('q') || '');
+  if (url.pathname !== '/s') console.log(new Date().toISOString().slice(11, 19), req.method, isRezkaPath(url.pathname) ? '/rezka' : url.pathname, q.get('q') || '');
   if (req.method === 'OPTIONS') {
     // Chrome asks before a public page (lampa.mx) may call a LAN address.
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': req.headers['access-control-request-headers'] || '*',
       'Access-Control-Allow-Private-Network': 'true',
     });
@@ -659,6 +660,7 @@ http.createServer(async (req, res) => {
       pipeline(body, res, () => {});
       return;
     }
+    if (await handleRezka(req, res)) return;
     if (await handleTurbo(req, res, url, base)) return;
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');

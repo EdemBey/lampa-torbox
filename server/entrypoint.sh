@@ -38,7 +38,8 @@ if [ -f /opt/wireproxy.conf ]; then
   # so the whole Turbo chain (obrut + CDN) goes out directly, like it does from a home machine.
   # Leading dots are required: Node's undici only matches an exact host or a "." suffix, so a bare
   # "obrut.show" does not cover cdn-xxxx.obrut.show.
-  export NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:40000 NO_PROXY=.obrut.show,.superdupercdn.com no_proxy=.obrut.show,.superdupercdn.com
+  # rezka is reached directly too, its bot check is about the user agent, not WARP.
+  export NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:40000 NO_PROXY=.obrut.show,.superdupercdn.com,rezka.ag,.rezka.ag,hdrezka.ag,.hdrezka.ag no_proxy=.obrut.show,.superdupercdn.com,rezka.ag,.rezka.ag,hdrezka.ag,.hdrezka.ag
 
   # Alloha only hands out usable stream tokens to residential-looking IPs. The tunnel also
   # wedges now and then without exiting — DNS inside it times out and every request fails —
