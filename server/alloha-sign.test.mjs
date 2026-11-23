@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { borthFor, episodeKey, mapPlaylist, YB, pickQuality } from './alloha-sign.mjs';
+import { borthFor, episodeKey, mapPlaylist, YB, pickQuality, sourceFor } from './alloha-sign.mjs';
 
 test('Borth matches the player byte for byte', () => {
   // Captured from a live player page together with the Borth it sent.
@@ -59,4 +59,18 @@ test('mapPlaylist gives the variants of a master playlist no position', () => {
   const seen = [];
   mapPlaylist('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nindex-1.m3u8', 'https://cdn.example/0/x/master.m3u8', (url, t) => { seen.push(t); return url; });
   assert.deepEqual(seen, [undefined]);
+});
+
+test('sourceFor picks the audio track by audioId and falls back to the default', () => {
+  const info = { sources: [
+    { label: 'first', audioId: '3', default: false, qualities: { 360: 'a' } },
+    { label: 'default', audioId: '1', default: true, qualities: { 360: 'b' } },
+  ] };
+  assert.equal(sourceFor(info, 'https://x.live/embed?audio=3'), info.sources[0]);
+  assert.equal(sourceFor(info, 'https://x.live/embed?audio=1'), info.sources[1]);
+  assert.equal(sourceFor(info, 'https://x.live/embed'), info.sources[1]);
+  assert.equal(sourceFor(info, 'https://x.live/embed?audio='), info.sources[1]);
+  assert.equal(sourceFor(info, 'https://x.live/embed?audio=5'), info.sources[1]);
+  assert.equal(sourceFor(info, 'not a url?audio=3'), info.sources[1]);
+  assert.equal(sourceFor({ sources: [{ audioId: null, qualities: {} }] }, 'https://x.live/embed').audioId, null);
 });

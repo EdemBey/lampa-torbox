@@ -89,3 +89,13 @@ export function episodeKey(src) {
     return x.host + x.pathname + '?' + params;
   } catch { return String(src); }
 }
+
+// Pick one of the inner audio tracks of an already-resolved episode by Alloha's audioId, not by
+// position: the plugin learns the ids from one episode and other episodes may list fewer tracks
+// or order them differently. An unknown or missing id falls back to the default track.
+export function sourceFor(info, src) {
+  const sources = (info && Array.isArray(info.sources)) ? info.sources : [];
+  let raw = null;
+  try { raw = new URL(src).searchParams.get('audio'); } catch {}
+  return (raw && sources.find((x) => x.audioId === raw)) || sources.find((x) => x.default) || sources[0];
+}
