@@ -144,7 +144,14 @@ export async function handleTurbo(req, res, url, base) {
       if (up.status >= 300 && up.status < 400 && location) {
         const next = new URL(location, target.href);
         if (!isCdnHost(next.hostname) || next.protocol !== 'https:') { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        const cdn = new URL(location, target.href).href;
+        let cdn = next.href;
+        // z.superdupercdn.com takes 5+ s to redirect to its edge (lucky.z…), longer than hls.js waits for a
+        // manifest, so the helper takes that redirect itself (headers only) and hands out the edge link.
+        try {
+          const hop = await fetch(cdn, { method: 'HEAD', redirect: 'manual', headers: { 'User-Agent': state.ua || 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) });
+          const edge = hop.headers.get('location') && new URL(hop.headers.get('location'), cdn);
+          if (hop.status >= 300 && hop.status < 400 && edge && edge.protocol === 'https:' && isCdnHost(edge.hostname)) cdn = edge.href;
+        } catch {}
         // Lampa asks with json=1 and hands the link to its player: a redirect from here to the CDN makes the browser send Origin: null, which the CDN refuses.
         if (q.get('json')) { json(res, 200, { url: cdn }); return true; }
         res.writeHead(302, { Location: cdn, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
