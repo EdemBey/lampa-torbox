@@ -23,6 +23,7 @@
 //12.11.2026 - DDD: inline per-episode qualities for resolved playlists (HDrezka)
 //12.11.2026 - DDD: stable item keys and Lampa positions for per-episode resume
 //22.11.2026 - Alloha: real quality list per episode, 4K by default when Alloha has it
+//23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) as separate voices
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -13828,13 +13829,15 @@
           }
           extract = {
             iframe: iframe,
-            pl: pl && pl.all ? pl : {}
+            pl: pl && pl.all ? pl : {},
+            audios: {}
           };
 
           if (pl && pl.all && Object.keys(pl.all).length) {
             component.loading(false);
             filter();
             append(filtred());
+            probeAudios();
           } else component.emptyForQuery(select_title);
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
@@ -13860,6 +13863,7 @@
         };
         filter();
         append(filtred());
+        probeAudios();
         component.saveChoice(choice);
       };
       /**
@@ -13876,6 +13880,7 @@
         component.reset();
         filter();
         append(filtred());
+        probeAudios();
         component.saveChoice(choice);
       };
       /**
@@ -13894,7 +13899,8 @@
         var pl = fileList && Lampa.Arrays.decodeJson(fileList[1], {});
         extract = {
           iframe: url,
-          pl: {}
+          pl: {},
+          audios: {}
         };
 
         if (pl && pl.all && Object.keys(pl.all).length) {
@@ -13902,6 +13908,7 @@
           component.loading(false);
           filter();
           append(filtred());
+          probeAudios();
         } else component.emptyForQuery(select_title);
       }
       /**
@@ -13939,8 +13946,21 @@
             var translations = episodes[e_num] || {};
 
             var _loop = function _loop(v_id) {
-              if (!filter_items.voice_info.some(function (v) {
-                return v.id == v_id;
+              var audios = extract && extract.audios && Array.isArray(extract.audios[v_id]) ? extract.audios[v_id] : null;
+              if (audios && audios.length > 1) {
+                audios.forEach(function (a, i) {
+                  if (!filter_items.voice_info.some(function (v) {
+                    return v.id == v_id && v.audio == a.audioId;
+                  })) {
+                    filter_items.voice.push(translations[v_id].translation + ' / ' + (a.label || '#' + (i + 1)));
+                    filter_items.voice_info.push({
+                      id: v_id,
+                      audio: a.audioId
+                    });
+                  }
+                });
+              } else if (!filter_items.voice_info.some(function (v) {
+                return v.id == v_id && v.audio == null;
               })) {
                 filter_items.voice.push(translations[v_id].translation);
                 filter_items.voice_info.push({
@@ -13959,6 +13979,13 @@
 
         if (choice.voice_name) {
           var inx = filter_items.voice.indexOf(choice.voice_name);
+          // A voice split into its tracks (or not yet split) is found by its base name.
+          if (inx == -1) {
+            var base = choice.voice_name.split(' / ')[0];
+            for (var i = 0; i < filter_items.voice.length && inx == -1; i++) {
+              if (filter_items.voice[i] === base || filter_items.voice[i].indexOf(base + ' / ') === 0) inx = i;
+            }
+          }
           if (inx == -1) choice.voice = 0;else if (inx !== choice.voice) {
             choice.voice = inx;
           }
@@ -13993,7 +14020,8 @@
                   info: ' / ' + Lampa.Utils.shortText(voice, 50),
                   season: s_num,
                   episode: e_num,
-                  media: media
+                  media: media,
+                  audio: filter_items.voice_info[choice.voice].audio
                 });
               }
             }
@@ -14020,6 +14048,55 @@
 
         return filtred;
       }
+      // A standalone voice file can carry several audio tracks; the helper lists them once per voice.
+      function probeAudios() {
+        if (!extract || !extract.pl || extract.pl.type !== 'serial') return;
+        if (!filter_items || !filter_items.voice_info || !filter_items.voice_info[choice.voice]) return;
+        var v_id = filter_items.voice_info[choice.voice].id;
+        if (v_id == null || !extract.audios || extract.audios[v_id] !== undefined) return;
+        var season_num = filter_items.season_num[choice.season];
+        var episodes = (extract.pl.all && extract.pl.all[season_num]) || {};
+        var media = null;
+        var firstEpisode = null;
+        for (var e_num in episodes) {
+          var translations = episodes[e_num] || {};
+          if (translations[v_id]) { media = translations[v_id]; firstEpisode = e_num; break; }
+        }
+        if (!media || media.id_file != null) return;
+        extract.audios[v_id] = 'pending';
+        var url = extract.iframe.replace(/&(translation|season|episode|audio)=[^&]*/g, '') + '&translation=' + media.id_translation;
+        if (season_num) url += '&season=' + season_num + '&episode=' + firstEpisode;
+        var currentExtract = extract;
+        var currentSeason = choice.season;
+        var probe = new Lampa.Reguest();
+        probe.timeout(20000);
+        probe["native"](server + '/audios?url=' + encodeURIComponent(url), function (res) {
+          if (extract !== currentExtract || !extract || !extract.audios) return;
+          var arr = res;
+          if (typeof res === 'string') {
+            try { arr = JSON.parse(res); } catch (e) { arr = null; }
+          }
+          if (!Array.isArray(arr)) arr = [];
+          // Tracks without an id cannot be asked for; the default goes first so a restored voice lands on it.
+          arr = arr.filter(function (a) {
+            return a && a.audioId != null;
+          });
+          arr.sort(function (a, b) {
+            return (b["default"] ? 1 : 0) - (a["default"] ? 1 : 0);
+          });
+          extract.audios[v_id] = arr;
+          // Re-rendering resets focus, so only while the user still looks at this voice and season.
+          if (arr.length > 1 && choice.season === currentSeason && filter_items.voice_info[choice.voice] && filter_items.voice_info[choice.voice].id == v_id) {
+            filter();
+            append(filtred());
+          }
+        }, function () {
+          if (extract !== currentExtract || !extract || !extract.audios) return;
+          extract.audios[v_id] = [];
+        }, false, {
+          dataType: 'text'
+        });
+      }
       /**
        * Получить поток
        * @param {*} element
@@ -14029,8 +14106,9 @@
       function getStream(element, call, error) {
         if (element.stream) return call(element);
         if (!(element.media && extract.iframe)) return error();
-        var url = extract.iframe.replace(/&(translation|season|episode)=[^&]*/g, '') + '&translation=' + element.media.id_translation;
+        var url = extract.iframe.replace(/&(translation|season|episode|audio)=[^&]*/g, '') + '&translation=' + element.media.id_translation;
         if (element.season) url += '&season=' + element.season + '&episode=' + element.episode;
+        if (element.audio != null) url += '&audio=' + encodeURIComponent(element.audio);
         element.stream = server + '/stream.m3u8?url=' + encodeURIComponent(url);
         element.subtitles = false;
         network.clear();

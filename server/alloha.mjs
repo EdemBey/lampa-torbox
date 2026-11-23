@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
-import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB } from './alloha-sign.mjs';
+import { borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
@@ -138,18 +138,20 @@ async function resolveInfo(src) {
     signal: AbortSignal.timeout(TIMEOUT),
   });
   const bnsi = await bnsiRes.json();
-  const sources = bnsi.hlsSource || [];
-  const source = sources.find((x) => x['default']) || sources[0];
-  if (!source || !source.quality) throw new Error('bnsi: ' + bnsiRes.status + ' without hlsSource');
+  const sources = (bnsi.hlsSource || []).map((x) => {
+    const qualities = {};
+    for (const [label, links] of Object.entries(x.quality || {})) {
+      const link = String(links).split(' or ').filter(Boolean)[0];
+      if (link) qualities[label] = link;
+    }
+    return { label: x.label || null, audioId: x.audioId == null ? null : String(x.audioId), default: !!x['default'], qualities };
+  }).filter((x) => Object.keys(x.qualities).length);
+  if (!sources.length) throw new Error('bnsi: ' + bnsiRes.status + ' without hlsSource');
   // Without a websocket session Alloha hands out urls the CDN cannot decrypt, so this is fatal.
   if (!bnsi.pnr || !bnsi.pnk) throw new Error('bnsi: no websocket session (Alloha refuses this client right now)');
 
-  const qualities = {};
-  for (const [label, links] of Object.entries(source.quality)) {
-    const link = String(links).split(' or ').filter(Boolean)[0];
-    if (link) qualities[label] = link;
-  }
-  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, qualities, audio: source.label || null, meta: {} };
+  const defaultSource = sources.find((x) => x.default) || sources[0];
+  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, sources, audio: defaultSource.label || null, meta: {} };
 }
 
 // Episodes resolved for playback, plus the in-flight and recently failed ones.
@@ -241,7 +243,7 @@ function postEvents(s, played) {
   const token = new URL(info.src).searchParams.get('token') || '';
   const event = (type, at, extra) => ({
     url: null, manifestUrl: m.manifestUrl || null, currentTime: s.pos || 0, duration: m.duration || null,
-    bufferLength: 30, paused: false, audioTrack: info.audio, quality: Number(s.q), subtitle: null,
+    bufferLength: 30, paused: false, audioTrack: info.audio, quality: Number(s.q), subtitle: null, // shortcut: reports the default track's label even when another track plays, fix if Alloha starts refusing switched tracks.
     event_type: type, at, since: at - (s.lastFlush || s.playerInitAt), ...extra,
   });
   const events = [];
@@ -313,7 +315,8 @@ function connect(s) {
 
 async function sessionFor(src, want) {
   const info = await iframeInfo(src);
-  const q = pickQuality(info.qualities, want);
+  const source = sourceFor(info, src);
+  const q = pickQuality(source.qualities, want);
   const key = keyOf(src);
   const hit = sessions.get(key);
   // The heartbeat reports the quality currently being played, which changes on every switch.
@@ -349,7 +352,7 @@ setInterval(() => {
   for (const [key, hit] of refreshes) if (!hit.promise && now - hit.at > REFRESH_EVERY) refreshes.delete(key);
   // A segment path is dropped with its episode, never while it resolves or refreshes.
   for (const k of origins.keys()) {
-    const ep = k.slice(0, k.lastIndexOf('|'));
+    const ep = k.slice(0, k.indexOf('|'));
     if (!infos.has(ep) && !pending.has(ep) && !refreshes.has(ep)) { origins.delete(k); moves.delete(k); }
   }
   for (const [key, hit] of sessions) {
@@ -437,8 +440,11 @@ const dirOf = (u) => u.slice(0, u.lastIndexOf('/') + 1);
 
 // Only urls under the player's original path move, and only after a refresh; init segments,
 // keys or renditions elsewhere stay where the playlist put them.
+function audioOf(src) {
+  try { return new URL(src).searchParams.get('audio') ?? ''; } catch { return ''; }
+}
 function relocate(src, q, url) {
-  const k = keyOf(src) + '|' + q;
+  const k = keyOf(src) + '|' + audioOf(src) + '|' + q;
   const from = origins.get(k), to = moves.get(k);
   return from && to && url.startsWith(from) ? to + url.slice(from.length) : url;
 }
@@ -455,17 +461,18 @@ function refreshEpisode(src, want) {
     if (old) dropSession(old);
     infos.delete(key);
     const info = await iframeInfo(src);
-    const q = pickQuality(info.qualities, want);
+    const source = sourceFor(info, src);
+    const q = pickQuality(source.qualities, want);
     const s = await sessionFor(src, q);
     if (old) { s.pos = old.pos; s.reportedPos = old.reportedPos; s.bytes = old.bytes; }
-    const masterUrl = info.qualities[q];
+    const masterUrl = source.qualities[q];
     const r = await cfetch(masterUrl, { headers: headersFor(s), signal: AbortSignal.timeout(TIMEOUT) });
     const master = await r.text();
     const line = r.ok && master.split('\n').find((l) => l.trim() && !l.startsWith('#'));
     if (!line) throw new Error('master ' + r.status);
     const base = dirOf(new URL(line.trim(), masterUrl).href);
     cdnHosts.add(new URL(base).hostname);
-    moves.set(key + '|' + q, base);
+    moves.set(key + '|' + audioOf(src) + '|' + q, base);
     console.log('session refreshed, segments moved to the new path');
     return true;
   })().catch((e) => { console.log('refresh failed:', e.message); return false; })
@@ -548,8 +555,9 @@ const rewritePlaylist = (text, playlistUrl, base, src, q) =>
 
 async function playlist(base, src, want) {
   const info = await iframeInfo(src);
-  const q = pickQuality(info.qualities, want);
-  const masterUrl = info.qualities[q];
+  const source = sourceFor(info, src);
+  const q = pickQuality(source.qualities, want);
+  const masterUrl = source.qualities[q];
   const masterRes = await cdnFetch(src, q, masterUrl);
   const master = await masterRes.text();
   if (!masterRes.ok) throw new Error('master: ' + masterRes.status);
@@ -560,8 +568,8 @@ async function playlist(base, src, want) {
   const text = await r.text();
   if (!text.includes('#EXTM3U')) throw new Error('variant: ' + r.status);
   // A fresh playlist carries fresh paths, so any earlier move no longer applies.
-  origins.set(keyOf(src) + '|' + q, dirOf(variantUrl));
-  moves.delete(keyOf(src) + '|' + q);
+  origins.set(keyOf(src) + '|' + audioOf(src) + '|' + q, dirOf(variantUrl));
+  moves.delete(keyOf(src) + '|' + audioOf(src) + '|' + q);
   // What /events reports about the stream, read from the playlists the player gets.
   const inf = master.split('\n').find((l) => l.startsWith('#EXT-X-STREAM-INF')) || '';
   const num = (re) => Number((inf.match(re) || [])[1]) || null;
@@ -659,6 +667,12 @@ http.createServer(async (req, res) => {
       const out = {};
       for (const label of QUALITIES) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
+    }
+    if (url.pathname === '/audios') {
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      // This costs the /bnsi of the episode asked about; only playback of that same episode reuses it.
+      const info = await iframeInfo(src);
+      return send(res, 200, JSON.stringify(info.sources.map((x) => ({ label: x.label, audioId: x.audioId, default: x.default }))), 'application/json; charset=utf-8');
     }
     send(res, 404, 'not found');
   } catch (e) {
