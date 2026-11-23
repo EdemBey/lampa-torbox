@@ -30,6 +30,7 @@
 //23.11.2026 - External Android player: playlist entries keep their subtitles
 //23.11.2026 - Alloha: voiceovers for the DDD player (X-DDD-Voiceover-Path)
 //23.11.2026 - Alloha: 4K mark and episode range next to each voice (4K, 1-12 эп.); range shared with Kodik and Turbo
+//23.11.2026 - HDrezka in a browser: login and pages through the Alloha helper (rezka has no CORS and lets only app user agents past its bot check)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -667,6 +668,12 @@
       if (name === 'cookie2') return user_proxy2;
       if (name === 'cookie3') return user_proxy3;
       if (name === 'ip') return proxy3;
+
+      // A browser gets neither CORS nor past the bot check from HDrezka, so it goes through the Alloha helper when one is set.
+      if (name === 'rezka2' && Lampa.Storage.field('online_mod_proxy_rezka2') !== true && !Lampa.Platform.is('android')) {
+        var helper = (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+        if (helper) return helper + '/';
+      }
 
       if (Lampa.Storage.field('online_mod_proxy_' + name) === true) {
         if (name === 'iframe') return user_proxy2;
@@ -3211,7 +3218,7 @@
           }
         } else {
           Lampa.Storage.set('online_mod_rezka2_status', 'false');
-          if (json && json.message) Lampa.Noty.show(json.message);
+          if (json && json.message) Lampa.Noty.show(typeof json.message === 'object' ? $.map(json.message, function (v) { return v; }).join(' ') : json.message);
           if (error) error();
         }
       };
@@ -3630,7 +3637,7 @@
         });
 
         if (!body.success) {
-          if (body.message) Lampa.Noty.show(body.message);
+          if (body.message) Lampa.Noty.show(typeof body.message === 'object' ? $.map(body.message, function (v) { return v; }).join(' ') : body.message);
           if (error) error();
           return;
         }
@@ -3925,7 +3932,7 @@
           },
           onChange: function onChange() {
             var rezka2_login_status = $('.settings-param__status', rezka2_login).removeClass('active error wait').addClass('wait');
-            rezka2Login(function () {
+            (Utils.proxy('rezka2') ? rezka2FillCookie : rezka2Login)(function () {
               rezka2_login_status.removeClass('active error wait').addClass('active');
             }, function () {
               rezka2_login_status.removeClass('active error wait').addClass('error');
@@ -3948,11 +3955,17 @@
           },
           onChange: function onChange() {
             var rezka2_logout_status = $('.settings-param__status', rezka2_logout).removeClass('active error wait').addClass('wait');
-            rezka2Logout(function () {
+            if (Utils.proxy('rezka2')) {
+              Lampa.Storage.set('online_mod_rezka2_cookie', '');
+              Lampa.Storage.set('online_mod_rezka2_status', 'false');
               rezka2_logout_status.removeClass('active error wait').addClass('active');
-            }, function () {
-              rezka2_logout_status.removeClass('active error wait').addClass('error');
-            });
+            } else {
+              rezka2Logout(function () {
+                rezka2_logout_status.removeClass('active error wait').addClass('active');
+              }, function () {
+                rezka2_logout_status.removeClass('active error wait').addClass('error');
+              });
+            }
           }
         });
       }
