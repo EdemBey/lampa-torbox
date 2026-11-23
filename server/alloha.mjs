@@ -686,12 +686,16 @@ http.createServer(async (req, res) => {
       // By label, so the plugin can hand the player links for episodes it has not resolved yet;
       // the resolve happens when the player loads the episode, which it needs anyway.
       const info = await iframeInfo(src);
+      // An external player (ExoPlayer) fails the whole episode when one of its subtitle links
+      // fails, and it gets links by label for episodes whose file may lack that label. So
+      // subtitles that cannot be served are answered as an empty track, not as an error.
+      const empty = (why) => { console.log('sub.vtt: empty,', why); return send(res, 200, 'WEBVTT\n\n', 'text/vtt; charset=utf-8'); };
       const sub = info.subtitles.find((x) => x.label === q.get('label'));
-      if (!sub) return send(res, 404, 'no such subtitles');
+      if (!sub) return empty('no such label');
       let target;
-      try { target = new URL(sub.src); } catch { return send(res, 502, 'bad subtitles url'); }
+      try { target = new URL(sub.src); } catch { return empty('bad url'); }
       // Only Alloha's CDN: the helper is reachable from the internet and must not fetch arbitrary hosts.
-      if (target.protocol !== 'https:' || target.port || !/(^|\.)userplay\.live$/i.test(target.hostname)) return send(res, 502, 'bad subtitles url');
+      if (target.protocol !== 'https:' || target.port || !/(^|\.)userplay\.live$/i.test(target.hostname)) return empty('foreign host');
       // The player loads them with a plain GET from its own page, full page url as Referer
       // (measured); no session headers are needed.
       const up = await cfetch(target.href, {
@@ -699,7 +703,7 @@ http.createServer(async (req, res) => {
         signal: AbortSignal.timeout(TIMEOUT),
       });
       const text = await up.text();
-      return send(res, up.ok ? 200 : 502, up.ok ? text : 'subtitles: ' + up.status, up.ok ? 'text/vtt; charset=utf-8' : undefined);
+      return up.ok ? send(res, 200, text, 'text/vtt; charset=utf-8') : empty('cdn ' + up.status);
     }
     send(res, 404, 'not found');
   } catch (e) {
