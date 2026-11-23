@@ -23,7 +23,7 @@
 //12.11.2026 - DDD: inline per-episode qualities for resolved playlists (HDrezka)
 //12.11.2026 - DDD: stable item keys and Lampa positions for per-episode resume
 //22.11.2026 - Alloha: real quality list per episode, 4K by default when Alloha has it
-//23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) as separate voices
+//23.11.2026 - Alloha: inner audio tracks of a voice (e.g. Украинский: 1+1 / HDREZKA / English) in a separate "Дорожка" filter
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -13777,7 +13777,9 @@
       var choice = {
         season: 0,
         voice: 0,
-        voice_name: ''
+        voice_name: '',
+        audio: 0,
+        audio_name: ''
       };
 
       function alloha_api_search(api, callback, error) {
@@ -13859,7 +13861,9 @@
         choice = {
           season: 0,
           voice: 0,
-          voice_name: ''
+          voice_name: '',
+          audio: 0,
+          audio_name: ''
         };
         filter();
         append(filtred());
@@ -13877,6 +13881,7 @@
       this.filter = function (type, a, b) {
         choice[a.stype] = b.index;
         if (a.stype == 'voice') choice.voice_name = filter_items.voice[b.index];
+        if (a.stype == 'audio') choice.audio_name = filter_items.audio[b.index];
         component.reset();
         filter();
         append(filtred());
@@ -13946,21 +13951,8 @@
             var translations = episodes[e_num] || {};
 
             var _loop = function _loop(v_id) {
-              var audios = extract && extract.audios && Array.isArray(extract.audios[v_id]) ? extract.audios[v_id] : null;
-              if (audios && audios.length > 1) {
-                audios.forEach(function (a, i) {
-                  if (!filter_items.voice_info.some(function (v) {
-                    return v.id == v_id && v.audio == a.audioId;
-                  })) {
-                    filter_items.voice.push(translations[v_id].translation + ' / ' + (a.label || '#' + (i + 1)));
-                    filter_items.voice_info.push({
-                      id: v_id,
-                      audio: a.audioId
-                    });
-                  }
-                });
-              } else if (!filter_items.voice_info.some(function (v) {
-                return v.id == v_id && v.audio == null;
+              if (!filter_items.voice_info.some(function (v) {
+                return v.id == v_id;
               })) {
                 filter_items.voice.push(translations[v_id].translation);
                 filter_items.voice_info.push({
@@ -13979,16 +13971,25 @@
 
         if (choice.voice_name) {
           var inx = filter_items.voice.indexOf(choice.voice_name);
-          // A voice split into its tracks (or not yet split) is found by its base name.
-          if (inx == -1) {
-            var base = choice.voice_name.split(' / ')[0];
-            for (var i = 0; i < filter_items.voice.length && inx == -1; i++) {
-              if (filter_items.voice[i] === base || filter_items.voice[i].indexOf(base + ' / ') === 0) inx = i;
-            }
-          }
           if (inx == -1) choice.voice = 0;else if (inx !== choice.voice) {
             choice.voice = inx;
           }
+        }
+
+        // The inner tracks of the chosen voice get their own filter row, shown only when there is a choice.
+        filter_items.audio = [];
+        filter_items.audio_id = [];
+        var audios = filter_items.voice_info[choice.voice] && extract.audios && extract.audios[filter_items.voice_info[choice.voice].id];
+        if (Array.isArray(audios) && audios.length > 1) {
+          audios.forEach(function (a, i) {
+            filter_items.audio.push(a.label || '#' + (i + 1));
+            filter_items.audio_id.push(a.audioId);
+          });
+        }
+        if (!filter_items.audio[choice.audio]) choice.audio = 0;
+        if (choice.audio_name) {
+          var a_inx = filter_items.audio.indexOf(choice.audio_name);
+          choice.audio = a_inx != -1 ? a_inx : 0;
         }
 
         component.filter(filter_items, choice);
@@ -14017,11 +14018,11 @@
                 filtred.push({
                   title: component.formatEpisodeTitle(s_num, e_num),
                   quality: (media.uhd ? '360p ~ 2160p' : '360p ~ 1080p') + (media.quality ? ' / ' + media.quality : ''),
-                  info: ' / ' + Lampa.Utils.shortText(voice, 50),
+                  info: ' / ' + Lampa.Utils.shortText(voice, 50) + (filter_items.audio[choice.audio] ? ' / ' + Lampa.Utils.shortText(filter_items.audio[choice.audio], 50) : ''),
                   season: s_num,
                   episode: e_num,
                   media: media,
-                  audio: filter_items.voice_info[choice.voice].audio
+                  audio: filter_items.audio_id[choice.audio]
                 });
               }
             }
@@ -14077,7 +14078,7 @@
             try { arr = JSON.parse(res); } catch (e) { arr = null; }
           }
           if (!Array.isArray(arr)) arr = [];
-          // Tracks without an id cannot be asked for; the default goes first so a restored voice lands on it.
+          // Tracks without an id cannot be asked for; the default goes first so a fresh choice lands on it.
           arr = arr.filter(function (a) {
             return a && a.audioId != null;
           });
@@ -14085,10 +14086,10 @@
             return (b["default"] ? 1 : 0) - (a["default"] ? 1 : 0);
           });
           extract.audios[v_id] = arr;
-          // Re-rendering resets focus, so only while the user still looks at this voice and season.
           if (arr.length > 1 && choice.season === currentSeason && filter_items.voice_info[choice.voice] && filter_items.voice_info[choice.voice].id == v_id) {
             filter();
-            append(filtred());
+            // The list already plays the default track; it is rebuilt (losing focus) only for a remembered other one.
+            if (choice.audio) append(filtred());
           }
         }, function () {
           if (extract !== currentExtract || !extract || !extract.audios) return;
@@ -16837,6 +16838,7 @@
       var filter_translate = {
         season: Lampa.Lang.translate('torrent_serial_season'),
         voice: Lampa.Lang.translate('torrent_parser_voice'),
+        audio: Lampa.Lang.translate('online_mod_audio_track'),
         source: Lampa.Lang.translate('settings_rest_source')
       };
       var all_sources = Balancers.map(function (s) {
@@ -17820,6 +17822,7 @@
         });
         add('source', Lampa.Lang.translate('online_mod_balanser'));
         if (filter_items.voice && filter_items.voice.length) add('voice', Lampa.Lang.translate('torrent_parser_voice'));
+        if (filter_items.audio && filter_items.audio.length > 1) add('audio', Lampa.Lang.translate('online_mod_audio_track'));
         if (filter_items.season && filter_items.season.length) add('season', Lampa.Lang.translate('torrent_serial_season'));
         if (filter_items.server && filter_items.server.length) add('server', Lampa.Lang.translate('online_mod_server'));
         this.updateQualityFilter();
@@ -18629,6 +18632,13 @@
           be: 'Паказаць яшчэ',
           en: 'Show more',
           zh: '展示更多'
+        },
+        online_mod_audio_track: {
+          ru: 'Дорожка',
+          uk: 'Доріжка',
+          be: 'Дарожка',
+          en: 'Audio track',
+          zh: '音轨'
         },
         online_mod_server: {
           ru: 'Сервер',
