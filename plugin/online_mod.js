@@ -34,6 +34,7 @@
 //23.11.2026 - HDrezka in a browser without a server: Tampermonkey bridge (plugin/rezka-bridge.user.js)
 //23.11.2026 - Server address field also in the Turbo and HDrezka settings (same value as in Alloha)
 //23.11.2026 - HDrezka: seasons first (every season any voice has), voices follow the season with an episode range (one request per voice when a series opens)
+//23.11.2026 - Filter: the season row comes before the voice row in every balancer
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -18101,9 +18102,9 @@
           return s.title;
         });
         add('source', Lampa.Lang.translate('online_mod_balanser'));
+        if (filter_items.season && filter_items.season.length) add('season', Lampa.Lang.translate('torrent_serial_season'));
         if (filter_items.voice && filter_items.voice.length) add('voice', Lampa.Lang.translate('torrent_parser_voice'));
         if (filter_items.audio && filter_items.audio.length > 1) add('audio', Lampa.Lang.translate('online_mod_audio_track'));
-        if (filter_items.season && filter_items.season.length) add('season', Lampa.Lang.translate('torrent_serial_season'));
         if (filter_items.server && filter_items.server.length) add('server', Lampa.Lang.translate('online_mod_server'));
         this.updateQualityFilter();
         select.push(qualityFilter);
@@ -18155,11 +18156,12 @@
         var need = Lampa.Storage.get('online_mod_filter', '{}'),
             select = [];
 
-        for (var i in need) {
+        var keys = Object.keys(need).sort(function (a, b) { return (b === 'season') - (a === 'season'); });
+        keys.forEach(function (i) {
           if (i !== 'source' && filter_translate[i] && filter_items[i] && filter_items[i].length > 1) {
             select.push(filter_translate[i] + ': ' + filter_items[i][need[i]]);
           }
-        }
+        });
 
         var source_obj = obj_filter_sources.filter(function (e) {
           return e.name === balanser;
