@@ -32,6 +32,7 @@
 //23.11.2026 - Alloha: 4K mark and episode range next to each voice (4K, 1-12 эп.); range shared with Kodik and Turbo
 //23.11.2026 - HDrezka in a browser: login and pages through the Alloha helper (rezka has no CORS and lets only app user agents past its bot check)
 //23.11.2026 - HDrezka in a browser without a server: Tampermonkey bridge (plugin/rezka-bridge.user.js)
+//23.11.2026 - Server address field also in the Turbo and HDrezka settings (same value as in Alloha)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -3916,6 +3917,8 @@
           }
         });
       }
+
+      if (!android) addHelperServerParam(component_name);
 
       if (!android) {
         var rezka2_login = {};
@@ -14479,9 +14482,25 @@
       }
     }
 
-    alloha.initSettings = function (show_all) {
-      var balanser_name = 'Alloha';
-      var component_name = 'online_mod_alloha';
+    // One server serves Alloha, Turbo and HDrezka in a browser; its field sits in each section so nobody has to look for it under Alloha.
+    function addHelperServerParam(component_name) {
+      Lampa.SettingsApi.addParam({
+        component: component_name,
+        param: {
+          name: 'online_mod_alloha_server',
+          placeholder: 'https://xxx.trycloudflare.com',
+          type: 'input',
+          values: '',
+          "default": ''
+        },
+        field: {
+          name: 'Адрес своего сервера (server/)',
+          description: 'Один сервер для Alloha, Turbo и HDrezka в браузере'
+        }
+      });
+    }
+
+    function helperSettings(balanser_name, component_name) {
       if (Lampa.SettingsApi.getComponent(component_name)) return;
 
       {
@@ -14510,22 +14529,10 @@
         });
       }
 
-      {
-        Lampa.SettingsApi.addParam({
-          component: component_name,
-          param: {
-            name: 'online_mod_alloha_server',
-            placeholder: 'https://alloha.example.com',
-            type: 'input',
-            values: '',
-            "default": ''
-          },
-          field: {
-            name: 'Адрес сервера Alloha (server/alloha.mjs)'
-          }
-        });
-      }
-    };
+      addHelperServerParam(component_name);
+    }
+
+    alloha.initSettings = function () { helperSettings('Alloha', 'online_mod_alloha'); };
 
     alloha.hideSettings = function (body) {
       $('[data-component="online_mod_alloha"]', body).hide();
@@ -14936,6 +14943,14 @@
         component.start(true);
       }
     }
+
+    turbo.initSettings = function () {
+      helperSettings('Turbo', 'online_mod_turbo');
+    };
+
+    turbo.hideSettings = function (body) {
+      $('[data-component="online_mod_turbo"]', body).hide();
+    };
 
 
     function kinopub(component, _object, config) {
