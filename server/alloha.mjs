@@ -650,7 +650,7 @@ http.createServer(async (req, res) => {
       pipeline(body, res, () => {});
       return;
     }
-    if (await handleTurbo(req, res, url, base, cfetch)) return;
+    if (await handleTurbo(req, res, url, base)) return;
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       // Answer right away: Lampa asks this for every episode of the season before playback

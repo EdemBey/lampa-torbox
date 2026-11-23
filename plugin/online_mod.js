@@ -14473,24 +14473,50 @@
         return filtred;
       }
 
-      // "[720p]url or mirror,[Auto]url" → quality map through the helper (it adds obrut's Referer).
+      // "[720p]url,[Auto]url" → the helper asks obrut (with its Referer) and returns the CDN link; the player loads it directly.
+      // CDN links carry an hourly expiry, so a resolved set is reused for 30 minutes only.
       function getStream(element, call, error) {
-        if (element.stream) return call(element);
-        var map = {};
-        var auto = '';
+        // shortcut: a playlist cell keeps the link it resolved first, so returning to an episode after an hour in the same player session gets an expired link; re-open the episode from the list if that shows up.
+        if (element.stream && Date.now() - (element.stream_time || 0) < 30 * 60 * 1000) return call(element);
+        var parts = [];
         String(element.file || '').split(',').forEach(function (part) {
           var m = part.match(/^\s*\[([^\]]+)\]\s*(\S+)/);
-          if (!m) return;
-          var url = server + '/turbo/stream?u=' + encodeURIComponent(m[2]);
-          if (/auto/i.test(m[1])) auto = url;else map[m[1]] = url;
+          if (m) parts.push({ label: m[1], url: m[2] });
         });
-        var labels = Object.keys(map).sort(function (a, b) {
-          return parseInt(b, 10) - parseInt(a, 10);
+        if (!parts.length) return error();
+        var map = {};
+        var auto = '';
+        var left = parts.length;
+        var done = function () {
+          if (--left) return;
+          var labels = Object.keys(map).sort(function (a, b) {
+            return parseInt(b, 10) - parseInt(a, 10);
+          });
+          element.stream = auto || labels.length && map[labels[0]] || '';
+          element.stream_time = Date.now();
+          element.qualitys = labels.length ? map : false;
+          element.subtitles = false;
+          element.stream ? call(element) : error();
+        };
+        parts.forEach(function (p) {
+          var net = new Lampa.Reguest();
+          net.timeout(20000);
+          net["native"](server + '/turbo/stream?json=1&u=' + encodeURIComponent(p.url), function (res) {
+            if (typeof res === 'string') {
+              try {
+                res = JSON.parse(res);
+              } catch (e) {
+                res = null;
+              }
+            }
+            if (res && res.url) {
+              if (/auto/i.test(p.label)) auto = res.url;else map[p.label] = res.url;
+            }
+            done();
+          }, done, false, {
+            dataType: 'text'
+          });
         });
-        element.stream = auto || labels.length && map[labels[0]] || '';
-        element.qualitys = labels.length ? map : false;
-        element.subtitles = false;
-        element.stream ? call(element) : error();
       }
 
       function append(items) {
