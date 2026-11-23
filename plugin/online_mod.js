@@ -14315,6 +14315,13 @@
       function subsFor(element, like) {
         var list = extract && extract.subs && extract.subs[listKey(like || element)];
         if (!element.sub_url || !Array.isArray(list) || !list.length) return false;
+        // ExoPlayer (DDD) turns on the first sideloaded track, and Alloha lists a forced track with a
+        // handful of cues (signs only) first, so the full subtitles go ahead of it.
+        list = list.filter(function (s) {
+          return !/forced/i.test(s.label);
+        }).concat(list.filter(function (s) {
+          return /forced/i.test(s.label);
+        }));
         return list.map(function (s) {
           return {
             label: s.label,
