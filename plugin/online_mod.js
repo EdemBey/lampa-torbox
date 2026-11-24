@@ -462,18 +462,55 @@
           call(null);
         });
       },
-      // Uploads of one episode share the opening and ending; the first upload that has a timing gives it.
+      // YummyAnime timings are marked by viewers per upload and are often wrong (JoJo SBR ep 1: two of
+      // 44 uploads say the opening is 0-3:34). A timing counts only when at least 3 uploads of the most
+      // common cut (2 for titles with up to 3 uploads) agree on its start (±5 s) and they are at least
+      // 15% of that cut's uploads.
       fromVideos: function fromVideos(videos, episode) {
+        var uploads = videos.filter(function (v) {
+          return String(v.number) === String(episode);
+        });
+        var counts = {};
+        var cut = 0;
+        uploads.forEach(function (v) {
+          counts[v.duration] = (counts[v.duration] || 0) + 1;
+          if (!cut || counts[v.duration] > counts[cut]) cut = v.duration;
+        });
+        // Without durations every upload counts as one cut
+        var same = cut ? uploads.filter(function (v) {
+          return Math.abs(v.duration - cut) <= 2;
+        }) : uploads;
+        // Small titles have one or two uploads: there a single or double mark is all there is
+        var minVotes = same.length <= 3 ? Math.min(2, same.length) : 3;
+        var median = function median(list) {
+          list.sort(function (a, b) {
+            return a - b;
+          });
+          return list[Math.floor(list.length / 2)];
+        };
         var out = [];
         [['op', 'opening'], ['ed', 'ending']].forEach(function (k) {
-          for (var i = 0; i < videos.length; i++) {
-            var v = videos[i];
+          var marks = same.map(function (v) {
             var t = v.skips && v.skips[k[1]];
-            if (String(v.number) === String(episode) && t && t.length > 0) {
-              out.push({ type: k[0], startTime: t.time, endTime: t.time + t.length });
-              break;
-            }
-          }
+            return t && { time: Number(t.time), length: Number(t.length) };
+          }).filter(function (t) {
+            return t && t.time >= 0 && t.length > 0;
+          });
+          var best = [];
+          marks.forEach(function (m) {
+            var group = marks.filter(function (o) {
+              return Math.abs(o.time - m.time) <= 5;
+            });
+            if (group.length > best.length) best = group;
+          });
+          if (best.length < minVotes || best.length < same.length * 0.15) return;
+          var start = median(best.map(function (t) {
+            return t.time;
+          }));
+          var end = median(best.map(function (t) {
+            return t.time + t.length;
+          }));
+          if (end > start) out.push({ type: k[0], startTime: start, endTime: end });
         });
         return out;
       },

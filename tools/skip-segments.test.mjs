@@ -67,7 +67,16 @@ const aniskip = function (mal, n) {
 };
 const animeCard = { kinopoisk_id: 1, genres: [{ id: 16 }], original_language: 'ja' };
 
-const videosFixture = [{ number: '1', skips: { opening: { time: 0, length: 90 }, ending: null } }];
+// Three uploads agree on the opening; one lone upload claims a wrong ending (ignored: fewer than 3 votes).
+const upload = (skips) => ({ number: '1', duration: 1400, skips: skips });
+const videosFixture = [
+  upload({ opening: { time: 0, length: 90 }, ending: { time: 600, length: 90 } }),
+  upload({ opening: { time: 2, length: 88 }, ending: null }),
+  upload({ opening: { time: 0, length: 90 }, ending: null }),
+  upload({ opening: null, ending: null }),
+  // Another cut with a wrong opening: ignored, only the most common duration votes
+  { number: '1', duration: 1500, skips: { opening: { time: 300, length: 90 }, ending: null } }
+];
 const yani = [{ type: 'op', startTime: 0, endTime: 90 }];
 const prepared = function (api, list) {
   return new Promise(function (resolve) { api.animeSkip.prepare(list, resolve); });
@@ -225,6 +234,20 @@ const prepared = function (api, list) {
   state.cancel();
   await Promise.resolve();
   assert.strictEqual(done, 0);
+}
+
+// h) YummyAnime voting: lone marks are dropped, missing durations and tiny titles still work
+{
+  const { api } = load({}, {});
+  const up = (d, skips) => ({ number: '1', duration: d, skips: skips });
+  const op = (t, l) => ({ opening: { time: t, length: l } });
+  // 2 of 20 same-cut uploads mark an opening: below 3 votes and 15%
+  const noise = Array.from({ length: 18 }, () => up(2924, {})).concat([up(2924, op(0, 214)), up(2924, op(0, 214))]);
+  assert.deepStrictEqual(api.animeSkip.fromVideos(noise, '1'), []);
+  // Without durations every upload votes; numbers may come as strings
+  assert.deepStrictEqual(api.animeSkip.fromVideos([1, 2, 3].map(() => ({ number: '1', skips: { opening: { time: '10', length: '80' } } })), '1'), [{ type: 'op', startTime: 10, endTime: 90 }]);
+  // A title with two uploads needs only two agreeing marks
+  assert.deepStrictEqual(api.animeSkip.fromVideos([up(100, { ending: { time: 50, length: 30 } }), up(100, { ending: { time: 51, length: 30 } })], '1'), [{ type: 'ed', startTime: 51, endTime: 81 }]);
 }
 
 console.log('skip-segments OK');
