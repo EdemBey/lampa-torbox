@@ -4777,12 +4777,19 @@ try {
         if (!root?.length || root.find('.view--torbox').length) return;
 
         const btn = $(
-          `<div class="full-start__button selector view--torbox" data-subtitle="TorBox">${ICON}<span>TorBox</span></div>`
+          `<div class="full-start__button selector view--torbox" data-subtitle="TorBox">${ICON}<span>Смотреть торрент</span></div>`
         );
         btn.on('hover:enter', () => launchTorBox(e.data.movie || {}));
 
-        const torrentBtn = root.find('.view--torrent');
-        torrentBtn.length ? torrentBtn.after(btn) : root.find('.full-start__play').after(btn);
+        // Visible row, right after online_mod's button (or first if it isn't there yet).
+        const row = root.find('.full-start-new__buttons, .full-start__buttons').first();
+        const online = row.find('.view--online_mod');
+        if (online.length) online.after(btn);
+        else if (row.length) row.prepend(btn);
+        else {
+          const torrentBtn = root.find('.view--torrent');
+          torrentBtn.length ? torrentBtn.after(btn) : root.find('.full-start__play').after(btn);
+        }
       };
       Lampa.Listener.follow('full', fullListener);
 
