@@ -39,6 +39,7 @@
 //24.11.2026 - Skip button: AniSkip first when the MAL id is known, YummyAnime timings only without it; Naruto Based gets the site's own skip-times url
 //24.11.2026 - Skip button: YummyAnime timings and the AniSkip url together for every balancer (Naruto Based included); DDD merges them
 //24.11.2026 - Skip button for regular series: TheIntroDB and IntroDB urls for DDD (intro, recap, credits)
+//24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -385,17 +386,15 @@
         special: parseInt(el.season) === 0,
         episode: parseInt(el.episode),
         shikimori: el.shikimori || '',
-        mal: el.malId || ''
+        mal: el.malId || '',
+        voice: el.kodik_voice || ''
       };
     }
 
     /**
-     * Opening/ending timings for DDD's "Skip" button (X-DDD-Segments), from both sources:
-     * YummyAnime's inline timings and an AniSkip url (MAL id known, or from the YummyAnime entry)
-     * that DDD fills in with the real video length. `anime_segments` is {segments, url} when both
-     * exist, otherwise the one that exists; DDD merges them (YummyAnime kept, AniSkip added unless
-     * it overlaps a YummyAnime segment). Regular TV series get `{url}` with TheIntroDB (and IntroDB
-     * when the card has an IMDb id) urls that DDD fetches itself; the plugin makes no request for them.
+     * Opening/ending/recap timings for DDD's "Skip" button (X-DDD-Segments). Anime: AniSkip urls for the
+     * episode and its neighbours ({aniskip}), DDD keeps the results whose video length matches; Kodik adds
+     * the YummyAnime timings of its own upload ({segments}). Regular TV series: TheIntroDB/IntroDB urls ({url}).
      */
     var animeSkip = {
       api: 'https://api.yani.tv',
@@ -462,60 +461,45 @@
           call(null);
         });
       },
-      // YummyAnime timings are marked by viewers per upload and are often wrong (JoJo SBR ep 1: two of
-      // 44 uploads say the opening is 0-3:34). A timing counts only when at least 3 uploads of the most
-      // common cut (2 for titles with up to 3 uploads) agree on its start (±5 s) and they are at least
-      // 15% of that cut's uploads.
-      fromVideos: function fromVideos(videos, episode) {
-        var uploads = videos.filter(function (v) {
-          return String(v.number) === String(episode);
-        });
-        var counts = {};
-        var cut = 0;
-        uploads.forEach(function (v) {
-          counts[v.duration] = (counts[v.duration] || 0) + 1;
-          if (!cut || counts[v.duration] > counts[cut]) cut = v.duration;
-        });
-        // Without durations every upload counts as one cut
-        var same = cut ? uploads.filter(function (v) {
-          return Math.abs(v.duration - cut) <= 2;
-        }) : uploads;
-        // Small titles have one or two uploads: there a single or double mark is all there is
-        var minVotes = same.length <= 3 ? Math.min(2, same.length) : 3;
-        var median = function median(list) {
-          list.sort(function (a, b) {
-            return a - b;
-          });
-          return list[Math.floor(list.length / 2)];
+      // YummyAnime keeps timings per upload (one voiceover in one player), and each release has its own cut,
+      // so they are right only for that very release. Kodik plays the same uploads: take the timings of the
+      // Kodik upload with the voiceover picked in Lampa, never another release's. DDD prefers them to AniSkip
+      // on overlap, as they belong to the very file that plays.
+      kodikTimings: function kodikTimings(videos, episode, voice) {
+        var norm = function norm(name) {
+          return String(name || '').toLowerCase().replace(/^(озвучка|субтитры|subtitles|voice)\s+/, '').replace(/[^a-zа-яё0-9]/g, '');
         };
+        var want = norm(voice);
+        if (want.length < 3) return [];
+        var kodik = videos.filter(function (v) {
+          var d = v.data || {};
+          return String(v.number) === String(episode) && /kodik/i.test(d.player) && norm(d.dubbing).length >= 3;
+        });
+        // The exact name first ('AniDUB' must not take 'AniDUB Online'), then one name inside the other
+        var upload = kodik.filter(function (v) {
+          return norm(v.data.dubbing) === want;
+        })[0] || kodik.filter(function (v) {
+          var have = norm(v.data.dubbing);
+          return have.indexOf(want) !== -1 || want.indexOf(have) !== -1;
+        })[0];
         var out = [];
         [['op', 'opening'], ['ed', 'ending']].forEach(function (k) {
-          var marks = same.map(function (v) {
-            var t = v.skips && v.skips[k[1]];
-            return t && { time: Number(t.time), length: Number(t.length) };
-          }).filter(function (t) {
-            return t && t.time >= 0 && t.length > 0;
-          });
-          var best = [];
-          marks.forEach(function (m) {
-            var group = marks.filter(function (o) {
-              return Math.abs(o.time - m.time) <= 5;
-            });
-            if (group.length > best.length) best = group;
-          });
-          if (best.length < minVotes || best.length < same.length * 0.15) return;
-          var start = median(best.map(function (t) {
-            return t.time;
-          }));
-          var end = median(best.map(function (t) {
-            return t.time + t.length;
-          }));
-          if (end > start) out.push({ type: k[0], startTime: start, endTime: end });
+          var t = upload && upload.skips && upload.skips[k[1]];
+          var start = t && Number(t.time);
+          var length = t && Number(t.length);
+          if (t && start >= 0 && length > 0) out.push({ type: k[0], startTime: start, endTime: start + length });
         });
         return out;
       },
-      aniskipUrl: function aniskipUrl(mal, episode) {
-        return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + episode + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
+      // AniSkip numbers episodes as its submitters did (JoJo SBR: its ep 1 opening is the 1516 s ep 2), but every
+      // result keeps the length of the video it was marked on. DDD fetches the episode and its neighbours and keeps
+      // only results whose length matches the playing video.
+      aniskipUrls: function aniskipUrls(mal, episode) {
+        var urls = [];
+        [episode, episode - 1, episode + 1].forEach(function (e) {
+          if (e > 0) urls.push('https://api.aniskip.com/v2/skip-times/' + mal + '/' + e + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&types[]=recap&episodeLength=0');
+        });
+        return urls;
       },
       // Regular TV series: intro/recap/credits urls (TheIntroDB, then IntroDB by IMDb id) for DDD to fetch for the playing episode.
       // Cards from other sources (ivi, okko...) have ids that are not TMDB ids.
@@ -527,8 +511,8 @@
         if (/^tt\d+$/.test(card.imdb_id)) urls.push('https://api.introdb.app/segments?imdb_id=' + card.imdb_id + tail);
         return urls.length > 1 ? urls : urls[0];
       },
-      // Puts `anime_segments` ({segments, url}, a list or an AniSkip url) on the items; never delays playback by more than 4 s.
-      // Series items only get urls (no request, no wait).
+      // Puts `anime_segments` on the items: {aniskip: [urls]} for anime with a MAL id, plus `segments` from the
+      // matching Kodik upload; {url} for regular series. Never delays playback by more than 4 s.
       prepare: function prepare(playlist, done) {
         var self = this;
         var act = Lampa.Activity.active();
@@ -536,9 +520,15 @@
         var items = [];
         playlist.forEach(function (item) {
           if (!item || !item.anime_skip) return;
-          if (self.isAnime(card, item.anime_skip)) return items.push(item);
+          var skip = item.anime_skip;
+          if (self.isAnime(card, skip)) {
+            if (skip.mal && skip.episode) item.anime_segments = { aniskip: self.aniskipUrls(skip.mal, skip.episode) };
+            // Only a missing MAL id or Kodik's own timings need a YummyAnime lookup
+            if (!item.anime_segments || skip.voice) items.push(item);
+            return;
+          }
           // shortcut: other external players (MX, VLC) may forward unknown headers to the video server, so long seasons send no series urls; move to one id-based header DDD expands itself if long seasons matter.
-          var url = playlist.length <= 30 && self.seriesUrls(card, item.anime_skip);
+          var url = playlist.length <= 30 && self.seriesUrls(card, skip);
           if (url) item.anime_segments = { url: url };
         });
         if (!items.length) return done();
@@ -557,22 +547,19 @@
         var left = items.length;
         items.forEach(function (item) {
           var skip = item.anime_skip;
-          // set first, so the 4 s cap still sends it
-          var url = skip.mal && skip.episode ? self.aniskipUrl(skip.mal, skip.episode) : '';
-          if (url) item.anime_segments = url;
           var settle = function settle() {
             if (--left === 0) finish();
           };
           self.entry(card, skip, function (anime, episode) {
             var mal = skip.mal || anime && anime.remote_ids && anime.remote_ids.myanimelist_id;
-            if (!url && mal && episode) {
-              url = self.aniskipUrl(mal, episode);
-              item.anime_segments = url;
-            }
-            if (!anime) return settle();
+            if (!item.anime_segments && mal && episode) item.anime_segments = { aniskip: self.aniskipUrls(mal, episode) };
+            if (!anime || !skip.voice) return settle();
             self.get('/anime/' + anime.anime_id + '/videos', function (videos) {
-              var segments = self.fromVideos(videos, episode);
-              if (segments.length) item.anime_segments = url ? { segments: segments, url: url } : segments;
+              var segments = self.kodikTimings(videos, episode, skip.voice);
+              if (segments.length) {
+                item.anime_segments = item.anime_segments || {};
+                item.anime_segments.segments = segments;
+              }
               settle();
             }, settle);
           });
@@ -13787,6 +13774,7 @@
                 season: '' + season_id,
                 episode: parseInt(episode_id),
                 shikimori: translation.shikimori_id || '',
+                kodik_voice: voice_name,
                 link: link
               });
             }

@@ -63,91 +63,78 @@ function load(fixtures, card) {
 }
 
 const aniskip = function (mal, n) {
-  return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + n + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
+  return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + n + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&types[]=recap&episodeLength=0';
+};
+// The episode first, then its neighbours (no episode 0)
+const aniskips = function (mal, n) {
+  return [n, n - 1, n + 1].filter(function (e) { return e > 0; }).map(function (e) { return aniskip(mal, e); });
 };
 const animeCard = { kinopoisk_id: 1, genres: [{ id: 16 }], original_language: 'ja' };
 
-// Three uploads agree on the opening; one lone upload claims a wrong ending (ignored: fewer than 3 votes).
-const upload = (skips) => ({ number: '1', duration: 1400, skips: skips });
+// Kodik uploads of episode 1 with different voiceovers, plus a CVH upload of the same voiceover
 const videosFixture = [
-  upload({ opening: { time: 0, length: 90 }, ending: { time: 600, length: 90 } }),
-  upload({ opening: { time: 2, length: 88 }, ending: null }),
-  upload({ opening: { time: 0, length: 90 }, ending: null }),
-  upload({ opening: null, ending: null }),
-  // Another cut with a wrong opening: ignored, only the most common duration votes
-  { number: '1', duration: 1500, skips: { opening: { time: 300, length: 90 }, ending: null } }
+  { number: '1', data: { player: 'Плеер Kodik', dubbing: 'Озвучка AniDUB' }, skips: { opening: { time: 10, length: 90 }, ending: null } },
+  { number: '1', data: { player: 'Плеер Kodik', dubbing: 'Субтитры Netflix' }, skips: { opening: { time: 0, length: 214 }, ending: { time: 600, length: 19 } } },
+  { number: '1', data: { player: 'Плеер CVH', dubbing: 'Озвучка AniDUB' }, skips: { opening: { time: 50, length: 90 } } }
 ];
-const yani = [{ type: 'op', startTime: 0, endTime: 90 }];
 const prepared = function (api, list) {
   return new Promise(function (resolve) { api.animeSkip.prepare(list, resolve); });
 };
 
-// d) MAL id from the yani entry + timings: {segments, url} for the episode that has timings, url alone for the other
+// d) MAL id known (Naruto Based, Alloha...): AniSkip urls for the episode and its neighbours, no request, done at once
 {
-  const fixtures = {
-    '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: { myanimelist_id: 9 } }],
-    '/anime/5/videos': videosFixture
-  };
-  const { api, state } = load(fixtures, animeCard);
-  const list = [1, 2].map(function (n) { return { url: 'u' + n, anime_skip: api.skipOf({ episode: n }) }; });
+  const { api, state, headers } = load({}, animeCard);
+  const list = [1, 2].map(function (n) { return { url: 'u' + n, anime_skip: api.skipOf({ episode: n, malId: 7 }) }; });
   let done = 0;
-  await new Promise(function (resolve) {
-    api.animeSkip.prepare(list, function () { done++; resolve(); });
-  });
-  state.timers[0]();
+  api.animeSkip.prepare(list, function () { done++; });
   assert.strictEqual(done, 1);
-  assert.deepStrictEqual(list[0].anime_segments, { segments: yani, url: aniskip(9, 1) });
-  assert.strictEqual(list[1].anime_segments, aniskip(9, 2));
-  assert.strictEqual(state.calls, 2);
+  assert.strictEqual(state.calls, 0);
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(7, 1) });
+  assert.deepStrictEqual(list[1].anime_segments, { aniskip: aniskips(7, 2) });
+  assert.strictEqual(list[1].anime_segments.aniskip.length, 3);
+  api.attachSkipSegments({}, list);
+  assert.deepStrictEqual(headers, [['X-DDD-Segments', JSON.stringify({ 0: list[0].anime_segments, 1: list[1].anime_segments })]]);
 }
 
-// d2) entry without a MAL id: timings only, as a list
+// d2) MAL id from the yani entry (kp id): AniSkip urls; no /videos without a Kodik voiceover
+{
+  const { api, state } = load({ '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: { myanimelist_id: 9 } }] }, animeCard);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 2 }) }];
+  await prepared(api, list);
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(9, 2) });
+  assert.strictEqual(state.calls, 1);
+}
+
+// d3) Kodik: timings of the Kodik upload with the chosen voiceover only (not CVH, not another voiceover)
 {
   const fixtures = {
-    '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }],
+    '/anime?limit=1&shikimori_ids=61469': [{ anime_id: 5, anime_url: 'x', remote_ids: { myanimelist_id: 61469 } }],
     '/anime/5/videos': videosFixture
   };
   const { api } = load(fixtures, animeCard);
-  const list = [1, 2].map(function (n) { return { url: 'u' + n, anime_skip: api.skipOf({ episode: n }) }; });
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 1, shikimori: 61469, kodik_voice: 'AniDUB' }) }];
   await prepared(api, list);
-  assert.deepStrictEqual(list[0].anime_segments, yani);
-  assert.strictEqual(list[1].anime_segments, undefined);
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(61469, 1), segments: [{ type: 'op', startTime: 10, endTime: 100 }] });
 }
 
-// d3) Naruto-style item (malId + episode), timings found: object form, one entry lookup and one /videos request, header carries the object
+// d4) Kodik voiceover without a YummyAnime upload: AniSkip only
 {
   const fixtures = {
-    '/anime?limit=1&mal_ids=7': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }],
+    '/anime?limit=1&shikimori_ids=61469': [{ anime_id: 5, anime_url: 'x', remote_ids: { myanimelist_id: 61469 } }],
     '/anime/5/videos': videosFixture
   };
-  const { api, state, headers } = load(fixtures, animeCard);
-  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 1, malId: 7 }) }];
+  const { api } = load(fixtures, animeCard);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 1, shikimori: 61469, kodik_voice: 'Студийная Банда' }) }];
   await prepared(api, list);
-  const expected = { segments: yani, url: aniskip(7, 1) };
-  assert.deepStrictEqual(list[0].anime_segments, expected);
-  assert.strictEqual(state.calls, 2);
-  api.attachSkipSegments({}, list);
-  assert.deepStrictEqual(headers, [['X-DDD-Segments', JSON.stringify({ 0: expected })]]);
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(61469, 1) });
 }
 
-// d4) MAL id and episode known, yani down: the url string alone
+// d5) no MAL id anywhere (entry without remote ids): nothing
 {
-  const { api } = load({}, animeCard);
-  const list = [{ url: 'u1', anime_skip: { mal: 9, episode: 3, season: 1, shikimori: '' } }];
+  const { api } = load({ '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }] }, animeCard);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 1 }) }];
   await prepared(api, list);
-  assert.strictEqual(list[0].anime_segments, aniskip(9, 3));
-}
-
-// d5) several known items share one entry and one /videos request
-{
-  const fixtures = {
-    '/anime?limit=1&mal_ids=7': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }],
-    '/anime/5/videos': videosFixture
-  };
-  const { api, state } = load(fixtures, animeCard);
-  const list = [1, 1].map(function (n) { return { url: 'u', anime_skip: api.skipOf({ episode: n, malId: 7 }) }; });
-  await prepared(api, list);
-  assert.strictEqual(state.calls, 2);
+  assert.strictEqual(list[0].anime_segments, undefined);
 }
 
 // d6) a failed fetch is remembered: the second prepare() is done at once, no new request
@@ -212,16 +199,16 @@ const prepared = function (api, list) {
   assert.ok(make(31).every(function (item) { return item.anime_segments === undefined; }));
 }
 
-// f) 4 s cap with yani hanging: an item with a known MAL id still sends its url
+// f) 4 s cap with yani hanging: a Kodik item with a known MAL id still sends its AniSkip urls
 {
   const { api, state } = load(null, animeCard);
-  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 2, malId: 7 }) }];
+  const list = [{ url: 'u1', anime_skip: { mal: 7, episode: 2, season: 1, shikimori: '', voice: 'AniDUB' } }];
   let done = 0;
   api.animeSkip.prepare(list, function () { done++; });
   assert.strictEqual(done, 0);
   state.timers[0]();
   assert.strictEqual(done, 1);
-  assert.strictEqual(list[0].anime_segments, aniskip(7, 2));
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(7, 2) });
 }
 
 // e) cancel (back button) while requests hang: playback must not start
@@ -236,18 +223,18 @@ const prepared = function (api, list) {
   assert.strictEqual(done, 0);
 }
 
-// h) YummyAnime voting: lone marks are dropped, missing durations and tiny titles still work
+// h) Kodik voiceover names match YummyAnime dubbing names loosely; short names never match
 {
   const { api } = load({}, {});
-  const up = (d, skips) => ({ number: '1', duration: d, skips: skips });
-  const op = (t, l) => ({ opening: { time: t, length: l } });
-  // 2 of 20 same-cut uploads mark an opening: below 3 votes and 15%
-  const noise = Array.from({ length: 18 }, () => up(2924, {})).concat([up(2924, op(0, 214)), up(2924, op(0, 214))]);
-  assert.deepStrictEqual(api.animeSkip.fromVideos(noise, '1'), []);
-  // Without durations every upload votes; numbers may come as strings
-  assert.deepStrictEqual(api.animeSkip.fromVideos([1, 2, 3].map(() => ({ number: '1', skips: { opening: { time: '10', length: '80' } } })), '1'), [{ type: 'op', startTime: 10, endTime: 90 }]);
-  // A title with two uploads needs only two agreeing marks
-  assert.deepStrictEqual(api.animeSkip.fromVideos([up(100, { ending: { time: 50, length: 30 } }), up(100, { ending: { time: 51, length: 30 } })], '1'), [{ type: 'ed', startTime: 51, endTime: 81 }]);
+  assert.deepStrictEqual(api.animeSkip.kodikTimings(videosFixture, 1, 'Netflix'), [{ type: 'op', startTime: 0, endTime: 214 }, { type: 'ed', startTime: 600, endTime: 619 }]);
+  assert.deepStrictEqual(api.animeSkip.kodikTimings(videosFixture, 1, 'An'), []);
+  assert.deepStrictEqual(api.animeSkip.kodikTimings(videosFixture, 2, 'AniDUB'), []);
+  // The exact name wins over a longer one listed first
+  const both = [
+    { number: '1', data: { player: 'Плеер Kodik', dubbing: 'Озвучка AniDUB Online' }, skips: { opening: { time: 5, length: 90 } } },
+    { number: '1', data: { player: 'Плеер Kodik', dubbing: 'Озвучка AniDUB' }, skips: { opening: { time: 10, length: 90 } } }
+  ];
+  assert.deepStrictEqual(api.animeSkip.kodikTimings(both, 1, 'AniDUB'), [{ type: 'op', startTime: 10, endTime: 100 }]);
 }
 
 console.log('skip-segments OK');
