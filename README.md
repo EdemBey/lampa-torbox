@@ -22,6 +22,7 @@ https://edembey.github.io/lampa-torbox/ultra.js
 | TorBox | `https://edembey.github.io/lampa-torbox/plugin/torbox-lampa-plugin.js` |
 | YummyAnime | `https://edembey.github.io/lampa-torbox/plugin/yummyani.js` |
 | Меню для всех языков | `https://edembey.github.io/lampa-torbox/plugin/lang_menu.js` |
+| Рейтинг Шикимори | `https://edembey.github.io/lampa-torbox/plugin/shikimori.js` |
 
 Зеркало на jsDelivr: `https://cdn.jsdelivr.net/gh/EdemBey/lampa-torbox@master/plugin/<файл>.js`
 
@@ -63,6 +64,10 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 - [`head_filter.js`](https://github.com/and7ey/lampa/blob/main/head_filter.js) — скрывает элементы шапки: Настройки → Интерфейс → Шапка.
 - [`stats.js`](https://github.com/and7ey/lampa/blob/main/stats.js) — статистика просмотров и «Итоги года» (14 декабря – 15 января). Сериалы и профили не учитываются.
+
+### Рейтинг Шикимори
+
+Для аниме показывает оценку [Шикимори](https://shikimori.io) на постерах (бейдж в углу) и в карточке рядом с КП и IMDb. Оценку TMDB прячет везде (на постерах вместе с ней пропадает и «огонь» CUB — Lampa выводит их в одном месте). Запросы идут по очереди (не больше ~85 в минуту), ответы хранятся неделю.
 
 ## Сервер
 
