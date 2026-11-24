@@ -29,7 +29,7 @@ function load(fixtures, card) {
   };
   const setDddHeader = function (item, name, value) { headers.push([name, value]); };
   const noTimer = function () {};
-  const api = new Function('setDddHeader', 'Lampa', 'setTimeout', code + '\nreturn { skipOf: skipOf, animeSkip: animeSkip, attachSkipSegments: attachSkipSegments };')(setDddHeader, Lampa, noTimer);
+  const api = new Function('setDddHeader', 'Lampa', 'setTimeout', code + '\nreturn { skipOf: skipOf, animeSkip: animeSkip, attachSkipSegments: attachSkipSegments, skipTimesUrl: skipTimesUrl };')(setDddHeader, Lampa, noTimer);
   return { api, headers, state };
 }
 
@@ -62,13 +62,18 @@ function load(fixtures, card) {
   assert.strictEqual(state.calls, 0);
 }
 
-// d) anime playlist: YummyAnime timings inline, AniSkip url for the episode it lacks
+const aniskip = function (mal, n) {
+  return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + n + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
+};
+const animeCard = { kinopoisk_id: 1, genres: [{ id: 16 }], original_language: 'ja' };
+
+// d) MAL id known (from the yani entry): AniSkip url for every item, YummyAnime videos are not fetched
 {
   const fixtures = {
     '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: { myanimelist_id: 9 } }],
     '/anime/5/videos': [{ number: '1', skips: { opening: { time: 0, length: 90 }, ending: null } }]
   };
-  const { api, state } = load(fixtures, { kinopoisk_id: 1, genres: [{ id: 16 }], original_language: 'ja' });
+  const { api, state } = load(fixtures, animeCard);
   const list = [1, 2].map(function (n) { return { url: 'u' + n, anime_skip: api.skipOf({ episode: n }) }; });
   let done = 0;
   await new Promise(function (resolve) {
@@ -76,9 +81,56 @@ function load(fixtures, card) {
   });
   await Promise.resolve();
   assert.strictEqual(done, 1);
+  assert.strictEqual(list[0].anime_segments, aniskip(9, 1));
+  assert.strictEqual(list[1].anime_segments, aniskip(9, 2));
+  assert.strictEqual(state.calls, 1);
+}
+
+// d2) entry without a MAL id: YummyAnime timings inline
+{
+  const fixtures = {
+    '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }],
+    '/anime/5/videos': [{ number: '1', skips: { opening: { time: 0, length: 90 }, ending: null } }]
+  };
+  const { api } = load(fixtures, animeCard);
+  const list = [1, 2].map(function (n) { return { url: 'u' + n, anime_skip: api.skipOf({ episode: n }) }; });
+  await new Promise(function (resolve) {
+    api.animeSkip.prepare(list, resolve);
+  });
   assert.deepStrictEqual(list[0].anime_segments, [{ type: 'op', startTime: 0, endTime: 90 }]);
-  assert.strictEqual(list[1].anime_segments, 'https://api.aniskip.com/v2/skip-times/9/2?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0');
-  assert.strictEqual(state.calls, 2);
+  assert.strictEqual(list[1].anime_segments, undefined);
+}
+
+// d4) item that already knows MAL id and episode: AniSkip url at once, no request, done once
+{
+  const { api, state } = load({}, animeCard);
+  const list = [{ url: 'u1', anime_skip: { mal: 9, episode: 3, season: 1, shikimori: '' } }];
+  let done = 0;
+  api.animeSkip.prepare(list, function () { done++; });
+  assert.strictEqual(done, 1);
+  assert.strictEqual(state.calls, 0);
+  assert.strictEqual(list[0].anime_segments, aniskip(9, 3));
+}
+
+// d5) Naruto Based url builder
+{
+  const { api } = load({}, {});
+  assert.strictEqual(api.skipTimesUrl('https://s', 7, 3), 'https://s/api/player/skip-times?malId=7&episode=3&duration=0');
+  assert.strictEqual(api.skipTimesUrl('https://s', '', 3), undefined);
+  assert.strictEqual(api.skipTimesUrl('https://s', 7, ''), undefined);
+}
+
+// d3) Naruto Based item: url already set, nothing to look up, done at once, header carries the url
+{
+  const { api, state, headers } = load({}, animeCard);
+  const url = 'https://site/api/player/skip-times?malId=7&episode=3&duration=0';
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 3, malId: 7 }), anime_segments: url }];
+  let done = 0;
+  api.animeSkip.prepare(list, function () { done++; });
+  assert.strictEqual(done, 1);
+  assert.strictEqual(state.calls, 0);
+  api.attachSkipSegments({}, list);
+  assert.deepStrictEqual(headers, [['X-DDD-Segments', JSON.stringify({ 0: url })]]);
 }
 
 // e) cancel (back button) while requests hang: playback must not start
