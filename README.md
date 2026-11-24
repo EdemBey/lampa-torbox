@@ -73,7 +73,8 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 Только в `ultra.js`: так же подгружаются с сайтов авторов при запуске. Если они уже стоят в «Расширениях», удалите их там, иначе загрузятся дважды.
 
-- [tvigl](https://github.com/tvigl/plugins): `rating_omdb.js` (рейтинги IMDb, TMDB, Metacritic, Rotten Tomatoes), `vote_colour.js` (цветной рейтинг на карточках), `seasons.js` (сезон и серия на карточках сериалов), `WikiFind.js` (Wiki о фильме), `new_year2.js` (снег), `new_year3.js` (гирлянда).
+- [tvigl](https://github.com/tvigl/plugins): `rating_omdb.js` (рейтинги IMDb, TMDB, Metacritic, Rotten Tomatoes), `vote_colour.js` (цветной рейтинг на карточках), `seasons.js` (сезон и серия на карточках сериалов), `WikiFind.js` (Wiki о фильме), `new_year3.js` (гирлянда).
+- `snow.js` — своя копия tvigl `new_year2.js` (снег): осевший снег лежит на самих карточках, едет вместе с ними при листании, запоминается у каждой карточки и осыпается, когда карточка получает фокус. В открытой карточке снег оседает на постере и пропадает, когда из неё выходишь.
 - OpenSubtitles от hub.alcopa.cc (v1.2.9) — субтитры в плеере.
 
 ## Сервер
