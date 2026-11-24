@@ -39,6 +39,7 @@
 //24.11.2026 - Skip button: AniSkip first when the MAL id is known, YummyAnime timings only without it; Naruto Based gets the site's own skip-times url
 //24.11.2026 - Skip button: YummyAnime timings and the AniSkip url together for every balancer (Naruto Based included); DDD merges them
 //24.11.2026 - Skip button for regular series: TheIntroDB and IntroDB urls for DDD (intro, recap, credits)
+//24.11.2026 - Skip button in Lampa's own player: own button and timeline marks, AniSkip matched by the loaded video's length
 //24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -568,18 +569,21 @@
     };
 
     /**
-     * Lampa's own player takes ready segments ({skip: [{start, end}]}, seconds) at start and cannot fetch them,
-     * so the plugin resolves `anime_segments` itself, only for the starting item and the next one. AniSkip by
-     * episode number (no video length here to match on, `duration_ms` lets Lampa shift the marks to the real
-     * length), TheIntroDB for series (IntroDB sends no CORS header). Never waits more than 3 s.
+     * Skip button for Lampa's own player. Lampa takes segments only at start, before the video length is known,
+     * so it cannot pick AniSkip results by length the way DDD does (AniSkip numbering can be shifted: JoJo SBR
+     * ep 2's opening is filed under ep 1). This waits for the video, then resolves the item's `anime_segments`
+     * like DDD: the release's own timings (Kodik), AniSkip results whose episodeLength matches the video (±1.5 s,
+     * the episode first, neighbours only for types it lacks), TheIntroDB for series (IntroDB sends no CORS header).
+     * Marks go on Lampa's timeline; the button (or Enter with the panel hidden) jumps to the segment's end.
      */
-    var lampaSkip = {
+    var browserSkip = {
       cache: {},
+      names: { op: 'Пропустить опенинг', ed: 'Пропустить эндинг', recap: 'Пропустить пересказ' },
       fetch: function fetch(url, call) {
         var cache = this.cache;
         if (url in cache) return call(cache[url]);
         var net = new Lampa.Reguest();
-        net.timeout(3000);
+        net.timeout(5000);
         net.silent(url, function (json) {
           cache[url] = json || null;
           call(cache[url]);
@@ -588,95 +592,167 @@
           call(null);
         });
       },
-      // AniSkip v2 or TheIntroDB v4 answer -> [{type, start, end}] in seconds, plus the length AniSkip marked on
-      parse: function parse(json) {
-        var out = { list: [], length: 0 };
-        if (!json) return out;
-        (json.results || []).forEach(function (r) {
+      // AniSkip v2 results recorded on a video of this length, in seconds
+      aniskip: function aniskip(json, duration) {
+        var out = [];
+        (json && json.results || []).forEach(function (r) {
           var type = { op: 'op', 'mixed-op': 'op', ed: 'ed', 'mixed-ed': 'ed', recap: 'recap' }[r.skipType];
-          if (!type || !r.interval) return;
-          out.list.push({ type: type, start: r.interval.startTime, end: r.interval.endTime });
-          if (!out.length && r.episodeLength > 0) out.length = r.episodeLength;
+          if (!type || !r.interval || !(Math.abs(r.episodeLength - duration) <= 1.5)) return;
+          if (r.interval.endTime > r.interval.startTime) out.push({ type: type, start: r.interval.startTime, end: r.interval.endTime });
         });
+        return out;
+      },
+      // TheIntroDB v4: intro/recap/credits in ms; end_ms null = to the end (credits only), placeholders dropped
+      series: function series(json, duration) {
+        var out = [];
         [['intro', 'op'], ['recap', 'recap'], ['credits', 'ed']].forEach(function (k) {
-          (Array.isArray(json[k[0]]) ? json[k[0]] : []).forEach(function (s) {
+          (json && Array.isArray(json[k[0]]) ? json[k[0]] : []).forEach(function (s) {
             var start = (s.start_ms || 0) / 1000;
-            // end_ms null = to the end; Lampa clips segments to the video length
-            var end = s.end_ms == null ? k[1] == 'ed' ? 1e7 : 0 : s.end_ms / 1000;
-            // TheIntroDB placeholders: recap 0-0, credits from 0
+            var end = s.end_ms == null ? k[1] == 'ed' ? duration : 0 : s.end_ms / 1000;
             if (end - start < 5 || k[1] == 'ed' && start == 0) return;
-            out.list.push({ type: k[1], start: start, end: end });
+            out.push({ type: k[1], start: start, end: end });
           });
         });
         return out;
       },
-      resolve: function resolve(item, call) {
+      // Adds `extra` segments unless one overlaps a kept segment by more than 5 s
+      add: function add(list, extra) {
+        return list.concat(extra.filter(function (d) {
+          return !list.some(function (s) {
+            return Math.min(s.end, d.end) - Math.max(s.start, d.start) > 5;
+          });
+        }));
+      },
+      resolve: function resolve(source, duration, call) {
         var self = this;
-        var source = item.anime_segments;
         var inline = (Array.isArray(source) ? source : source && source.segments || []).map(function (s) {
           return { type: s.type, start: s.startTime, end: s.endTime };
         });
-        // shortcut: AniSkip by episode number only; shows with shifted AniSkip numbering (JoJo SBR) get the neighbour's marks here, DDD matches by video length instead
-        var url = source && (source.aniskip && source.aniskip[0] || (Array.isArray(source.url) ? source.url[0] : source.url));
-        if (typeof source === 'string') url = source;
-        var finish = function finish(found) {
-          // The release's own timings win; downloaded ones fill the rest unless they overlap one by more than 5 s
-          var list = inline.concat((found.list || []).filter(function (d) {
-            return !inline.some(function (s) {
-              return Math.min(s.end, d.end) - Math.max(s.start, d.start) > 5;
+        var aniskip = source && source.aniskip || [];
+        var series = source && !Array.isArray(source) && source.url;
+        series = (Array.isArray(series) ? series : series ? [series] : []).filter(function (u) {
+          return !/introdb\.app/.test(u);
+        })[0];
+        var answers = [];
+        var left = aniskip.length + (series ? 1 : 0);
+        var done = function done() {
+          var list = inline;
+          // Each type from the episode first; a neighbour of the same length only fills a type it lacks
+          var matched = [];
+          aniskip.forEach(function (url, i) {
+            (answers[i] || []).forEach(function (seg) {
+              if (!matched.some(function (m) {
+                return m.type == seg.type;
+              })) matched.push(seg);
             });
+          });
+          list = self.add(list, matched);
+          if (series) list = self.add(list, self.series(answers[aniskip.length], duration));
+          call(list.sort(function (a, b) {
+            return a.start - b.start;
           }));
-          if (list.length) {
-            item.segments = { skip: list.map(function (s) {
-              return { start: s.start, end: s.end };
-            }) };
-            if (found.length && !inline.length) item.segments.duration_ms = Math.round(found.length * 1000);
-          }
-          call();
         };
-        if (!url || /introdb\.app/.test(url)) return finish({});
-        self.fetch(url, function (json) {
-          finish(self.parse(json));
-        });
-      },
-      prepare: function prepare(first, playlist, done) {
-        var self = this;
-        var list = playlist && playlist.length ? playlist : [first];
-        // Naruto Based plays a copy of first from the playlist: find it by identity or url (other cells have function urls)
-        var at = -1;
-        for (var i = 0; i < list.length; i++) {
-          if (list[i] === first || list[i] && list[i].url === first.url) {
-            at = i;
-            break;
-          }
-        }
-        var current = at < 0 ? first : list[at];
-        var targets = [first, current, at < 0 ? null : list[at + 1]].filter(function (item, i, all) {
-          return item && item.anime_segments && all.indexOf(item) === i;
-        });
-        if (!targets.length) return done();
-        var finished = false;
-        var finish = function finish() {
-          if (finished) return;
-          finished = true;
-          Lampa.Loading.stop();
-          if (current !== first) {
-            if (first.segments && !current.segments) current.segments = first.segments;
-            if (current.segments && !first.segments) first.segments = current.segments;
-          }
-          done();
-        };
-        Lampa.Loading.start(function () {
-          finished = true;
-          Lampa.Loading.stop();
-        });
-        setTimeout(finish, 3000);
-        var left = targets.length;
-        targets.forEach(function (item) {
-          self.resolve(item, function () {
-            if (--left === 0) finish();
+        if (!left) return done();
+        aniskip.forEach(function (url, i) {
+          self.fetch(url, function (json) {
+            answers[i] = self.aniskip(json, duration);
+            if (--left === 0) done();
           });
         });
+        if (series) self.fetch(series, function (json) {
+          answers[aniskip.length] = json;
+          if (--left === 0) done();
+        });
+      },
+      install: function install() {
+        if (this.installed || !Lampa.PlayerVideo || !Lampa.PlayerVideo.listener) return;
+        this.installed = true;
+        var self = this;
+        var item = null;
+        var segments = [];
+        var active = null;
+        var token = 0;
+        var button = $('<div class="online-mod-skip selector"></div>').css({
+          position: 'absolute', right: '3em', bottom: '9em', 'z-index': 50, padding: '0.6em 1.2em',
+          'border-radius': '0.3em', background: 'rgba(0,0,0,0.7)', color: '#fff', 'font-size': '1.2em', display: 'none'
+        });
+        var skipped = null;
+        var skip = function skip() {
+          if (!active) return false;
+          var end = active.end;
+          // to() pauses and seeks: the next timeupdate may still report a time inside the segment
+          skipped = active;
+          active = null;
+          button.hide();
+          Lampa.PlayerVideo.to(end);
+          return true;
+        };
+        // The remote skips with OK while the panel is hidden (keydown below); the button itself is for mouse and touch
+        button.on('click', skip);
+        var marks = function marks(duration) {
+          var line = $('.player-panel__timeline-segments');
+          line.find('.online-mod-skip-mark').remove();
+          if (!duration) return;
+          segments.forEach(function (s) {
+            var start = Math.max(0, Math.min(duration, s.start));
+            var end = Math.max(start, Math.min(duration, s.end));
+            line.append($('<div class="player-panel__timeline-segment player-panel__timeline-segment--skip online-mod-skip-mark"></div>').css({
+              left: start / duration * 100 + '%',
+              width: (end - start) / duration * 100 + '%'
+            }));
+          });
+        };
+        Lampa.Player.listener.follow('start', function (data) {
+          token++;
+          item = data;
+          segments = [];
+          active = null;
+          skipped = null;
+          button.hide();
+        });
+        Lampa.Player.listener.follow('destroy', function () {
+          token++;
+          item = null;
+          segments = [];
+          active = null;
+          // detach keeps the click handler for the next playback
+          button.hide().detach();
+        });
+        Lampa.PlayerVideo.listener.follow('loadeddata', function (e) {
+          var duration = e && e.duration;
+          if (!item || !item.anime_segments || !(duration > 0)) return;
+          var mine = token;
+          self.resolve(item.anime_segments, duration, function (list) {
+            if (mine !== token) return;
+            segments = list;
+            marks(duration);
+          });
+        });
+        Lampa.PlayerVideo.listener.follow('timeupdate', function (e) {
+          var now = e && e.current;
+          var next = null;
+          segments.forEach(function (s) {
+            if (!next && s !== skipped && now >= s.start && now < s.end - 1) next = s;
+          });
+          if (skipped && !(now >= skipped.start && now < skipped.end - 1)) skipped = null;
+          if (next === active) return;
+          active = next;
+          if (!active) return button.hide();
+          if (!button.parent().length) $('.player').append(button);
+          button.text(self.names[active.type] || self.names.op).show();
+        });
+        // Enter with the panel hidden skips while the button is shown (Lampa's keypad listens on window)
+        window.addEventListener('keydown', function (e) {
+          var enter = e.keyCode == 13 || e.keyCode == 23;
+          var panel = Lampa.PlayerPanel && Lampa.PlayerPanel.visibleStatus ? Lampa.PlayerPanel.visibleStatus() : $('.player-panel').hasClass('panel--visible');
+          // Only when the player itself has the remote, not a track/quality menu or the playlist over it
+          var player = Lampa.Controller && Lampa.Controller.enabled && Lampa.Controller.enabled().name == 'player';
+          if (!enter || !active || !button.is(':visible') || panel || !player) return;
+          if (skip()) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
       }
     };
 
@@ -755,11 +831,14 @@
         return;
       }
 
-      // Lampa's own player: the same sources, resolved here into its `segments`
+      // Lampa's own player: the same sources, resolved once the video length is known (browserSkip)
+      browserSkip.install();
       animeSkip.prepare(playlist && playlist.length ? playlist : [first], function () {
-        lampaSkip.prepare(first, playlist, function () {
-          startPlayer(first, playlist);
+        // Naruto Based plays a copy of first from the playlist
+        if (!first.anime_segments && playlist) playlist.forEach(function (item) {
+          if (item && item.url === first.url && item.anime_segments) first.anime_segments = item.anime_segments;
         });
+        startPlayer(first, playlist);
       });
     }
 

@@ -237,68 +237,38 @@ const prepared = function (api, list) {
   assert.deepStrictEqual(api.animeSkip.kodikTimings(both, 1, 'AniDUB'), [{ type: 'op', startTime: 10, endTime: 100 }]);
 }
 
-// i) Lampa's own player: segments resolved by the plugin for the starting item and the next one
+// i) Lampa's own player (browserSkip): resolved once the video length is known, like DDD
 {
-  const ep2 = aniskip(61469, 2);
-  const tvdb = 'https://api.theintrodb.org/v4/media?tmdb_id=1396&season=1&episode=2';
   const fixtures = {};
+  const ep2 = aniskip(61469, 2), ep1 = aniskip(61469, 1), ep3 = aniskip(61469, 3);
   fixtures[ep2] = { found: true, results: [
     { interval: { startTime: 182, endTime: 270.3 }, skipType: 'op', episodeLength: 1512 },
-    { interval: { startTime: 1297.7, endTime: 1387.5 }, skipType: 'ed', episodeLength: 1516.1 },
-    { interval: { startTime: 0, endTime: 30 }, skipType: 'preview', episodeLength: 1512 }
+    { interval: { startTime: 1297.7, endTime: 1387.5 }, skipType: 'ed', episodeLength: 1516.1 }
   ] };
-  fixtures[tvdb] = { intro: [{ start_ms: 314517, end_ms: 331147 }], recap: [{ start_ms: 0, end_ms: 0 }], credits: [{ start_ms: 2848346, end_ms: null }] };
-  const timers = [];
-  let cancel = null;
-  const api = new Function('Lampa', 'setTimeout', code.slice(code.indexOf('    var lampaSkip = {'), code.indexOf('    // X-DDD-Segments, indexed')) + '\nreturn lampaSkip;')({
+  fixtures[ep1] = { found: true, results: [{ interval: { startTime: 136.8, endTime: 223.8 }, skipType: 'op', episodeLength: 1516 }] };
+  fixtures[ep3] = { found: true, results: [{ interval: { startTime: 30, endTime: 120 }, skipType: 'op', episodeLength: 1516 }] };
+  const tvdb = 'https://api.theintrodb.org/v4/media?tmdb_id=1396&season=1&episode=2';
+  fixtures[tvdb] = { intro: [{ start_ms: 314517, end_ms: 331147 }], recap: [{ start_ms: 0, end_ms: 0 }, { start_ms: 10000, end_ms: null }], credits: [{ start_ms: 2848346, end_ms: null }] };
+  let calls = 0;
+  const api = new Function('Lampa', code.slice(code.indexOf('    var browserSkip = {'), code.indexOf('    // X-DDD-Segments, indexed')) + '\nreturn browserSkip;')({
     Reguest: function () {
       this.timeout = function () {};
-      this.silent = function (url, ok, fail) {
-        if (url === 'hang') return;
-        Promise.resolve().then(function () { if (url in fixtures) ok(fixtures[url]); else fail(); });
-      };
-    },
-    Loading: { start: function (cb) { cancel = cb; }, stop: function () {} }
-  }, function (fn) { timers.push(fn); });
-  // AniSkip for the episode number (no length to match on here), with the length it was marked on
-  const first = { url: 'a', anime_segments: { aniskip: aniskips(61469, 2) } };
-  const second = { url: 'b', anime_segments: { url: [tvdb, 'https://api.introdb.app/segments?imdb_id=tt1'] } };
-  const third = { url: 'c', anime_segments: { aniskip: aniskips(61469, 3) } };
-  await new Promise(function (resolve) { api.prepare(first, [first, second, third], resolve); });
-  assert.deepStrictEqual(first.segments, { skip: [{ start: 182, end: 270.3 }, { start: 1297.7, end: 1387.5 }], duration_ms: 1512000 });
-  // Series: the junk recap is dropped, credits run to the end
-  assert.deepStrictEqual(second.segments, { skip: [{ start: 314.517, end: 331.147 }, { start: 2848.346, end: 1e7 }] });
-  // Only the starting item and the next one are resolved
-  assert.strictEqual(third.segments, undefined);
-  // The release's own timings win over AniSkip on overlap
-  const kodik = { url: 'k', anime_segments: { segments: [{ type: 'op', startTime: 180, endTime: 268 }], aniskip: [ep2] } };
-  await new Promise(function (resolve) { api.prepare(kodik, [kodik], resolve); });
-  assert.deepStrictEqual(kodik.segments, { skip: [{ start: 180, end: 268 }, { start: 1297.7, end: 1387.5 }] });
-  // Nothing to resolve: done at once
-  let done = 0;
-  api.prepare({ url: 'x' }, [], function () { done++; });
-  assert.strictEqual(done, 1);
-  // Naruto Based: first is a copy of the 5th playlist item; episode 5 and 6 are resolved, episode 1 is not
-  const eps = [1, 2, 3, 4, 5, 6].map(function (n) { return { url: n === 5 ? 'e5' : function () {}, anime_segments: { aniskip: aniskips(61469, n === 5 ? 2 : 9) } }; });
-  eps[5].anime_segments = { segments: [{ type: 'ed', startTime: 10, endTime: 100 }] };
-  const copy = { url: 'e5' };
-  await new Promise(function (resolve) { api.prepare(copy, eps, resolve); });
-  assert.deepStrictEqual(copy.segments, first.segments);
-  assert.deepStrictEqual(eps[5].segments, { skip: [{ start: 10, end: 100 }] });
-  assert.strictEqual(eps[0].segments, undefined);
-  // A hanging request: the 3 s timer starts playback once; cancel (back) never does
-  let started = 0;
-  const slow = { url: 's', anime_segments: 'hang' };
-  api.prepare(slow, [slow], function () { started++; });
-  timers[timers.length - 1]();
-  timers[timers.length - 1]();
-  assert.strictEqual(started, 1);
-  let cancelled = 0;
-  const slow2 = { url: 's2', anime_segments: 'hang' };
-  api.prepare(slow2, [slow2], function () { cancelled++; });
-  cancel();
-  timers[timers.length - 1]();
-  assert.strictEqual(cancelled, 0);
+      this.silent = function (url, ok, fail) { calls++; Promise.resolve().then(function () { if (url in fixtures) ok(fixtures[url]); else fail(); }); };
+    }
+  });
+  const resolved = function (source, duration) { return new Promise(function (r) { api.resolve(source, duration, r); }); };
+  // JoJo SBR ep 2 (1516 s): its own ed, the opening from AniSkip's ep 1; ep 3's same-length opening does not add a second one
+  assert.deepStrictEqual(await resolved({ aniskip: [ep2, ep1, ep3] }, 1516), [{ type: 'op', start: 136.8, end: 223.8 }, { type: 'ed', start: 1297.7, end: 1387.5 }]);
+  // ep 3 (1512 s): only the 1512 s opening
+  assert.deepStrictEqual(await resolved({ aniskip: [ep2] }, 1512.085), [{ type: 'op', start: 182, end: 270.3 }]);
+  // Kodik's own timing wins over an overlapping AniSkip one
+  assert.deepStrictEqual(await resolved({ segments: [{ type: 'op', startTime: 140, endTime: 230 }], aniskip: [ep2, ep1] }, 1516), [{ type: 'op', start: 140, end: 230 }, { type: 'ed', start: 1297.7, end: 1387.5 }]);
+  // Series: junk recaps dropped, credits to the end; IntroDB (no CORS) is never requested
+  const before = calls;
+  assert.deepStrictEqual(await resolved({ url: [tvdb, 'https://api.introdb.app/segments?imdb_id=tt1'] }, 2900), [{ type: 'op', start: 314.517, end: 331.147 }, { type: 'ed', start: 2848.346, end: 2900 }]);
+  assert.strictEqual(calls - before, 1);
+  // Nothing to resolve
+  assert.deepStrictEqual(await resolved(undefined, 100), []);
 }
 
 console.log('skip-segments OK');
