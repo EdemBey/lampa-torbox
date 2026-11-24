@@ -1,5 +1,5 @@
 // Shikimori score for anime: a badge on posters and a block in the movie card.
-// The badge replaces the TMDB score on anime posters; the card hides TMDB (KP/IMDb stay).
+// Setting "Рейтинг аниме" (Interface): Shikimori instead of TMDB on anime, TMDB only, or both.
 (function () {
   'use strict';
 
@@ -95,9 +95,42 @@
 
   // UI
 
+  // 'shiki': Shikimori replaces TMDB on anime; 'tmdb': no Shikimori at all; 'both': side by side.
+  function mode() {
+    return Lampa.Storage.field('shikimori_mode') || 'shiki';
+  }
+
+  function addSetting() {
+    Lampa.SettingsApi.addParam({
+      component: 'interface',
+      param: {
+        name: 'shikimori_mode',
+        type: 'select',
+        values: {
+          shiki: 'Только Шикимори на аниме',
+          tmdb: 'Только TMDB',
+          both: 'Показывать оба'
+        },
+        'default': 'shiki'
+      },
+      field: {
+        name: 'Рейтинг аниме',
+        description: 'Какую оценку показывать на постерах и в карточке аниме'
+      }
+    });
+  }
+
+  if (window.appready) addSetting();
+  else {
+    Lampa.Listener.follow('app', function (e) {
+      if (e.type === 'ready') addSetting();
+    });
+  }
+
   $('head').append('<style>' +
-    '.full-start__rate.rate--tmdb,.card--shiki .card__vote{display:none!important}' +
+    '.card--shiki .card__vote{display:none!important}' +
     '.card__shiki{position:absolute;right:.4em;bottom:.4em;display:flex;align-items:center;padding:.25em .5em;border-radius:.7em;background:rgba(0,0,0,.7);color:#fff;font-size:1.1em;font-weight:600;line-height:1}' +
+    '.card--shiki-both .card__shiki{right:auto;left:.4em}' +
     '.card__shiki span{margin-right:.3em;padding:.1em .2em;border:.12em solid currentColor;border-radius:.3em;font-size:.6em}' +
     '</style>');
 
@@ -105,7 +138,7 @@
   document.addEventListener('visible', function (e) {
     var card = e.target;
     if (!card || !card.classList || !card.classList.contains('card')) return;
-    if (!isAnime(card.card_data) || card.querySelector('.card__shiki')) return;
+    if (mode() === 'tmdb' || !isAnime(card.card_data) || card.querySelector('.card__shiki')) return;
     get(card.card_data, function (score) {
       var view = card.querySelector('.card__view');
       if (!score || !view || card.querySelector('.card__shiki')) return;
@@ -115,19 +148,21 @@
       mark.textContent = 'SH';
       badge.appendChild(mark);
       badge.appendChild(document.createTextNode(score.toFixed(1)));
-      card.classList.add('card--shiki');
+      card.classList.add(mode() === 'both' ? 'card--shiki-both' : 'card--shiki');
       view.appendChild(badge);
     });
   }, true);
 
   Lampa.Listener.follow('full', function (e) {
-    if (e.type !== 'complite' || !isAnime(e.data && e.data.movie)) return;
+    if (e.type !== 'complite' || mode() === 'tmdb' || !isAnime(e.data && e.data.movie)) return;
     var render = e.object.activity.render();
     get(e.data.movie, function (score) {
       if (!score || $('.rate--shiki', render).length) return;
       var el = $('<div class="full-start__rate rate--shiki"><div></div><div>SHIKI</div></div>');
       el.find('> div').eq(0).text(score.toFixed(1));
       $('.rate--kp', render).last().after(el);
+      // TMDB goes only when Shikimori took its place, so a card never ends up with no score.
+      if (mode() === 'shiki') $('.rate--tmdb', render).addClass('hide');
     }, true);
   });
 })();
