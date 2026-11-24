@@ -35,6 +35,7 @@
 //23.11.2026 - Server address field also in the Turbo and HDrezka settings (same value as in Alloha)
 //23.11.2026 - HDrezka: seasons first (every season any voice has), voices follow the season with an episode range (one request per voice when a series opens)
 //23.11.2026 - Filter: the season row comes before the voice row in every balancer
+//24.11.2026 - Anime openings/endings for DDD's Skip button (X-DDD-Segments): YummyAnime timings, AniSkip fallback
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -373,6 +374,160 @@
       if (have_positions) setDddHeader(first, 'X-DDD-Positions', JSON.stringify(positions));
     }
 
+    // Season/episode of a playlist item, and the anime id when the balancer knows it (Kodik, Naruto Based).
+    function skipOf(el) {
+      if (!el || !el.episode) return null;
+      return {
+        season: parseInt(el.season) || 1,
+        episode: parseInt(el.episode),
+        shikimori: el.shikimori || '',
+        mal: el.malId || ''
+      };
+    }
+
+    /**
+     * Opening/ending timings for DDD's "Skip" button (X-DDD-Segments). YummyAnime lists every
+     * upload of an anime with its timings; AniSkip by MAL id covers episodes YummyAnime lacks.
+     */
+    var animeSkip = {
+      api: 'https://api.yani.tv',
+      cache: {},
+      pending: {},
+      get: function get(path, ok, fail) {
+        var cache = this.cache;
+        var pending = this.pending;
+        if (cache[path]) return ok(cache[path]);
+        if (pending[path]) return pending[path].push([ok, fail]);
+        pending[path] = [[ok, fail]];
+        var settle = function settle(response) {
+          var waiting = pending[path];
+          delete pending[path];
+          if (response) cache[path] = response;
+          waiting.forEach(function (cb) {
+            if (response) cb[0](response);else cb[1]();
+          });
+        };
+        var net = new Lampa.Reguest();
+        net.timeout(5000);
+        net.silent(this.api + path, function (json) {
+          settle(json && json.response);
+        }, function () {
+          settle();
+        });
+      },
+      isAnime: function isAnime(card, skip) {
+        if (skip && (skip.shikimori || skip.mal)) return true;
+        var genres = card && card.genres || [];
+        return genres.some(function (g) {
+          return g && g.id == 16;
+        }) && ['ja', 'zh', 'ko'].indexOf(card.original_language) !== -1;
+      },
+      // The yani entry that holds this season: Kodik/Naruto name it; otherwise the card's Kinopoisk id,
+      // then the season number either continues that entry's numbering or is the n-th TV part of the franchise.
+      entry: function entry(card, skip, call) {
+        var self = this;
+        var kp = card && (card.kinopoisk_id || card.kp_id);
+        var query = skip.shikimori ? 'shikimori_ids=' + skip.shikimori : skip.mal ? 'mal_ids=' + skip.mal : kp ? 'kp_ids=' + kp : '';
+        if (!query) return call(null);
+        self.get('/anime?limit=1&' + query, function (list) {
+          var base = list[0];
+          if (!base) return call(null);
+          if (skip.shikimori || skip.mal || skip.season <= 1) return call(base, skip.episode);
+          var before = 0;
+          (card.seasons || []).forEach(function (s) {
+            if (s.season_number > 0 && s.season_number < skip.season) before += s.episode_count || 0;
+          });
+          self.get('/anime/' + base.anime_url + '?need_videos=false', function (full) {
+            var count = full.episodes && full.episodes.count || 0;
+            // shortcut: one long entry (Naruto Shippuden) vs one entry per season is guessed from episode counts; wrong for odd TMDB splits
+            if (before && count >= before + skip.episode) return call(base, before + skip.episode);
+            var tv = (full.viewing_order || []).filter(function (v) {
+              return v.type && v.type.alias == 'tv';
+            });
+            var part = tv[skip.season - 1];
+            // parts found via viewing_order have no MAL id here, so they get no AniSkip fallback
+            call(part ? { anime_id: part.anime_id, remote_ids: {} } : null, skip.episode);
+          }, function () {
+            call(null);
+          });
+        }, function () {
+          call(null);
+        });
+      },
+      // Uploads of one episode share the opening and ending; the first upload that has a timing gives it.
+      fromVideos: function fromVideos(videos, episode) {
+        var out = [];
+        [['op', 'opening'], ['ed', 'ending']].forEach(function (k) {
+          for (var i = 0; i < videos.length; i++) {
+            var v = videos[i];
+            var t = v.skips && v.skips[k[1]];
+            if (String(v.number) === String(episode) && t && t.length > 0) {
+              out.push({ type: k[0], startTime: t.time, endTime: t.time + t.length });
+              break;
+            }
+          }
+        });
+        return out;
+      },
+      // Puts `anime_segments` (inline list or AniSkip url) on the items; never delays playback by more than 4 s.
+      prepare: function prepare(playlist, done) {
+        var self = this;
+        var act = Lampa.Activity.active();
+        var card = act && act.movie;
+        var items = playlist.filter(function (item) {
+          return item && item.anime_skip && self.isAnime(card, item.anime_skip);
+        });
+        if (!items.length) return done();
+        var finished = false;
+        var finish = function finish() {
+          if (finished) return;
+          finished = true;
+          Lampa.Loading.stop();
+          done();
+        };
+        Lampa.Loading.start(function () {
+          finished = true;
+          Lampa.Loading.stop();
+        });
+        setTimeout(finish, 4000);
+        var left = items.length;
+        items.forEach(function (item) {
+          var skip = item.anime_skip;
+          self.entry(card, skip, function (anime, episode) {
+            var mal = skip.mal || anime && anime.remote_ids && anime.remote_ids.myanimelist_id;
+            var fallback = function fallback() {
+              if (mal && episode) item.anime_segments = 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + episode + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
+              if (--left === 0) finish();
+            };
+            if (!anime) return fallback();
+            self.get('/anime/' + anime.anime_id + '/videos', function (videos) {
+              var segments = self.fromVideos(videos, episode);
+              if (segments.length) {
+                item.anime_segments = segments;
+                if (--left === 0) finish();
+              } else fallback();
+            }, fallback);
+          });
+        });
+      }
+    };
+
+    // X-DDD-Segments, indexed like the playlist DDD gets (sanitizePlaylist drops entries without url).
+    function attachSkipSegments(first, playlist) {
+      var out = {};
+      var have = false;
+      var index = 0;
+      playlist.forEach(function (item) {
+        if (!item || !item.url) return;
+        if (item.anime_segments) {
+          out[String(index)] = item.anime_segments;
+          have = true;
+        }
+        index++;
+      });
+      if (have) setDddHeader(first, 'X-DDD-Segments', JSON.stringify(out));
+    }
+
     function startPlayer(first, playlist) {
       if (!first) return;
 
@@ -384,6 +539,7 @@
       // One short header for the whole playlist, because a DDD that does not know it forwards it
       // to the video server with every request.
       if (isExternalAndroidPlayer() && first.voiceoverPath) setDddHeader(first, 'X-DDD-Voiceover-Path', first.voiceoverPath);
+      if (isExternalAndroidPlayer()) attachSkipSegments(first, playlist && playlist.length ? playlist : [first]);
 
       if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
         attachQualitySources(first, playlist);
@@ -419,9 +575,14 @@
     function playWithoutPreroll(first, playlist) {
       if (!first) return;
 
-      if (isExternalAndroidPlayer() && playlist && playlist.length > 1) {
-        resolveLazyPlaylist(playlist, function (resolved) {
-          startPlayer(first, resolved);
+      if (isExternalAndroidPlayer()) {
+        var list = playlist && playlist.length ? playlist : [first];
+        animeSkip.prepare(list, function () {
+          if (list.length > 1) {
+            resolveLazyPlaylist(list, function (resolved) {
+              startPlayer(first, resolved);
+            });
+          } else startPlayer(first, playlist);
         });
         return;
       }
@@ -3108,6 +3269,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
@@ -3123,6 +3285,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
@@ -5181,6 +5344,7 @@
             if (element.file) {
               var playlist = [];
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(null, element.file),
                 subtitles: element.subtitles,
                 translate: {
@@ -5194,6 +5358,7 @@
               if (element.season) {
                 items.forEach(function (elem) {
                   playlist.push({
+                    anime_skip: skipOf(elem),
                     url: component.getDefaultQuality(null, elem.file),
                     subtitles: elem.subtitles,
                     translate: {
@@ -6488,6 +6653,7 @@
             if (extra.file) {
               var playlist = [];
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(extra.quality, extra.file),
                 quality: component.renameQualityMap(extra.quality),
                 timeline: element.timeline,
@@ -6498,6 +6664,7 @@
                 items.forEach(function (elem) {
                   var ex = getFile(elem);
                   playlist.push({
+                    anime_skip: skipOf(elem),
                     url: component.getDefaultQuality(ex.quality, ex.file),
                     quality: component.renameQualityMap(ex.quality),
                     timeline: elem.timeline,
@@ -9091,6 +9258,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
@@ -9105,6 +9273,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
@@ -11304,6 +11473,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream),
                 quality: component.renameQualityMap(element.qualitys),
                 timeline: element.timeline,
@@ -11317,6 +11487,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
@@ -12185,6 +12356,7 @@
             if (extra.file) {
               var playlist = [];
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(extra.quality, extra.file),
                 quality: component.renameQualityMap(extra.quality),
                 timeline: element.timeline,
@@ -12195,6 +12367,7 @@
                 items.forEach(function (elem) {
                   var ex = getFile(elem);
                   playlist.push({
+                    anime_skip: skipOf(elem),
                     url: component.getDefaultQuality(ex.quality, ex.file),
                     quality: component.renameQualityMap(ex.quality),
                     timeline: elem.timeline,
@@ -13545,6 +13718,7 @@
                 info: ' / ' + voice_name,
                 season: '' + season_id,
                 episode: parseInt(episode_id),
+                shikimori: translation.shikimori_id || '',
                 link: link
               });
             }
@@ -13750,6 +13924,7 @@
               element.loading = false;
               if (cancelled) return;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream),
                 quality: component.renameQualityMap(element.qualitys),
                 timeline: element.timeline,
@@ -13763,6 +13938,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream);
@@ -14438,6 +14614,7 @@
               loadSubs(element, function () {
               element.loading = false;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream, '2160'),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: subsFor(element),
@@ -14455,6 +14632,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           // An external player gets the whole season resolved up front, and a resolve per
@@ -14914,6 +15092,7 @@
             getStream(element, function (element) {
               element.loading = false;
               var first = {
+                anime_skip: skipOf(element),
                 url: component.getDefaultQuality(element.qualitys, element.stream, undefined, true),
                 quality: component.renameQualityMap(element.qualitys),
                 subtitles: element.subtitles,
@@ -14928,6 +15107,7 @@
                     playlist.push(first);
                   } else {
                     var cell = {
+                      anime_skip: skipOf(elem),
                       url: function url(call) {
                         getStream(elem, function (elem) {
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, undefined, true);
@@ -16380,6 +16560,7 @@
         var quality = qualityMap ? component.renameQualityMap(qualityMap) : component.renameQualityMap(extra.quality);
         var url = qualityMap ? pickBestQuality(qualityMap) || autoUrl : autoUrl;
         var first = {
+          anime_skip: skipOf(element),
           url: url,
           quality: quality,
           timeline: element.timeline,
@@ -16422,6 +16603,7 @@
         var found = false;
         var pushCurrent = function () {
           playlist.push({
+            anime_skip: first.anime_skip,
             url: first.url,
             quality: first.quality,
             qualitySourceUrl: basedUrl(element.mirrors, element.malId, element.episode),
@@ -16448,6 +16630,7 @@
 
             if (external) {
               playlist.push({
+                anime_skip: skipOf(elem),
                 url: fallbackUrl,
                 quality: component.renameQualityMap(ex.quality),
                 qualitySourceUrl: qualitySourceUrl,
@@ -16462,6 +16645,7 @@
             // Lampa's own player needs a real quality map per item, otherwise
             // the panel shows no quality options for the next episode.
             var cell = {
+              anime_skip: skipOf(elem),
               url: function url(call) {
                 resolveQuality(elem, function (map) {
                   cell.url = component.getDefaultQuality(map, fallbackUrl) || fallbackUrl;
