@@ -10,6 +10,7 @@ assert(from !== -1 && to > from, 'yummyani code not found');
 const code = src.slice(from, to);
 
 let fixtures = function () { return []; };
+let arm = {};
 
 function LampaFor() {
   return {
@@ -17,17 +18,24 @@ function LampaFor() {
     TMDB: { api: function (u) { return u; }, key: function () { return 'k'; } },
     Reguest: function () {
       this.silent = function (url, ok) {
-        const q = decodeURIComponent(url.split('query=')[1].split('&')[0]);
-        Promise.resolve().then(function () { ok({ results: fixtures(q) }); });
+        let res;
+        const mal = url.match(/arm\.haglund\.dev.*[?&]id=(\d+)/);
+        const details = url.match(/^(tv|movie)\/(\d+)\?/);
+        if (mal) res = arm[mal[1]] || null;
+        else if (details) res = { id: +details[2], poster_path: '/p' + details[2], genres: details[2] === '999' ? [{ id: 18 }] : [{ id: 16 }] };
+        else res = { results: fixtures(decodeURIComponent(url.split('query=')[1].split('&')[0])) };
+        Promise.resolve().then(function () { ok(res); });
       };
     }
   };
 }
 
-function run(card, fx) {
+function run(card, fx, armFx, yani) {
   fixtures = fx;
+  arm = armFx || {};
   const Lampa = LampaFor();
-  const api = new Function('Lampa', code + '\nreturn { findTmdb: findTmdb };')(Lampa);
+  const get = function (path, ok) { Promise.resolve().then(function () { ok((yani || {})[path] || {}); }); };
+  const api = new Function('Lampa', 'get', code + '\nreturn { findTmdb: findTmdb };')(Lampa, get);
   return new Promise(function (resolve) { api.findTmdb(card, resolve); });
 }
 
@@ -68,6 +76,47 @@ function run(card, fx) {
   const hit = await run(card, fx);
   assert.strictEqual(hit.id, 9);
   assert.strictEqual(hit.method, 'movie');
+}
+
+// e) MAL id via arm (real Black Clover data): OVA kept in the show's season 0 -> the show, no title search.
+{
+  const card = { name: 'Чёрный клевер — OVA', original_name: 'Black Clover: Jump Festa 2016 Special', first_air_date: '2016', yani_type: 'ova', mal: 33950 };
+  const fx = function () { throw new Error('title search must not run'); };
+  const hit = await run(card, fx, { 33950: { myanimelist: 33950, media: 'OVA', themoviedb: 73223, 'themoviedb-season': 0 } });
+  assert.deepStrictEqual([hit.id, hit.method, hit.loose], [73223, 'tv', true]);
+  assert.strictEqual(hit.poster_path, '/p73223');
+}
+
+// e2) Viewing-order item: no remote_ids on it, the MAL id comes from its yani record.
+{
+  const card = { name: 'Чёрный клевер', original_name: 'Black Clover', first_air_date: '2017', yani_type: 'tv', yani_url: 'chernyj-klever-tv' };
+  const fx = function () { throw new Error('title search must not run'); };
+  const yani = { '/anime/chernyj-klever-tv?need_videos=false': { remote_ids: { shikimori_id: 34572, myanimelist_id: 34572 } } };
+  const hit = await run(card, fx, { 34572: { media: 'TV', themoviedb: 73223, 'themoviedb-season': 1 } }, yani);
+  assert.deepStrictEqual([hit.id, hit.method, hit.loose], [73223, 'tv', undefined]);
+}
+
+// e3) arm id resolves to a non-animation title (wrong type guess): title search instead.
+{
+  const card = { name: 'Т', original_name: 'T', first_air_date: '2026', yani_type: 'ona', yani_titles: ['Т', 'T'], mal: 1 };
+  const fx = function () { return [{ id: 9, media_type: 'movie', genre_ids: [16], release_date: '2026-01-01' }]; };
+  const hit = await run(card, fx, { 1: { media: 'ONA', themoviedb: 999, 'themoviedb-season': null } });
+  assert.strictEqual(hit.id, 9);
+}
+
+// f) Film via arm -> movie.
+{
+  const card = { title: 'Меч короля магов', original_title: 'Black Clover: Sword of the Wizard King', release_date: '2023', yani_type: 'movie', mal: 48585 };
+  const hit = await run(card, function () { return []; }, { 48585: { media: 'MOVIE', themoviedb: 812225, 'themoviedb-season': null } });
+  assert.deepStrictEqual([hit.id, hit.method], [812225, 'movie']);
+}
+
+// g) arm knows the MAL id but has no TMDB id (Jump Festa 2018): falls back to title search.
+{
+  const card = { name: 'Т', original_name: 'T', first_air_date: '2026', yani_type: 'tv', yani_titles: ['Т', 'T'], mal: 38768 };
+  const fx = function () { return [{ id: 9, media_type: 'movie', genre_ids: [16], release_date: '2026-01-01' }]; };
+  const hit = await run(card, fx, { 38768: { media: 'SPECIAL', themoviedb: null } });
+  assert.strictEqual(hit.id, 9);
 }
 
 console.log('yummyani-match: ok');
