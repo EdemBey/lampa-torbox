@@ -37,6 +37,7 @@
 //23.11.2026 - Filter: the season row comes before the voice row in every balancer
 //24.11.2026 - Anime openings/endings for DDD's Skip button (X-DDD-Segments): YummyAnime timings, AniSkip fallback
 //24.11.2026 - Skip button: AniSkip first when the MAL id is known, YummyAnime timings only without it; Naruto Based gets the site's own skip-times url
+//24.11.2026 - Skip button: YummyAnime timings and the AniSkip url together for every balancer (Naruto Based included); DDD merges them
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -386,17 +387,12 @@
       };
     }
 
-    // Naruto Based plays the site's own file, so DDD gets the site's skip-times url and fills in duration=0.
-    function skipTimesUrl(site, malId, episode) {
-      if (!malId || !episode) return undefined;
-      return site + '/api/player/skip-times?malId=' + encodeURIComponent(malId) + '&episode=' + encodeURIComponent(episode) + '&duration=0';
-    }
-
     /**
-     * Opening/ending timings for DDD's "Skip" button (X-DDD-Segments). With a MAL id (known, or from
-     * the YummyAnime entry) the item gets an AniSkip url and DDD fills in the real video length;
-     * YummyAnime's per-upload timings are crowd-labelled and unreliable, so they are used only
-     * without a MAL id. Items that already carry `anime_segments` (Naruto Based) are left alone.
+     * Opening/ending timings for DDD's "Skip" button (X-DDD-Segments), from both sources:
+     * YummyAnime's inline timings and an AniSkip url (MAL id known, or from the YummyAnime entry)
+     * that DDD fills in with the real video length. `anime_segments` is {segments, url} when both
+     * exist, otherwise the one that exists; DDD merges them (YummyAnime kept, AniSkip added unless
+     * it overlaps a YummyAnime segment).
      */
     var animeSkip = {
       api: 'https://api.yani.tv',
@@ -405,13 +401,13 @@
       get: function get(path, ok, fail) {
         var cache = this.cache;
         var pending = this.pending;
-        if (cache[path]) return ok(cache[path]);
+        if (path in cache) return cache[path] ? ok(cache[path]) : fail();
         if (pending[path]) return pending[path].push([ok, fail]);
         pending[path] = [[ok, fail]];
         var settle = function settle(response) {
           var waiting = pending[path];
           delete pending[path];
-          if (response) cache[path] = response;
+          cache[path] = response || false;
           waiting.forEach(function (cb) {
             if (response) cb[0](response);else cb[1]();
           });
@@ -481,18 +477,13 @@
       aniskipUrl: function aniskipUrl(mal, episode) {
         return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + episode + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
       },
-      // Puts `anime_segments` (inline list or AniSkip url) on the items; never delays playback by more than 4 s.
+      // Puts `anime_segments` ({segments, url}, a list or an AniSkip url) on the items; never delays playback by more than 4 s.
       prepare: function prepare(playlist, done) {
         var self = this;
         var act = Lampa.Activity.active();
         var card = act && act.movie;
         var items = playlist.filter(function (item) {
-          return item && item.anime_skip && !item.anime_segments && self.isAnime(card, item.anime_skip);
-        }).filter(function (item) {
-          var skip = item.anime_skip;
-          if (!skip.mal || !skip.episode) return true;
-          item.anime_segments = self.aniskipUrl(skip.mal, skip.episode);
-          return false;
+          return item && item.anime_skip && self.isAnime(card, item.anime_skip);
         });
         if (!items.length) return done();
         var finished = false;
@@ -510,19 +501,22 @@
         var left = items.length;
         items.forEach(function (item) {
           var skip = item.anime_skip;
+          // set first, so the 4 s cap still sends it
+          var url = skip.mal && skip.episode ? self.aniskipUrl(skip.mal, skip.episode) : '';
+          if (url) item.anime_segments = url;
+          var settle = function settle() {
+            if (--left === 0) finish();
+          };
           self.entry(card, skip, function (anime, episode) {
             var mal = skip.mal || anime && anime.remote_ids && anime.remote_ids.myanimelist_id;
-            var settle = function settle() {
-              if (--left === 0) finish();
-            };
-            if (mal && episode) {
-              item.anime_segments = self.aniskipUrl(mal, episode);
-              return settle();
+            if (!url && mal && episode) {
+              url = self.aniskipUrl(mal, episode);
+              item.anime_segments = url;
             }
             if (!anime) return settle();
             self.get('/anime/' + anime.anime_id + '/videos', function (videos) {
               var segments = self.fromVideos(videos, episode);
-              if (segments.length) item.anime_segments = segments;
+              if (segments.length) item.anime_segments = url ? { segments: segments, url: url } : segments;
               settle();
             }, settle);
           });
@@ -16622,7 +16616,6 @@
         var pushCurrent = function () {
           playlist.push({
             anime_skip: first.anime_skip,
-            anime_segments: skipTimesUrl(site, element.malId, element.episode),
             url: first.url,
             quality: first.quality,
             qualitySourceUrl: basedUrl(element.mirrors, element.malId, element.episode),
@@ -16650,7 +16643,6 @@
             if (external) {
               playlist.push({
                 anime_skip: skipOf(elem),
-                anime_segments: skipTimesUrl(site, elem.malId, elem.episode),
                 url: fallbackUrl,
                 quality: component.renameQualityMap(ex.quality),
                 qualitySourceUrl: qualitySourceUrl,
@@ -16666,7 +16658,6 @@
             // the panel shows no quality options for the next episode.
             var cell = {
               anime_skip: skipOf(elem),
-              anime_segments: skipTimesUrl(site, elem.malId, elem.episode),
               url: function url(call) {
                 resolveQuality(elem, function (map) {
                   cell.url = component.getDefaultQuality(map, fallbackUrl) || fallbackUrl;
