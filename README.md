@@ -57,6 +57,13 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 Только в `ultra.js`: подгружает [`rating.js`](https://github.com/nb557/plugins/blob/main/rating.js) от nb557 прямо с его сайта при запуске Lampa, код у нас не копируется. Показывает рейтинги Кинопоиска и IMDb в карточке фильма. Если nb557 уберёт файл, пропадёт только этот плагин.
 
+### Настройка шапки и Статистика
+
+Только в `ultra.js`: так же подгружаются с сайта [and7ey/lampa](https://github.com/and7ey/lampa) при запуске.
+
+- [`head_filter.js`](https://github.com/and7ey/lampa/blob/main/head_filter.js) — скрывает элементы шапки: Настройки → Интерфейс → Шапка.
+- [`stats.js`](https://github.com/and7ey/lampa/blob/main/stats.js) — статистика просмотров и «Итоги года» (14 декабря – 15 января). Сериалы и профили не учитываются.
+
 ## Сервер
 
 `server/` — помощник для Alloha, Turbo и HDrezka в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo и HDrezka — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает), cookie и пароль в логи не пишет.
