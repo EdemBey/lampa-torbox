@@ -1,5 +1,5 @@
 // Shikimori score for anime: a badge on posters and a block in the movie card.
-// Setting "Рейтинг аниме" (Interface): Shikimori instead of TMDB on anime, TMDB only, or both.
+// Setting "Рейтинг аниме" (own settings section): Shikimori instead of TMDB on anime, TMDB only, or both.
 (function () {
   'use strict';
 
@@ -101,8 +101,13 @@
   }
 
   function addSetting() {
+    Lampa.SettingsApi.addComponent({
+      component: 'shikimori',
+      name: 'Шикимори',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M8 15c1 1.5 2.5 2 4 2s3-.8 3-2.3S13.5 12.6 12 12s-3-1-3-2.5S10.5 7 12 7s2.6.5 3.4 1.6"/></svg>'
+    });
     Lampa.SettingsApi.addParam({
-      component: 'interface',
+      component: 'shikimori',
       param: {
         name: 'shikimori_mode',
         type: 'select',
