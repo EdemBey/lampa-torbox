@@ -154,6 +154,55 @@ const prepared = function (api, list) {
   assert.strictEqual(state.calls, calls);
 }
 
+// g) regular TV series: TheIntroDB (+ IntroDB with an IMDb id) urls, no request, done at once
+{
+  const tv = { id: 1396, number_of_seasons: 5, genres: [], original_language: 'en', imdb_id: 'tt0903747' };
+  const { api, state, headers } = load({}, tv);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ season: 2, episode: 3 }) }];
+  let done = 0;
+  api.animeSkip.prepare(list, function () { done++; });
+  assert.strictEqual(done, 1);
+  assert.strictEqual(state.calls, 0);
+  const expected = { url: [
+    'https://api.theintrodb.org/v4/media?tmdb_id=1396&season=2&episode=3',
+    'https://api.introdb.app/segments?imdb_id=tt0903747&season=2&episode=3'
+  ] };
+  assert.deepStrictEqual(list[0].anime_segments, expected);
+  api.attachSkipSegments({}, list);
+  assert.deepStrictEqual(headers, [['X-DDD-Segments', JSON.stringify({ 0: expected })]]);
+}
+
+// g2) series without an IMDb id: one url; other sources and movies get nothing
+{
+  const run = function (card, season) {
+    const { api, state } = load({}, card);
+    const list = [{ url: 'u1', anime_skip: api.skipOf({ season: season === undefined ? 1 : season, episode: 1 }) }];
+    let done = 0;
+    api.animeSkip.prepare(list, function () { done++; });
+    assert.strictEqual(done, 1);
+    assert.strictEqual(state.calls, 0);
+    return list[0].anime_segments;
+  };
+  assert.deepStrictEqual(run({ id: 5, number_of_seasons: 1, source: 'tmdb', imdb_id: 'bad' }), { url: 'https://api.theintrodb.org/v4/media?tmdb_id=5&season=1&episode=1' });
+  assert.strictEqual(run({ id: 5, number_of_seasons: 1, source: 'ivi' }), undefined);
+  assert.strictEqual(run({ id: 5, number_of_seasons: 1 }, 0), undefined);
+  assert.strictEqual(run({ id: 5, title: 'Film', original_title: 'Film', genres: [] }), undefined);
+}
+
+// g3) header size guard: 30 items get series urls, 31 do not
+{
+  const tv = { id: 5, number_of_seasons: 1, genres: [], original_language: 'en' };
+  const make = function (count) {
+    const { api } = load({}, tv);
+    const list = [];
+    for (let n = 1; n <= count; n++) list.push({ url: 'u' + n, anime_skip: api.skipOf({ season: 1, episode: n }) });
+    api.animeSkip.prepare(list, function () {});
+    return list;
+  };
+  assert.ok(make(30).every(function (item) { return item.anime_segments; }));
+  assert.ok(make(31).every(function (item) { return item.anime_segments === undefined; }));
+}
+
 // f) 4 s cap with yani hanging: an item with a known MAL id still sends its url
 {
   const { api, state } = load(null, animeCard);
