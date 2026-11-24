@@ -1,5 +1,5 @@
 // Shikimori score for anime: a badge on posters and a block in the movie card.
-// Also hides the TMDB score on posters and in the card (KP/IMDb stay).
+// The badge replaces the TMDB score on anime posters; the card hides TMDB (KP/IMDb stay).
 (function () {
   'use strict';
 
@@ -96,7 +96,7 @@
   // UI
 
   $('head').append('<style>' +
-    '.full-start__rate.rate--tmdb,.card__vote{display:none!important}' +
+    '.full-start__rate.rate--tmdb,.card--shiki .card__vote{display:none!important}' +
     '.card__shiki{position:absolute;right:.4em;bottom:.4em;display:flex;align-items:center;padding:.25em .5em;border-radius:.7em;background:rgba(0,0,0,.7);color:#fff;font-size:1.1em;font-weight:600;line-height:1}' +
     '.card__shiki span{margin-right:.3em;padding:.1em .2em;border:.12em solid currentColor;border-radius:.3em;font-size:.6em}' +
     '</style>');
@@ -115,6 +115,7 @@
       mark.textContent = 'SH';
       badge.appendChild(mark);
       badge.appendChild(document.createTextNode(score.toFixed(1)));
+      card.classList.add('card--shiki');
       view.appendChild(badge);
     });
   }, true);
