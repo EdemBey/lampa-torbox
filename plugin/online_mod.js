@@ -38,6 +38,7 @@
 //24.11.2026 - Anime openings/endings for DDD's Skip button (X-DDD-Segments): YummyAnime timings, AniSkip fallback
 //24.11.2026 - Skip button: AniSkip first when the MAL id is known, YummyAnime timings only without it; Naruto Based gets the site's own skip-times url
 //24.11.2026 - Skip button: YummyAnime timings and the AniSkip url together for every balancer (Naruto Based included); DDD merges them
+//24.11.2026 - Skip button for regular series: TheIntroDB and IntroDB urls for DDD (intro, recap, credits)
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -381,6 +382,7 @@
       if (!el || !el.episode) return null;
       return {
         season: parseInt(el.season) || 1,
+        special: parseInt(el.season) === 0,
         episode: parseInt(el.episode),
         shikimori: el.shikimori || '',
         mal: el.malId || ''
@@ -392,7 +394,8 @@
      * YummyAnime's inline timings and an AniSkip url (MAL id known, or from the YummyAnime entry)
      * that DDD fills in with the real video length. `anime_segments` is {segments, url} when both
      * exist, otherwise the one that exists; DDD merges them (YummyAnime kept, AniSkip added unless
-     * it overlaps a YummyAnime segment).
+     * it overlaps a YummyAnime segment). Regular TV series get `{url}` with TheIntroDB (and IntroDB
+     * when the card has an IMDb id) urls that DDD fetches itself; the plugin makes no request for them.
      */
     var animeSkip = {
       api: 'https://api.yani.tv',
@@ -477,13 +480,29 @@
       aniskipUrl: function aniskipUrl(mal, episode) {
         return 'https://api.aniskip.com/v2/skip-times/' + mal + '/' + episode + '?types[]=op&types[]=ed&types[]=mixed-op&types[]=mixed-ed&episodeLength=0';
       },
+      // Regular TV series: intro/recap/credits urls (TheIntroDB, then IntroDB by IMDb id) for DDD to fetch for the playing episode.
+      // Cards from other sources (ivi, okko...) have ids that are not TMDB ids.
+      seriesUrls: function seriesUrls(card, skip) {
+        var tv = card && (card.number_of_seasons || card.seasons || card.name && !card.title);
+        if (!tv || skip.special || !/^\d+$/.test(card.id) || card.source && card.source !== 'tmdb' && card.source !== 'cub') return '';
+        var tail = '&season=' + skip.season + '&episode=' + skip.episode;
+        var urls = ['https://api.theintrodb.org/v4/media?tmdb_id=' + card.id + tail];
+        if (/^tt\d+$/.test(card.imdb_id)) urls.push('https://api.introdb.app/segments?imdb_id=' + card.imdb_id + tail);
+        return urls.length > 1 ? urls : urls[0];
+      },
       // Puts `anime_segments` ({segments, url}, a list or an AniSkip url) on the items; never delays playback by more than 4 s.
+      // Series items only get urls (no request, no wait).
       prepare: function prepare(playlist, done) {
         var self = this;
         var act = Lampa.Activity.active();
         var card = act && act.movie;
-        var items = playlist.filter(function (item) {
-          return item && item.anime_skip && self.isAnime(card, item.anime_skip);
+        var items = [];
+        playlist.forEach(function (item) {
+          if (!item || !item.anime_skip) return;
+          if (self.isAnime(card, item.anime_skip)) return items.push(item);
+          // shortcut: other external players (MX, VLC) may forward unknown headers to the video server, so long seasons send no series urls; move to one id-based header DDD expands itself if long seasons matter.
+          var url = playlist.length <= 30 && self.seriesUrls(card, item.anime_skip);
+          if (url) item.anime_segments = { url: url };
         });
         if (!items.length) return done();
         var finished = false;
