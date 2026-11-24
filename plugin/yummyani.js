@@ -6,7 +6,7 @@
 
   var API = 'https://api.yani.tv';
   var LIMIT = 20;
-  var STORE = 'yummyani_tmdb3'; // v3 marks same-type guesses with `loose`
+  var STORE = 'yummyani_tmdb4'; // v4: TV seasons no longer match a same-year movie
   var ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><circle cx="100.3" cy="100.3" r="82.8" style="fill:#333"/><path style="fill:#F66" d="M100.3 0C44.9 0 0 44.9 0 100.4c0 31.7 14.7 59.9 37.6 78.3.5.4 1.1.9 1.6 1.3 1 .8 2 1.6 3.1 2.3q3.6 2.55 7.5 4.8c14.8 8.6 32.1 13.6 50.5 13.6 26.5 0 50.6-10.3 68.5-27.1 1.7-1.6 3.4-3.3 5-5l.6-.6c.5-.5 1-1.1 1.4-1.6 15.4-17.6 24.7-40.7 24.7-66C200.7 44.9 155.8 0 100.3 0m76.4 101.9c-.3 14.3-4.5 27.7-11.6 39-.4.7-.8 1.3-1.3 2-4.8 7.1-10.7 13.3-17.5 18.5-.5.4-1.1.8-1.6 1.2-12.1 8.7-26.9 13.9-42.9 14.2-11.3.2-22-2-31.7-6.2-.6-.3-1.2-.5-1.8-.8-7-3.3-13.5-7.5-19.1-12.7-.5-.5-1-.9-1.5-1.4-14.2-13.6-23.2-32.6-23.6-53.8-.2-10.4 1.7-20.4 5.3-29.5.4-1.1.9-2.2 1.4-3.3.4-.9.9-1.9 1.3-2.8C35 60.4 38.7 54.9 43 50c.1-.2.3-.4.5-.5.7-.8 1.4-1.5 2.1-2.3a76.23 76.23 0 0 1 53.3-23.1c1.9 0 3.9 0 5.8.1q5.85.3 11.4 1.5c18.5 3.9 34.6 14.5 45.5 29.1.6.9 1.3 1.7 1.9 2.6 4.6 6.8 8.2 14.4 10.4 22.5.3 1.3.7 2.5.9 3.8 1.1 4.9 1.7 10 1.8 15.2v3z"/><path style="fill:#F66" d="m27.6 68.4 37.3 47.4 11.4-26.3-33.9-43.1zm58.7 59h44.1l-15.1-36.8-6.6-16.1-7.2 17.1c-5.1 11.9-10.1 23.9-15.2 35.8m77.8 15.5 9.4 22.1-.6.6c-1.6 1.7-3.3 3.4-5 5l-19.4.1-3.1-7.3-1.6-3.8-4.3-10.2H77l-7.7 18.2-1.8 4.2-5.1 11.9-13.4.4q-3.9-2.25-7.5-4.8c-1.1-.7-2.1-1.5-3.1-2.3 2.8-6.4 5.6-12.9 8.4-19.3l1.5-3.6c5.5-12.8 11.1-25.5 16.6-38.3 3.8-8.8 7.6-17.5 11.4-26.3 9.2-21.1 18.3-42.2 27.5-63.3.4-1 .8-1.9 1.2-2.9l8.8 1.1 1.4 3.3 24 56.6 11.2 26.4 12.4 29.2zm15-68.8L150 111l-11-26 37-47.2z"/></svg>'; // ru.yummyani.me/favicon.svg
   var ORDER_ICON = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg>';
   var DICE = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
@@ -92,6 +92,7 @@
     }
     var lang = Lampa.Storage.field('tmdb_lang') || 'ru';
     var loose = null;
+    var fallback = null; // tv only: a same-year other-type match, used if no show turns up
     var pack = function (r, guess) {
       var p = { id: r.id, method: r.media_type, poster_path: r.poster_path, backdrop_path: r.backdrop_path };
       if (guess) p.loose = true;
@@ -100,7 +101,7 @@
 
     (function next(i) {
       // A year match from any title beats a same-type guess ("NARUTO" alone finds Boruto first).
-      if (i >= queries.length) return done(loose);
+      if (i >= queries.length) return done(loose || fallback);
       var url = Lampa.TMDB.api('search/multi?query=' + encodeURIComponent(queries[i]) + '&language=' + lang + '&api_key=' + Lampa.TMDB.key());
       new Lampa.Reguest().silent(url, function (json) {
         var list = (json && json.results || []).filter(function (r) {
@@ -108,7 +109,11 @@
         });
         var same = function (r) { return (r.media_type === 'tv') === tv; };
         var sameYear = function (r) { return yearOf(r.first_air_date || r.release_date) === year; };
-        var hit = list.filter(function (r) { return same(r) && sameYear(r); })[0] || list.filter(sameYear)[0];
+        // A later TV season shares no year with its show (TMDB dates the show by season 1),
+        // so a same-year movie (a recap film) must not win over the show itself.
+        var hit = list.filter(function (r) { return same(r) && sameYear(r); })[0] ||
+          (card.yani_type !== 'tv' && list.filter(sameYear)[0]);
+        if (!fallback && list.filter(sameYear)[0]) fallback = pack(list.filter(sameYear)[0]);
         if (hit) return done(pack(hit));
         if (!loose && list.filter(same)[0]) loose = pack(list.filter(same)[0], true);
         next(i + 1);
@@ -596,7 +601,7 @@
 
   function start() {
     Lampa.Api.sources.yani = source;
-    ['yummyani_tmdb', 'yummyani_tmdb2'].forEach(function (old) {
+    ['yummyani_tmdb', 'yummyani_tmdb2', 'yummyani_tmdb3'].forEach(function (old) {
       if (Lampa.Storage.get(old, '')) Lampa.Storage.set(old, '');
     });
 
