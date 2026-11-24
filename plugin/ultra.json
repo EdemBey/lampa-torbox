@@ -7,6 +7,13 @@
     "shikimori.js",
     "https://nb557.github.io/plugins/rating.js",
     "https://and7ey.github.io/lampa/head_filter.js",
-    "https://and7ey.github.io/lampa/stats.js"
+    "https://and7ey.github.io/lampa/stats.js",
+    "https://tvigl.github.io/plugins/rating_omdb.js",
+    "https://tvigl.github.io/plugins/vote_colour.js",
+    "https://tvigl.github.io/plugins/seasons.js",
+    "https://tvigl.github.io/plugins/WikiFind.js",
+    "https://tvigl.github.io/plugins/new_year2.js",
+    "https://tvigl.github.io/plugins/new_year3.js",
+    "https://hub.alcopa.cc/dl/opensubs_menu/v1.2.9/plugin.js"
   ]
 }

@@ -69,6 +69,13 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 - [`head_filter.js`](https://github.com/and7ey/lampa/blob/main/head_filter.js) — скрывает элементы шапки: Настройки → Интерфейс → Шапка.
 - [`stats.js`](https://github.com/and7ey/lampa/blob/main/stats.js) — статистика просмотров и «Итоги года» (14 декабря – 15 января). Сериалы и профили не учитываются.
 
+### Плагины tvigl и OpenSubtitles
+
+Только в `ultra.js`: так же подгружаются с сайтов авторов при запуске. Если они уже стоят в «Расширениях», удалите их там, иначе загрузятся дважды.
+
+- [tvigl](https://github.com/tvigl/plugins): `rating_omdb.js` (рейтинги IMDb, TMDB, Metacritic, Rotten Tomatoes), `vote_colour.js` (цветной рейтинг на карточках), `seasons.js` (сезон и серия на карточках сериалов), `WikiFind.js` (Wiki о фильме), `new_year2.js` (снег), `new_year3.js` (гирлянда).
+- OpenSubtitles от hub.alcopa.cc (v1.2.9) — субтитры в плеере.
+
 ## Сервер
 
 `server/` — помощник для Alloha, Turbo и HDrezka в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo и HDrezka — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает), cookie и пароль в логи не пишет.
