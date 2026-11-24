@@ -1,5 +1,5 @@
 // Builds /ultra.js in the repo root: one file Lampa installs as a normal plugin,
-// a plain concatenation of everything listed in plugin/ultra.json.
+// a plain concatenation of everything listed in plugin/ultra.json; URL entries are loaded at runtime.
 // Usage: node tools/build-ultra.mjs
 import fs from 'node:fs';
 
@@ -8,6 +8,9 @@ const read = (p) => fs.readFileSync(new URL(p, root), 'utf8');
 
 const list = JSON.parse(read('plugin/ultra.json')).plugins;
 const parts = list.map((name) => {
+  if (/^https?:\/\//.test(name)) {
+    return `\n;/* ---- ${name} ---- */\nLampa.Utils.putScriptAsync([${JSON.stringify(name)}], function () {});\n`;
+  }
   const code = read('plugin/' + name).replace(/\s+$/, '');
   if (!code) throw new Error('empty plugin: ' + name);
   // The leading ; keeps a plugin starting with ( or [ from being read as a call on the one before.
