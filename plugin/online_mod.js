@@ -2135,22 +2135,24 @@
     var CACHE_SIZE = 100;
     var CACHE_TIME = 1000 * 60 * 60;
 
-    function get(method, oncomplite, onerror) {
+    // net: a request of the caller's own (the «По сериям» probes run side by side; the shared one is cleared by each screen)
+    function get(method, oncomplite, onerror, net) {
+      var request = net || network$4;
       var use_proxy = total_cnt >= 10 && good_cnt > total_cnt / 2;
       if (!use_proxy) total_cnt++;
       var kp_prox = 'https://cors.kp556.workers.dev/';
       var url = 'https://kinopoiskapiunofficial.tech/';
       url += method;
-      network$4.timeout(15000);
-      network$4.silent((use_proxy ? kp_prox : '') + url, function (json) {
+      request.timeout(15000);
+      request.silent((use_proxy ? kp_prox : '') + url, function (json) {
         oncomplite(json);
       }, function (a, c) {
         use_proxy = !use_proxy && (proxy_cnt < 10 || good_cnt > proxy_cnt / 2);
 
         if (use_proxy && (a.status == 429 || a.status == 451 || a.status == 0 && a.statusText !== 'timeout')) {
           proxy_cnt++;
-          network$4.timeout(15000);
-          network$4.silent(kp_prox + url, function (json) {
+          request.timeout(15000);
+          request.silent(kp_prox + url, function (json) {
             good_cnt++;
             oncomplite(json);
           }, onerror, false, {
@@ -2236,14 +2238,14 @@
       };
     }
 
-    function getFromCache(method, oncomplite, onerror) {
+    function getFromCache(method, oncomplite, onerror, net) {
       var json = getCache(method);
 
       if (json) {
         setTimeout(function () {
           oncomplite(json, true);
         }, 10);
-      } else get(method, oncomplite, onerror);
+      } else get(method, oncomplite, onerror, net);
     }
 
     function clear() {
@@ -18693,7 +18695,9 @@
       };
 
       this.kp_api_search = function (api, callback, error) {
-        KP.clear();
+        // one per probe, cancelled with it (a late answer would land in a destroyed screen)
+        var own = this.watch_probe ? this.kp_net || (this.kp_net = new Lampa.Reguest()) : undefined;
+        if (!own) KP.clear();
         KP.getFromCache(api, function (json, cached) {
           var items = [];
           if (json.items && json.items.length) items = json.items;else if (json.films && json.films.length) items = json.films;
@@ -18701,7 +18705,7 @@
           if (callback) callback(items);
         }, function (a, c) {
           if (error) error(network.errorDecode(a, c));
-        });
+        }, own);
       };
 
       this.find = function () {
@@ -19825,6 +19829,7 @@
 
       this.destroy = function () {
         network.clear();
+        if (this.kp_net) this.kp_net.clear();
         files.destroy();
         scroll.destroy();
         network = null;
