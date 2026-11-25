@@ -3322,6 +3322,27 @@
       }
     }
 
+    // IMDb/Kinopoisk ids of an HDrezka page: its rating links go through /help/<base64 of the URL-encoded address>/
+    function rezkaPageIds(str) {
+      var ids = { imdb: '', kp: '' };
+      // lazy: the link's own trailing slash is not part of the base64
+      var re = /\/help\/([A-Za-z0-9+\/=%]+?)\/?["']/g;
+      var m;
+      while (m = re.exec(str || '')) {
+        var target = '';
+        try {
+          target = decodeURIComponent(atob(decodeURIComponent(m[1])));
+        } catch (e) {}
+        var i = target.match(/imdb\.com\/title\/(tt\d+)/);
+        var k = target.match(/kinopoisk\.ru\/film\/(\d+)/);
+        if (i) ids.imdb = i[1];
+        if (k) ids.kp = k[1];
+      }
+      return ids;
+    }
+    // page link -> its ids, for the session (one page is opened once)
+    var rezkaIds = {};
+
     function rezka2(component, _object, config) {
       var network = new Lampa.Reguest();
       var loaders = [];
@@ -3423,6 +3444,8 @@
         select_title = object.search || object.movie.title;
         if (this.wait_similars && data && data[0].is_similars) return getPage(data[0].link);
         error_message = '';
+        // an id check of an older search is dropped
+        ids_gen++;
         var search_date = object.search_date || !object.clarification && (object.movie.release_date || object.movie.first_air_date || object.movie.last_air_date) || '0000';
         var search_year = parseInt((search_date + '').slice(0, 4));
         var orig_titles = [];
@@ -3596,7 +3619,13 @@
               }
             }
 
-            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) {
+            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) byIds(cards.length ? cards : items, kinopoisk_id, function (hit, matches, body) {
+              if (hit) return body ? gotPage(body) : getPage(hit.link);
+              // several pages with the card's ids (an anime's parts): only those are offered
+              if (matches.length > 1) {
+                items = matches;
+                have_more = false;
+              }
               _this.wait_similars = true;
               items.forEach(function (c) {
                 c.is_similars = true;
@@ -3613,7 +3642,7 @@
               }
 
               component.loading(false);
-            } else component.emptyForQuery(select_title);
+            });else component.emptyForQuery(select_title);
           } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
         };
 
@@ -3705,6 +3734,61 @@
         loaders = [];
       };
 
+      // Several titles found: HDrezka's pages carry IMDb/Kinopoisk ids in their rating links (/help/<base64 of the
+      // URL-encoded address>/), so up to five candidates are opened and the one with the card's id is taken.
+      // call(hit, matches, body): the one match and its page, or null; several matches narrow the list the user picks from.
+      var ids_gen = 0;
+      function byIds(cards, kinopoisk_id, call) {
+        var mine = ++ids_gen;
+        // a clarified search is the user's own query: the card's ids do not apply
+        var imdb = object.clarification ? '' : object.movie.imdb_id || (/^tt\d+$/.test(kinopoisk_id + '') ? kinopoisk_id + '' : '');
+        var kp = object.clarification ? '' : +kinopoisk_id ? kinopoisk_id + '' : +object.movie.kinopoisk_id ? object.movie.kinopoisk_id + '' : '';
+        var list = cards.filter(function (c) {
+          return c && c.link;
+        }).slice(0, 5);
+        if (!imdb && !kp || !list.length) return call(null, [], '');
+        var matches = [];
+        var bodies = {};
+        var i = 0;
+        var check = function check(card, ids) {
+          if (ids && (imdb && ids.imdb === imdb || kp && ids.kp === kp)) matches.push(card);
+          next();
+        };
+        // one page at a time: the first one passes HDrezka's bot check for the rest; a closed screen or a newer
+        // search drops the answer
+        var next = function next() {
+          if (!extract || mine !== ids_gen) return;
+          if (i >= list.length) return call(matches.length === 1 ? matches[0] : null, matches, matches.length === 1 ? bodies[matches[0].link] || '' : '');
+          var card = list[i++];
+          if (rezkaIds[card.link]) return check(card, rezkaIds[card.link]);
+          var net = new Lampa.Reguest();
+          loaders.push(net);
+          net.timeout(5000);
+          anubisFetch(net, component.proxyLink(component.fixLink(card.link, ref), prox, prox_enc, 'enc2t'), false, {
+            dataType: 'text',
+            withCredentials: logged_in,
+            headers: headers
+          }, function (res) {
+            var body = typeof res.body === 'string' ? res.body : '';
+            var ids = rezkaPageIds(body);
+            // a bot check or an error page has no ids: not kept, asked again next time
+            if (ids.imdb || ids.kp) rezkaIds[card.link] = ids;
+            bodies[card.link] = body;
+            check(card, ids);
+          }, function () {
+            check(card, null);
+          }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
+        };
+        next();
+      }
+      // a page already fetched (by byIds) is used as is, not fetched again
+      function gotPage(str) {
+        extractData(str);
+
+        if (extract.film_id) {
+          getEpisodes(success);
+        } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
+      }
       function getPage(url) {
         url = component.fixLink(url, ref);
         network.clear();
@@ -3714,11 +3798,7 @@
           withCredentials: logged_in,
           headers: headers
         }, function (res) {
-          extractData(typeof res.body === 'string' ? res.body : '');
-
-          if (extract.film_id) {
-            getEpisodes(success);
-          } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
+          gotPage(typeof res.body === 'string' ? res.body : '');
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
         }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
