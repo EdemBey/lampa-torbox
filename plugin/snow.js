@@ -437,7 +437,6 @@ function isElVisible(el) {
   // settle surfaces
   var surfaces = [];
   var surfTimer = 0;
-  var capObserver = null;
   var resetTimer = 0;
   var fadeRaf = 0;
 
@@ -746,33 +745,18 @@ function resetAccumulationHard(reason) {
   }
 
   function getCardElements() {
+    // one query returns each node once, in document order
     var list = [];
-    // более точные селекторы, но оставляем несколько для совместимости
-    var sels = [
-      '.card__view',
-      '.items__item .card__view',
-      '.full-start__poster',
-      '.full-start-new__poster',
-      '.card',
-      '[data-card]',
-      '[data-type="card"]'
-    ];
+    try {
+      list = document.querySelectorAll('.card__view, .full-start__poster, .full-start-new__poster, .card, [data-card], [data-type="card"]');
+    } catch (e) {}
 
-    for (var i = 0; i < sels.length; i++) {
-      try {
-        var nodes = document.querySelectorAll(sels[i]);
-        if (nodes && nodes.length) list = list.concat([].slice.call(nodes));
-      } catch (e) {}
-    }
-
-    // уникализация + фильтр на "похож на постер"
     var uniq = [];
-    var seen = [];
     for (var k = 0; k < list.length; k++) {
       var el = list[k];
       if (!el || !el.getBoundingClientRect) continue;
-      if (seen.indexOf(el) !== -1) continue;
-      seen.push(el);
+      // .card and its own .card__view are both in the list: snow goes on the view only, one pile per card
+      if (el.classList && el.classList.contains('card') && el.querySelector && el.querySelector('.card__view')) continue;
 
       if (!looksLikePoster(el)) continue;
       uniq.push(el);
@@ -980,8 +964,6 @@ function resetAccumulationHard(reason) {
       var el = els[i];
       var r = null;
 
-      // .card and its own .card__view are both in the list: snow goes on the view only, one pile per card
-      if (el.classList && el.classList.contains('card') && el.querySelector && el.querySelector('.card__view')) continue;
       // a focused card sheds its snow, so it collects none
       var cd = cardOf(el);
       if (cd && cd.classList.contains('focus')) continue;
@@ -1039,69 +1021,7 @@ function resetAccumulationHard(reason) {
     }, delay);
   }
 
-  // --- “снежные шапки” (CSS) ---
-  function injectCapStyles() {
-    if (document.getElementById('snowfx_caps_css')) return;
-
-    var st = document.createElement('style');
-    st.id = 'snowfx_caps_css';
-    st.type = 'text/css';
-    st.textContent =
-      '.snowfx_cap{position:absolute;left:-2px;right:-2px;top:-2px;height:14px;pointer-events:none;' +
-      'background:linear-gradient(to bottom, rgba(255,255,255,.85), rgba(255,255,255,.20), rgba(255,255,255,0));' +
-      'filter:blur(.2px);border-top-left-radius:12px;border-top-right-radius:12px;}' +
-      '.snowfx_cap:after{content:"";position:absolute;left:6px;right:6px;top:2px;height:2px;' +
-      'background:rgba(255,255,255,.55);border-radius:4px;}';
-    document.head.appendChild(st);
-  }
-
-  function applyCaps() {
-    if (cfg_tizen || !cfg_settle) return;
-
-    injectCapStyles();
-
-    var els = getCardElements();
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (!el || el.__snowfx_cap__) continue;
-
-      // делаем контейнером
-      try {
-        var cs = window.getComputedStyle ? getComputedStyle(el) : null;
-        if (cs && cs.position === 'static') el.style.position = 'relative';
-      } catch (e) {}
-
-      var cap = document.createElement('div');
-      cap.className = 'snowfx_cap';
-      cap.style.zIndex = '2';
-      cap.style.opacity = '0.8';
-
-      try {
-        el.appendChild(cap);
-        el.__snowfx_cap__ = true;
-      } catch (e2) {}
-    }
-  }
-
-  function startCaps() {
-    if (cfg_tizen || !cfg_settle) return;
-
-    applyCaps();
-
-    if (capObserver) return;
-    try {
-      capObserver = new MutationObserver(function () {
-        setTimeout(function () {
-          applyCaps();
-          scheduleSurfaces();
-        }, 140);
-      });
-      capObserver.observe(document.body, { childList: true, subtree: true });
-    } catch (e) {
-      capObserver = null;
-    }
-  }
-
+  // removes snow caps left by older versions of the plugin
   function stopCaps() {
     try {
       var caps = document.querySelectorAll('.snowfx_cap');
@@ -1114,9 +1034,6 @@ function resetAccumulationHard(reason) {
         }
       }
     } catch (e) {}
-
-    try { if (capObserver) capObserver.disconnect(); } catch (e2) {}
-    capObserver = null;
 
     try {
       var st = document.getElementById('snowfx_caps_css');
