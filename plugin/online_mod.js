@@ -1089,7 +1089,7 @@
       // A browser gets neither CORS nor past the bot check from HDrezka: prefer the Tampermonkey bridge (plugin/rezka-bridge.user.js), then the Alloha helper when one is set.
       if (name === 'rezka2' && Lampa.Storage.field('online_mod_proxy_rezka2') !== true && !Lampa.Platform.is('android')) {
         if (window.online_mod_rezka_bridge) return window.online_mod_rezka_bridge;
-        var helper = (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+        var helper = helperServer();
         if (helper) return helper + '/';
       }
 
@@ -1291,6 +1291,12 @@
       return false;
     }
 
+    // Without a scheme the helper URL would be relative and requests would go to the Lampa host.
+    function helperServer() {
+      var s = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/^\s+|\s+$/g, '').replace(/\/+$/, '');
+      return s && !/^https?:\/\//i.test(s) ? 'https://' + s : s;
+    }
+
     var Utils = {
       decodeSecret: decodeSecret,
       isDebug: isDebug,
@@ -1324,7 +1330,8 @@
       randomId: randomId,
       randomId2: randomId2,
       randomCookie: randomCookie,
-      checkAndroidVersion: checkAndroidVersion
+      checkAndroidVersion: checkAndroidVersion,
+      helperServer: helperServer
     };
 
     var network$4 = new Lampa.Reguest();
@@ -4052,7 +4059,7 @@
 
       // the login and password must not go through a public CORS proxy: in a browser only the bridge, own server or own proxy
       if (prox && !Lampa.Platform.is('android')) {
-        var own_helper = (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+        var own_helper = Utils.helperServer();
         var own_proxy = Lampa.Storage.field('online_mod_proxy_other') === true ? Lampa.Storage.field('online_mod_proxy_other_url') + '' : '';
         if (prox !== window.online_mod_rezka_bridge && !(own_helper && prox === own_helper + '/') && !(own_proxy && prox.indexOf(own_proxy) === 0)) prox = window.online_mod_rezka_bridge || (own_helper ? own_helper + '/' : '');
       }
@@ -14310,7 +14317,7 @@
       var extract = {};
       var object = _object;
       var select_title = '';
-      var server = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/\/+$/, '');
+      var server = Utils.helperServer();
       var filter_items = {};
       var choice = {
         season: 0,
@@ -15028,7 +15035,7 @@
       };
       var object = _object;
       var select_title = '';
-      var server = ((Lampa.Storage.get('online_mod_alloha_server', '') || '') + '').replace(/\/+$/, '');
+      var server = Utils.helperServer();
       var filter_items = {};
       var choice = {
         season: 0,
