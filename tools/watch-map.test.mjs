@@ -854,6 +854,20 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   // an episode card is not kept
   watch.similarSave(card, 'narutobased', { id: 9, episode: {} });
   assert.strictEqual(watch.similarOf(card, 'narutobased', 'find'), null);
+  watch.similarClear(card, 'rezka2');
+  assert.strictEqual(watch.similarOf(card, 'rezka2', 'find'), null);
+  assert.strictEqual(watch.similarOf(card, 'rezka2', 'src'), null);
+  // Lampa's split season and episode as TMDB's single season, and back (splits 24/13/13/13)
+  assert.deepStrictEqual(watch.tmdbOf(card, 2, 11), { season: 1, number: 35 });
+  assert.deepStrictEqual(watch.tmdbOf(card, 1, 5), { season: 1, number: 5 });
+  assert.deepStrictEqual(watch.lampaOf(card, 1, 35), { season: 2, episode: 11 });
+  assert.deepStrictEqual(watch.lampaOf(card, 1, 24), { season: 1, episode: 24 });
+  assert.deepStrictEqual(watch.lampaOf(card, 1, 25), { season: 2, episode: 1 });
+  // a running last season keeps the overflow
+  assert.deepStrictEqual(watch.lampaOf(card, 1, 64), { season: 4, episode: 14 });
+  const real = { id: 7, original_name: 'R', original_title: 'R', number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 10 }, { season_number: 2, episode_count: 8 }] };
+  assert.deepStrictEqual(watch.tmdbOf(real, 2, 3), { season: 2, number: 3 });
+  assert.deepStrictEqual(watch.lampaOf(real, 2, 3), { season: 2, episode: 3 });
   assert.strictEqual(watch.similarKey({ title: 'Y', year: 2021 }), 'Y/2021');
   assert.strictEqual(watch.similarKey(null), '');
   Lampa.Lang = ownLang;

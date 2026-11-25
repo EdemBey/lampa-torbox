@@ -444,6 +444,23 @@
         });
         return out2;
       },
+      // Lampa's episode as TMDB numbers it: a single TMDB season Lampa splits by air date is counted back
+      tmdbOf: function tmdbOf(card, season, episode) {
+        var split = this.splitOf(card);
+        if (!split || Object.keys(split).length < 2) return { season: season, number: episode };
+        var n = episode;
+        for (var s = 1; s < season; s++) n += split[s] || 0;
+        return { season: 1, number: n };
+      },
+      // and back: TMDB's numbers as Lampa's episode (the last part keeps the overflow of a running season)
+      lampaOf: function lampaOf(card, season, number) {
+        var split = this.splitOf(card);
+        if (!split || Object.keys(split).length < 2 || season != 1) return { season: season, episode: number };
+        var last = Object.keys(split).length;
+        var n = number;
+        for (var s = 1; s < last && n > (split[s] || 0); s++) n -= split[s] || 0;
+        return { season: s, episode: n };
+      },
       // Lampa's own timeline key of a card episode
       key: function key(card, season, episode) {
         return [season, season > 10 ? ':' : '', episode, card.original_title].join('');
@@ -901,6 +918,12 @@
         var copy = {};
         for (var k in elem) if (typeof elem[k] != 'function') copy[k] = elem[k];
         all[this.id(card) + ':' + balancer + ':' + (elem.is_similars ? 'src' : 'find')] = copy;
+        Lampa.Storage.set(this.similarStore, all);
+      },
+      similarClear: function similarClear(card, balancer) {
+        var all = Lampa.Storage.get(this.similarStore, '{}') || {};
+        delete all[this.id(card) + ':' + balancer + ':src'];
+        delete all[this.id(card) + ':' + balancer + ':find'];
         Lampa.Storage.set(this.similarStore, all);
       },
       similarKey: function similarKey(e) {
@@ -19916,6 +19939,19 @@
         online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
         online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
         online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
+        online_mod_variants_open: { ru: 'Открыть источник', en: 'Open the source' },
+        online_mod_variants_reset: { ru: 'Сбросить выбранный тайтл', en: 'Forget the picked title' },
+        online_mod_variants_retry: { ru: 'Обновить', en: 'Reload' },
+        online_mod_trakt_id: { ru: 'Trakt: Client ID', en: 'Trakt: Client ID' },
+        online_mod_trakt_secret: { ru: 'Trakt: Client Secret', en: 'Trakt: Client Secret' },
+        online_mod_trakt_in: { ru: 'Войти: код на экране, ввести на телефоне', en: 'Sign in: a code on screen, entered on the phone' },
+        online_mod_trakt_out: { ru: 'Подключён. Нажмите, чтобы выйти', en: 'Connected. Press to sign out' },
+        online_mod_trakt_open: { ru: 'Откройте на телефоне и введите код:', en: 'Open on your phone and enter the code:' },
+        online_mod_trakt_signed: { ru: 'Trakt подключён', en: 'Trakt connected' },
+        online_mod_trakt_signed_out: { ru: 'Trakt отключён', en: 'Trakt disconnected' },
+        online_mod_trakt_expired: { ru: 'Код истёк, попробуйте ещё раз', en: 'The code expired, try again' },
+        online_mod_trakt_failed: { ru: 'Trakt не ответил', en: 'Trakt did not answer' },
+        online_mod_trakt_nokeys: { ru: 'Укажите Client ID и Client Secret приложения Trakt', en: 'Set the Trakt app Client ID and Client Secret' },
         online_mod_original: { ru: 'Оригинал', en: 'Original' },
         online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
         online_mod_rezka_login_disabled: { ru: 'Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)', en: 'HDrezka login without the Tampermonkey bridge or your own server is off: the password would go through a third-party proxy (Settings → online_mod → HDrezka → "Your server address")' },
@@ -20848,6 +20884,9 @@
       var self = this;
       var scroll = new Lampa.Scroll({ mask: true, over: true });
       var html = $('<div class="online-mod-variants"></div>');
+      // the screen's height (minus Lampa's head), so the list scrolls
+      scroll.minus();
+      scroll.body().addClass('online-mod-variants__body');
       var last = null;
       var alive = true;
       var groups = {};
@@ -20905,7 +20944,43 @@
           after = item;
           g.rows.push(item);
         });
+        collapse(g, g.collapsed);
         refresh();
+      };
+      // the source's voices folded under its row: hidden rows leave the remote's navigation
+      var collapse = function collapse(g, folded) {
+        g.collapsed = folded;
+        g.rows.forEach(function (r) {
+          r.toggleClass('selector', !folded).toggle(!folded);
+          if (folded && last === r[0]) last = g.head[0];
+        });
+        g.head.toggleClass('online-mod-variant--folded', !!folded && g.rows.length > 0);
+      };
+      // forget what this source found (and the title picked for it), then look again
+      var again = function again(b, title) {
+        if (title) watch.similarClear(card, b.name);
+        delete episodeVariants.cache[b.name + ':' + watch.id(card)];
+        ask(b);
+      };
+      var actions = function actions(b) {
+        var items = [{ title: L('online_mod_variants_open'), open: true }];
+        // while its search runs, a reset would be overwritten by that search's answer
+        if (groups[b.name].res) {
+          items.push({ title: L('online_mod_variants_retry'), retry: true });
+          if (watch.similarOf(card, b.name, 'src') || watch.similarOf(card, b.name, 'find')) items.splice(1, 0, { title: L('online_mod_variants_reset'), reset: true });
+        }
+        Lampa.Select.show({
+          title: b.title,
+          items: items,
+          onBack: function onBack() {
+            Lampa.Controller.toggle('content');
+          },
+          onSelect: function onSelect(a) {
+            Lampa.Controller.toggle('content');
+            if (a.open) return open(b);
+            again(b, !!a.reset);
+          }
+        });
       };
       var ask = function ask(b) {
         fill(b, null);
@@ -20939,7 +21014,7 @@
         });
       };
       this.create = function () {
-        if (!$('#online-mod-variants-css').length) $('head').append('<style id="online-mod-variants-css">' + '.online-mod-variants{padding:1.5em 2em 3em}' + '.online-mod-variants__head{font-size:1.7em;font-weight:600;margin:0 0 .2em}' + '.online-mod-variants__name{opacity:.6;font-size:1.2em;margin:0 0 1.2em}' + '.online-mod-variant{display:flex;align-items:center;padding:.8em 1.2em;margin-bottom:.4em;border-radius:.6em;background:rgba(255,255,255,.07)}' + '.online-mod-variant--voice{margin-left:2.2em;background:rgba(255,255,255,.035)}' + '.online-mod-variant.focus{background:#fff;color:#000}' + '.online-mod-variant__text{flex:1;min-width:0}' + '.online-mod-variant__title{font-size:1.3em}' + '.online-mod-variant--voice .online-mod-variant__title{font-size:1.15em}' + '.online-mod-variant__subtitle{opacity:.6;margin-top:.2em}' + '.online-mod-variant__subtitle:empty{display:none}' + '.online-mod-variant__status{width:1.5em;height:1.5em;flex-shrink:0;margin-left:1em;font-weight:700;font-size:1.2em;text-align:center;line-height:1.5em;box-sizing:border-box}' + '.online-mod-variant__status.is-loading{border:.18em solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:online-mod-spin 1s linear infinite}' + '.online-mod-variant.focus .online-mod-variant__status.is-loading{border-color:rgba(0,0,0,.2);border-top-color:#000}' + '.online-mod-variant__status.is-error{color:#e5484d}' + '.online-mod-variant__status.is-choose{color:#f5a524}' + '@keyframes online-mod-spin{to{transform:rotate(360deg)}}' + '</style>');
+        if (!$('#online-mod-variants-css').length) $('head').append('<style id="online-mod-variants-css">' + '.online-mod-variants__body{padding:1.5em 2em 3em}' + '.online-mod-variants__head{font-size:1.7em;font-weight:600;margin:0 0 .2em}' + '.online-mod-variants__name{opacity:.6;font-size:1.2em;margin:0 0 1.2em}' + '.online-mod-variant{display:flex;align-items:center;padding:.8em 1.2em;margin-bottom:.4em;border-radius:.6em;background:rgba(255,255,255,.07)}' + '.online-mod-variant--voice{margin-left:2.2em;background:rgba(255,255,255,.035)}' + '.online-mod-variant.focus{background:#fff;color:#000}' + '.online-mod-variant__text{flex:1;min-width:0}' + '.online-mod-variant__title{font-size:1.3em}' + '.online-mod-variant--voice .online-mod-variant__title{font-size:1.15em}' + '.online-mod-variant__subtitle{opacity:.6;margin-top:.2em}' + '.online-mod-variant__subtitle:empty{display:none}' + '.online-mod-variant__status{width:1.5em;height:1.5em;flex-shrink:0;margin-left:1em;font-weight:700;font-size:1.2em;text-align:center;line-height:1.5em;box-sizing:border-box}' + '.online-mod-variant__status.is-loading{border:.18em solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:online-mod-spin 1s linear infinite}' + '.online-mod-variant.focus .online-mod-variant__status.is-loading{border-color:rgba(0,0,0,.2);border-top-color:#000}' + '.online-mod-variant__status.is-error{color:#e5484d}' + '.online-mod-variant__status.is-choose{color:#f5a524}' + '.online-mod-variant--folded .online-mod-variant__title:after{content:" ▸";opacity:.5}' + '@keyframes online-mod-spin{to{transform:rotate(360deg)}}' + '</style>');
         var head = $('<div><div class="online-mod-variants__head"></div><div class="online-mod-variants__name"></div></div>');
         head.find('.online-mod-variants__head').text(watch.title(pin));
         head.find('.online-mod-variants__name').text(object.name || '');
@@ -20948,10 +21023,18 @@
           return !b.disabled;
         });
         enabled.forEach(function (b) {
-          var g = groups[b.name] = { head: row(b.title, ''), rows: [], res: null };
+          var g = groups[b.name] = { head: row(b.title, ''), rows: [], res: null, collapsed: false };
+          // OK folds/unfolds the voices; without voices it opens the source; hold: open, forget the title, reload
           g.head.on('hover:enter', function () {
             if (g.res && g.res.status === 'choose') return choose(b);
+            if (g.rows.length) {
+              collapse(g, !g.collapsed);
+              return refresh();
+            }
             open(b);
+          });
+          g.head.on('hover:long', function () {
+            actions(b);
           });
           scroll.append(g.head);
         });
@@ -20969,6 +21052,7 @@
           };
           var mark = row(markTitle(), '');
           mark.on('hover:enter', function () {
+            trakt.manual = Date.now();
             episode.emit('mark');
             mark.find('.online-mod-variant__title').text(markTitle());
           });
@@ -20989,6 +21073,7 @@
       this.start = function () {
         if (Lampa.Activity.active().activity !== this.activity) return;
         Lampa.Background.immediately(Lampa.Utils.cardImgBackgroundBlur(card));
+        if (Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update(html);
         Lampa.Controller.add('content', {
           toggle: function toggle() {
             Lampa.Controller.collectionSet(scroll.render());
@@ -21354,6 +21439,50 @@
         });
       }
 
+      {
+        ['id', 'secret'].forEach(function (k) {
+          Lampa.SettingsApi.addParam({
+            component: 'online_mod',
+            param: {
+              name: 'online_mod_trakt_' + k,
+              placeholder: Lampa.Lang.translate('settings_cub_not_specified'),
+              type: 'input',
+              values: '',
+              "default": ''
+            },
+            field: {
+              name: Lampa.Lang.translate('online_mod_trakt_' + k)
+            }
+          });
+        });
+        var traktState = function traktState() {
+          return Lampa.Lang.translate(trakt.auth() ? 'online_mod_trakt_out' : 'online_mod_trakt_in');
+        };
+        Lampa.SettingsApi.addParam({
+          component: 'online_mod',
+          param: {
+            name: 'online_mod_trakt_login',
+            type: 'static'
+          },
+          field: {
+            name: 'Trakt',
+            description: traktState()
+          },
+          onRender: function onRender(item) {
+            var describe = function describe() {
+              item.find('.settings-param__descr').text(traktState());
+            };
+            describe();
+            item.on('hover:enter', function () {
+              if (!trakt.auth()) return trakt.login(describe);
+              trakt.logout();
+              describe();
+              Lampa.Noty.show(Lampa.Lang.translate('online_mod_trakt_signed_out'));
+            });
+          }
+        });
+      }
+
       Lampa.Settings.listener.follow('open', function (e) {
         if (e.name == 'main') {
           Balancers.forEach(function (s) {
@@ -21362,6 +21491,274 @@
         }
       });
     }
+
+    // Trakt: watched marks and resume points through the user's own Trakt account, signed in on the TV with a code.
+    // Lampa's numbers go out as TMDB's (watch.tmdbOf). Lampac's TimeCode stays the precise copy at home; Trakt carries
+    // the percent between networks. The app's keys come from the plugin URL or the settings, never from this file.
+    var trakt = {
+      api: 'https://api.trakt.tv',
+      // TMDB id -> card, for the episodes played from it (the timeline only knows the card's key)
+      cards: {},
+      timers: {},
+      sent: {},
+      quiet: false,
+      // until when a timeline change is the user's own playback (the player open, an external one, a minute after)
+      live: 0,
+      manual: 0,
+      waiting: [],
+      key: function key(name) {
+        return ((Lampa.Storage.get('online_mod_trakt_' + name, '') || '') + '').replace(/^\s+|\s+$/g, '');
+      },
+      auth: function auth() {
+        var a = Lampa.Storage.get('online_mod_trakt_auth', '{}');
+        return a && typeof a == 'object' && a.access_token ? a : null;
+      },
+      ready: function ready() {
+        return !!(this.key('id') && this.auth());
+      },
+      // bare: without the user's token (sign-in calls)
+      request: function request(method, path, body, ok, fail, bare, retried) {
+        var self = this;
+        var auth = this.auth();
+        var headers = { 'trakt-api-version': '2', 'trakt-api-key': this.key('id') };
+        if (auth && !bare) headers.Authorization = 'Bearer ' + auth.access_token;
+        $.ajax({
+          url: this.api + path,
+          type: method,
+          contentType: 'application/json',
+          data: body ? JSON.stringify(body) : undefined,
+          headers: headers,
+          dataType: 'json',
+          timeout: 15000,
+          success: function success(json) {
+            if (ok) ok(json);
+          },
+          error: function error(xhr) {
+            // the token lasts a week: renewed once, then the call is made again
+            if (xhr && xhr.status == 401 && !bare && !retried && auth && auth.refresh_token) {
+              return self.refresh(function (renewed) {
+                if (renewed) self.request(method, path, body, ok, fail, false, true);else if (fail) fail(xhr);
+              });
+            }
+            if (fail) fail(xhr);
+          }
+        });
+      },
+      // calls that met an expired token at once wait for one renewal
+      refresh: function refresh(call) {
+        var self = this;
+        var auth = this.auth();
+        // signed out meanwhile (a failed renewal clears the token)
+        if (!auth || !auth.refresh_token) return call(false);
+        this.waiting.push(call);
+        if (this.refreshing) return;
+        this.refreshing = true;
+        var done = function done(ok) {
+          var waiting = self.waiting;
+          self.waiting = [];
+          self.refreshing = false;
+          waiting.forEach(function (w) {
+            w(ok);
+          });
+        };
+        this.request('POST', '/oauth/token', { refresh_token: auth.refresh_token, client_id: this.key('id'), client_secret: this.key('secret'), redirect_uri: 'urn:ietf:wg:oauth:2.0:oob', grant_type: 'refresh_token' }, function (json) {
+          if (json && json.access_token) Lampa.Storage.set('online_mod_trakt_auth', json);
+          done(!!(json && json.access_token));
+        }, function (xhr) {
+          // a refresh token Trakt no longer knows: signed out
+          if (xhr && (xhr.status == 400 || xhr.status == 401)) Lampa.Storage.set('online_mod_trakt_auth', {});
+          done(false);
+        }, true);
+      },
+      // device code: the TV shows a code, the phone enters it at trakt.tv/activate; done() once signed in
+      login: function login(done) {
+        var self = this;
+        var L = Lampa.Lang.translate;
+        if (!this.key('id') || !this.key('secret')) return Lampa.Noty.show(L('online_mod_trakt_nokeys'));
+        var controller = Lampa.Controller.enabled().name;
+        this.request('POST', '/oauth/device/code', { client_id: this.key('id') }, function (code) {
+          if (!code || !code.device_code) return Lampa.Noty.show(L('online_mod_trakt_failed'));
+          var html = $('<div style="text-align:center;line-height:1.5"><div class="trakt-open"></div><div class="trakt-url" style="font-size:1.4em;margin:.4em 0"></div><div class="trakt-code" style="font-size:2.6em;font-weight:700;letter-spacing:.15em;margin:.3em 0 .6em"></div><div class="trakt-qr" style="width:12em;margin:0 auto;background:#fff;padding:.6em;border-radius:.5em"></div></div>');
+          html.find('.trakt-open').text(L('online_mod_trakt_open'));
+          html.find('.trakt-url').text(code.verification_url || 'https://trakt.tv/activate');
+          html.find('.trakt-code').text(code.user_code || '');
+          if (Lampa.Utils.qrcode) Lampa.Utils.qrcode(code.verification_url || 'https://trakt.tv/activate', html.find('.trakt-qr'), function () {
+            html.find('.trakt-qr').remove();
+          });else html.find('.trakt-qr').remove();
+          var poll = null;
+          var until = Date.now() + (code.expires_in || 600) * 1000;
+          var every = (code.interval || 5) * 1000;
+          var stop = function stop() {
+            clearTimeout(poll);
+            poll = null;
+            Lampa.Modal.close();
+            Lampa.Controller.toggle(controller);
+          };
+          var ask = function ask() {
+            if (!poll) return;
+            if (Date.now() > until) {
+              stop();
+              return Lampa.Noty.show(L('online_mod_trakt_expired'));
+            }
+            self.request('POST', '/oauth/device/token', { code: code.device_code, client_id: self.key('id'), client_secret: self.key('secret') }, function (json) {
+              if (!poll) return;
+              if (json && json.access_token) {
+                Lampa.Storage.set('online_mod_trakt_auth', json);
+                stop();
+                Lampa.Noty.show(L('online_mod_trakt_signed'));
+                if (done) done();
+                return;
+              }
+              poll = setTimeout(ask, every);
+            }, function (xhr) {
+              if (!poll) return;
+              var s = xhr && xhr.status;
+              // 400: not entered yet, 429: asked too often; 404/409/410/418: a dead or refused code
+              if (!s || s == 400 || s == 429) {
+                if (s == 429) every += 1000;
+                poll = setTimeout(ask, every);
+                return;
+              }
+              stop();
+              Lampa.Noty.show(L('online_mod_trakt_failed'));
+            }, true);
+          };
+          Lampa.Modal.open({ title: 'Trakt', html: html, size: 'medium', onBack: stop });
+          poll = setTimeout(ask, every);
+        }, function () {
+          Lampa.Noty.show(L('online_mod_trakt_failed'));
+        }, true);
+      },
+      logout: function logout() {
+        var auth = this.auth();
+        if (auth) this.request('POST', '/oauth/revoke', { token: auth.access_token, client_id: this.key('id'), client_secret: this.key('secret') }, null, null, true);
+        Lampa.Storage.set('online_mod_trakt_auth', {});
+      },
+      // a local change of a linked episode goes out 30 s after the last one (at most 5 min apart while playing);
+      // marks that came from a server or another device carry their author's older time and are not sent back
+      track: function track(hash, road) {
+        var self = this;
+        if (!hash || !road || !road.card || road.season === undefined || !this.ready()) return;
+        // only the user's own playback or mark: a sync from Lampac, CUB or another device is someone else's
+        var now = Date.now();
+        if (now > this.live && now - this.manual > 3000) return;
+        var age = now - (road.updated || 0);
+        if (age > 5000 || age < -5000) return;
+        var m = /^tv_(\d+)$/.exec(road.card);
+        var card = m && this.cards[m[1]];
+        // an episode of a card not opened in this session: its numbers cannot be told, nothing is sent
+        if (!card) return;
+        var item = this.timers[hash] || (this.timers[hash] = { first: Date.now() });
+        item.card = card;
+        item.road = { percent: road.percent, season: road.season, episode: road.episode };
+        clearTimeout(item.timer);
+        item.timer = setTimeout(function () {
+          delete self.timers[hash];
+          self.send(hash, item.card, item.road);
+        }, Math.max(0, Math.min(30000, item.first + 300000 - Date.now())));
+      },
+      send: function send(hash, card, road) {
+        var ep = watch.tmdbOf(card, road.season, road.episode);
+        var percent = Math.max(0, Math.min(100, +road.percent || 0));
+        // from 80% Trakt marks the episode watched (once per session here); below 1% no resume point is worth it
+        if (percent >= 80) {
+          if (this.sent[hash] === 'stop') return;
+          this.sent[hash] = 'stop';
+        } else if (percent < 1) return;else if (this.sent[hash] !== 'stop') this.sent[hash] = 'pause';
+        this.request('POST', percent >= 80 ? '/scrobble/stop' : '/scrobble/pause', { show: { ids: { tmdb: +card.id } }, episode: { season: ep.season, number: ep.number }, progress: percent });
+      },
+      // on opening a series card: Trakt's resume points and watched episodes, where Trakt's are newer
+      pull: function pull(card, again) {
+        var self = this;
+        if (!card || !card.id || !card.original_name || card.source && card.source != 'tmdb' && card.source != 'cub') return;
+        this.cards[card.id] = card;
+        if (!this.ready()) return;
+        // Lampa's split of a single TMDB season is loaded at the same time on a first open: its numbers first
+        if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card)) {
+          // shortcut: a split that never loads (no season API, a failed request) leaves the card unpulled this session; pull by TMDB's numbers if that shows up
+          if (!again) setTimeout(function () {
+            self.pull(card, true);
+          }, 3000);
+          return;
+        }
+        var apply = function apply(season, number, percent, at) {
+          var p = watch.lampaOf(card, season, number);
+          var hash = Lampa.Utils.hash(watch.key(card, p.season, p.episode));
+          var local = Lampa.Timeline.view(hash);
+          // the newer side wins, the same mark is not written again, a watched one is not lowered
+          if ((local.updated || 0) >= at || Math.abs((local.percent || 0) - percent) < 1) return;
+          // a finished episode is not lowered (old marks have no time of their own)
+          if (local.percent >= 90 && percent < local.percent) return;
+          var duration = local.duration || (card.episode_run_time && card.episode_run_time[0] * 60) || 0;
+          var params = { hash: hash, percent: percent, time: duration ? Math.round(duration * percent / 100) : 0, duration: duration, updated: at, received: true };
+          var meta = Lampa.Timeline.link ? Lampa.Timeline.link(card, p.season, p.episode) : null;
+          if (meta) {
+            params.card = meta.card;
+            params.season = meta.season;
+            params.episode = meta.episode;
+          }
+          self.quiet = true;
+          try {
+            Lampa.Timeline.update(params);
+          } finally {
+            self.quiet = false;
+          }
+        };
+        this.request('GET', '/sync/playback/episodes', null, function (list) {
+          (list || []).forEach(function (it) {
+            if (it && it.show && it.show.ids && it.show.ids.tmdb == card.id && it.episode) apply(it.episode.season, it.episode.number, +it.progress || 0, Date.parse(it.paused_at) || 0);
+          });
+        });
+        var watched = function watched(id) {
+          self.request('GET', '/shows/' + id + '/progress/watched?specials=false', null, function (progress) {
+            (progress && progress.seasons || []).forEach(function (s) {
+              (s.episodes || []).forEach(function (e) {
+                if (e.completed) apply(s.number, e.number, 100, Date.parse(e.last_watched_at) || 0);
+              });
+            });
+          });
+        };
+        // TMDB id -> Trakt id, looked up once
+        var ids = Lampa.Storage.get('online_mod_trakt_ids', '{}') || {};
+        if (ids[card.id]) return watched(ids[card.id]);
+        this.request('GET', '/search/tmdb/' + card.id + '?type=show', null, function (found) {
+          var show = found && found[0] && found[0].show;
+          if (!show || !show.ids || !show.ids.trakt) return;
+          ids[card.id] = show.ids.trakt;
+          // the 500 newest, like the season splits
+          var keys = Object.keys(ids);
+          if (keys.length > 500) delete ids[keys[0]];
+          Lampa.Storage.set('online_mod_trakt_ids', ids);
+          watched(show.ids.trakt);
+        });
+      },
+      install: function install() {
+        var self = this;
+        if (this.installed || !Lampa.Timeline || !Lampa.Timeline.listener) return;
+        this.installed = true;
+        if (Lampa.Player && Lampa.Player.listener) {
+          Lampa.Player.listener.follow('start', function () {
+            self.live = Infinity;
+          });
+          // an external player reports back when Lampa comes to the front again
+          Lampa.Player.listener.follow('external', function () {
+            self.live = Date.now() + 4 * 3600 * 1000;
+          });
+          Lampa.Player.listener.follow('destroy', function () {
+            self.live = Date.now() + 60000;
+          });
+        }
+        Lampa.Timeline.listener.follow('update', function (e) {
+          var data = e && e.data || {};
+          if (!self.quiet) self.track(data.hash, data.road);
+        });
+        if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+          Lampa.Listener.follow('full', function (e) {
+            if (e.type == 'complite' && e.data && e.data.movie) self.pull(e.data.movie);
+          });
+        }
+      }
+    };
 
     // Lampac's TimeCode plugin syncs Lampa.Timeline through the user's own Lampac; nothing is loaded without its address
     function loadTimecode() {
@@ -21374,7 +21771,7 @@
     // setting at start, so a device only needs the plugin URL, and a setting that got blanked comes back by itself
     function applyPluginParams() {
       var carries = function carries(url) {
-        return /[?&](lampac|alloha)=/.test(url || '');
+        return /[?&](lampac|alloha|trakt_id)=/.test(url || '');
       };
       var src = document.currentScript && document.currentScript.src || '';
       if (!carries(src)) [].slice.call(document.scripts || []).forEach(function (s) {
@@ -21384,7 +21781,7 @@
       if (!carries(src)) (Lampa.Storage.get('plugins', '[]') || []).forEach(function (p) {
         if (p && carries(p.url)) src = p.url;
       });
-      [['lampac', 'online_mod_lampac_server'], ['alloha', 'online_mod_alloha_server']].forEach(function (p) {
+      [['lampac', 'online_mod_lampac_server'], ['alloha', 'online_mod_alloha_server'], ['trakt_id', 'online_mod_trakt_id'], ['trakt_secret', 'online_mod_trakt_secret']].forEach(function (p) {
         var value = watch.param(src, p[0]);
         if (value && !((Lampa.Storage.get(p[1], '') || '') + '').replace(/^\s+|\s+$/g, '')) Lampa.Storage.set(p[1], value);
       });
@@ -21399,6 +21796,7 @@
       initMain();
       initSettings();
       watch.install();
+      trakt.install();
       loadTimecode();
       watch.sync();
     }
