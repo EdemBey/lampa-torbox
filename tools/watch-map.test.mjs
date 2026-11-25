@@ -847,6 +847,16 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   const picked = watch.pinVariants({ season: 2, episode: 9 }, vrows);
   assert.deepStrictEqual(picked.map((r) => [r.voice, r.season]), [['A', 1], ['B', 1]]);
   assert.deepStrictEqual(watch.pinVariants({ season: 2, episode: 9 }, null), []);
+  assert.strictEqual(watch.qualityBadge(['360p ~ 1080p / WEBRip'], 'alloha'), 'FHD');
+  assert.strictEqual(watch.qualityBadge(['360p ~ 2160p', '720p'], 'alloha'), '4K');
+  assert.strictEqual(watch.qualityBadge(['WEB-DLRip 720p'], 'kodik'), 'HD');
+  assert.strictEqual(watch.qualityBadge(['480p'], 'filmix'), 'SD');
+  assert.strictEqual(watch.qualityBadge(['360p ~ 1080p'], 'rezka2'), 'HD');
+  assert.strictEqual(watch.qualityBadge(['', undefined], 'x'), '');
+  assert.strictEqual(watch.qualityBadge(['4K'], 'turbo'), '4K');
+  assert.strictEqual(watch.qualityBadge(['1080p Ultra'], 'rezka2'), 'HD');
+  assert.strictEqual(watch.qualityBadge(['HDTVRip 720p'], 'kodik'), 'HD');
+  assert.strictEqual(watch.qualityBadge(['1080p60'], 'x'), 'FHD');
   // a settled similar title is kept per card and source, its key prefers the id
   watch.similarSave(card, 'rezka2', { id: 7, title: 'X', year: 2020, f: () => 1 });
   assert.deepStrictEqual(watch.similarOf(card, 'rezka2', 'find'), { id: 7, title: 'X', year: 2020 });

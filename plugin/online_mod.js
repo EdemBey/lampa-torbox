@@ -924,6 +924,19 @@
           return self.pinRow(pin, by[v]);
         }).filter(Boolean);
       },
+      // the best resolution any row names (720p, 1080p, 4K); HDrezka's 1080 is really 720, so it stops at HD
+      // shortcut: a source's placeholder '360p ~ 1080p' (quality unknown) reads as FHD; give such sources '' if the badge misleads
+      qualityBadge: function qualityBadge(qualities, balancer) {
+        var best = 0;
+        (qualities || []).forEach(function (q) {
+          var s = String(q || '');
+          (s.match(/(\d{3,4})p/gi) || []).forEach(function (p) { best = Math.max(best, parseInt(p, 10)); });
+          if (/\b4k\b/i.test(s)) best = Math.max(best, 2160);
+        });
+        var badge = !best ? '' : best >= 2160 ? '4K' : best >= 1080 ? 'FHD' : best >= 720 ? 'HD' : 'SD';
+        if (balancer === 'rezka2' && (badge === '4K' || badge === 'FHD')) badge = 'HD';
+        return badge;
+      },
       // a source's list of similar titles settled by the user, per card and source (kept for the next search)
       similarStore: 'online_mod_similar',
       similarOf: function similarOf(card, balancer, level) {
@@ -20277,6 +20290,7 @@
         online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
         online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
         online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
+        online_mod_variants_voices: { ru: 'озвучек:', en: 'voices:' },
         online_mod_variants_open: { ru: 'Открыть источник', en: 'Open the source' },
         online_mod_variants_reset: { ru: 'Сбросить выбранный тайтл', en: 'Forget the picked title' },
         online_mod_variants_retry: { ru: 'Обновить', en: 'Reload' },
@@ -21554,6 +21568,10 @@
           status.addClass('is-choose').text('!');
           g.head.find('.online-mod-variant__subtitle').text(L('online_mod_variants_choose'));
         } else if (!found.length) status.text('—');
+        if (res.status === 'ok' && found.length) {
+          var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), b.name);
+          g.head.find('.online-mod-variant__subtitle').text([badge, L('online_mod_variants_voices') + ' ' + found.length].filter(Boolean).join(' · '));
+        }
         var after = g.head;
         found.forEach(function (r) {
           var el = r.element;
