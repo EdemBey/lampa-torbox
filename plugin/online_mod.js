@@ -47,6 +47,7 @@
 //25.11.2026 - Watched: unproven anime seasons are cross-checked with YummyAnime and TMDB's "Seasons" group, else asked once before playback (Kodik entries: from the item menu); answers sync through Lampac Storage
 //25.11.2026 - Watched: KinoPub joins the shared key; AniLibria, AniLiberty and AnimeLib releases are matched from the item menu
 //25.11.2026 - Watched: Kodik entries are placed by YummyAnime (the franchise TV part with the entry's shikimori id)
+//25.11.2026 - «По сериям» button: season → episode (Lampa's numbering, with progress) → source; the source opens on that episode
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -839,6 +840,44 @@
         var r = this.stacked({ index: k, bounds: bounds, first: 1 }, q.episode, counts);
         // only the user settles "never link"
         return r === false ? null : r;
+      },
+      // "По сериям": the seasons Lampa shows (TMDB's, or its air-date split of a single season)
+      seasonItems: function seasonItems(card) {
+        var counts = this.counts(card);
+        return Object.keys(counts).map(Number).sort(function (a, b) {
+          return a - b;
+        }).map(function (s) {
+          return { title: Lampa.Lang.translate('online_mod_season') + ' ' + s, subtitle: counts[s] + Lampa.Lang.translate('online_mod_episodes_short'), season: s };
+        });
+      },
+      // its episodes, each with the progress kept under Lampa's own key
+      episodeItems: function episodeItems(card, season) {
+        var out = [];
+        for (var e = 1; e <= (this.counts(card)[season] || 0); e++) {
+          var view = Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, season, e)));
+          out.push({ title: this.title({ season: season, episode: e }), subtitle: view.percent ? view.percent + '%' : '', season: season, episode: e });
+        }
+        return out;
+      },
+      // the list row of the pinned episode (rows: the item menu's entries, {item, element})
+      pinRow: function pinRow(pin, rows) {
+        var raw = null;
+        for (var i = 0; i < (rows || []).length; i++) {
+          var el = rows[i].element || {};
+          var w = el.watch_place;
+          if (w && w.season == pin.season && w.episode == pin.episode) return rows[i].item;
+          // an episode whose place is not proven: its own numbers only move the focus
+          if (!w && !raw && el.season == pin.season && el.episode == pin.episode) raw = rows[i].item;
+        }
+        return raw;
+      },
+      // the balancer season whose label carries the pinned season's number, -1 if none
+      pinSeason: function pinSeason(pin, labels) {
+        for (var i = 0; i < (labels || []).length; i++) {
+          var n = /(\d+)/.exec(labels[i]);
+          if (n && +n[1] === +pin.season) return i;
+        }
+        return -1;
       },
       id: function id(card) {
         return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
@@ -18297,6 +18336,9 @@
       };
 
       var last;
+      // "По сериям": the pinned episode is focused once; the balancer's season is switched at most once to find it
+      var pin_done = false;
+      var pin_tried = false;
       var extended;
       var selected_id;
       var filter_translate = {
@@ -19609,6 +19651,20 @@
           if (object.movie.number_of_seasons && last_views.length) last = last_views.eq(0)[0];else last = scroll.render().find('.selector').eq(0)[0];
         }
 
+        if (object.watch_pin && !pin_done) {
+          var pinned = watch.pinRow(object.watch_pin, contextmenu_all);
+          if (pinned) {
+            last = pinned[0];
+            pin_done = true;
+          } else if (!pin_tried && last_filter && last_filter.season) {
+            pin_tried = true;
+            var pin_season = watch.pinSeason(object.watch_pin, last_filter.season);
+            // the balancer redraws its list and calls start() again
+            // Kodik's merged parts are labelled by titles and years, not season numbers
+            if (pin_season >= 0 && balanser !== 'kodik' && sources[balanser] && sources[balanser].filter) sources[balanser].filter('filter', { stype: 'season' }, { index: pin_season });
+          }
+        }
+
         Lampa.Background.immediately(Lampa.Utils.cardImgBackground(object.movie));
         Lampa.Controller.add('content', {
           toggle: function toggle() {
@@ -19759,6 +19815,8 @@
         online_mod_watch_none: { ru: 'Не связывать с карточкой', en: 'Do not link to the card' },
         online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
+        online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
+        online_mod_wait: { ru: 'Загружаю сезоны, нажмите ещё раз через секунду', en: 'Loading the seasons, press again in a second' },
         online_mod_original: { ru: 'Оригинал', en: 'Original' },
         online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
         online_mod_rezka_login_disabled: { ru: 'Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)', en: 'HDrezka login without the Tampermonkey bridge or your own server is off: the password would go through a third-party proxy (Settings → online_mod → HDrezka → "Your server address")' },
@@ -20488,7 +20546,64 @@
       Lampa.Filter = ModssFilter;
     }
 
-    function loadOnline(object, balancer) {
+    // "По сериям": season → episode → source; an online source opens on that episode, TorBox on the card
+    function episodesMenu(card, enabled) {
+      var L = Lampa.Lang.translate;
+      // read once: while a select box is open it is the active controller
+      enabled = enabled || Lampa.Controller.enabled().name;
+      var back = function back() {
+        Lampa.Controller.toggle(enabled);
+      };
+      // Lampa's split of a single TMDB season is still loading: the numbers would be TMDB's
+      // (asked once per card: a split that cannot load falls back to TMDB's numbers on the next press)
+      if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) && !episodesMenu.waited[card.id]) {
+        episodesMenu.waited[card.id] = true;
+        watch.prefetch(card);
+        return Lampa.Noty.show(L('online_mod_wait'));
+      }
+      var episodes = function episodes(season) {
+        Lampa.Select.show({
+          title: L('online_mod_season') + ' ' + season,
+          items: watch.episodeItems(card, season),
+          onBack: function onBack() {
+            episodesMenu(card, enabled);
+          },
+          onSelect: function onSelect(e) {
+            var pin = { season: e.season, episode: e.episode };
+            var items = Balancers.filter(function (b) {
+              return !b.disabled;
+            }).map(function (b) {
+              return { title: b.title, balancer: b.name };
+            });
+            if (Lampa.Component.get && Lampa.Component.get('torbox_main')) items.push({ title: 'TorBox', torbox: true });
+            Lampa.Select.show({
+              title: watch.title(pin),
+              items: items,
+              onBack: function onBack() {
+                episodes(season);
+              },
+              onSelect: function onSelect(b) {
+                back();
+                if (b.torbox) return Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
+                online_loading = false;
+                loadOnline(card, b.balancer, pin);
+              }
+            });
+          }
+        });
+      };
+      Lampa.Select.show({
+        title: L('online_mod_by_episodes'),
+        items: watch.seasonItems(card),
+        onBack: back,
+        onSelect: function onSelect(s) {
+          episodes(s.season);
+        }
+      });
+    }
+    episodesMenu.waited = {};
+
+    function loadOnline(object, balancer, pin) {
       if (online_loading) return;
       online_loading = true;
       Utils.setMyIp('');
@@ -20506,6 +20621,7 @@
             search_two: object.original_title,
             movie: object,
             balancer: balancer || undefined,
+            watch_pin: pin || undefined,
             modssSources: balancer ? modssSourcesSnapshot.slice() : undefined,
             page: 1
           });
@@ -20549,6 +20665,15 @@
           var render = e.object.activity.render();
           var row = render.find('.full-start-new__buttons, .full-start__buttons').first();
           row.length ? row.prepend(btn) : render.find('.view--torrent').after(btn);
+          // "По сериям" next to it, on series cards only
+          var card = e.data.movie;
+          if (card && (card.original_name || card.number_of_seasons)) {
+            var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
+            by.on('hover:enter', function () {
+              episodesMenu(card);
+            });
+            btn.after(by);
+          }
         }
       });
 
