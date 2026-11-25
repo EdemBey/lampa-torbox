@@ -166,6 +166,12 @@ try {
   // User-entered connection values (stored below) always take precedence.
   const DEFAULT_PROXY_URL = 'https://my-torbox-proxy.slonce70.workers.dev';
 
+  // Without a scheme the helper URL would be relative and the API key would go to the Lampa host.
+  const normalizeHelperServer = (v) => {
+    const s = String(v || '').trim().replace(/\/+$/, '');
+    return s && !/^https?:\/\//i.test(s) ? `https://${s}` : s;
+  };
+
   const Config = {
     get debug() {
       return Store.get('torbox_debug', '0') === '1';
@@ -713,7 +719,7 @@ try {
     // The same «Адрес своего сервера» field online_mod uses for Alloha/Turbo/HDrezka.
     function helperServer() {
       try {
-        return (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+        return normalizeHelperServer(Lampa.Storage.get('online_mod_alloha_server', ''));
       } catch (_) {
         return '';
       }
@@ -4575,11 +4581,17 @@ try {
         en: 'TorBox plugin for streaming torrents',
         uk: 'Плагін для перегляду торрентів через TorBox',
       },
+      torbox_settings_server_name: { ru: 'Адрес своего сервера', en: 'Own server address', uk: 'Адреса свого сервера' },
+      torbox_settings_server_desc: {
+        ru: 'Сервер из server/ (тот же, что в online_mod). Если указан, запросы к TorBox и ключ идут только через него',
+        en: 'Server from server/ (the same one as in online_mod). If set, TorBox requests and the key go only through it',
+        uk: 'Сервер із server/ (той самий, що в online_mod). Якщо вказано, запити до TorBox і ключ ідуть лише через нього',
+      },
       torbox_settings_proxy_name: { ru: 'URL CORS‑прокси', en: 'CORS proxy URL', uk: 'URL CORS-проксі' },
       torbox_settings_proxy_desc: {
-        ru: 'В браузере запросы к TorBox идут через этот прокси, и он видит ваш API‑ключ. Если в online_mod задан «Адрес своего сервера», ключ идёт на ваш сервер; на Android без своего сервера — напрямую в TorBox',
-        en: 'In a browser, TorBox requests go through this proxy, and it sees your API key. With «Адрес своего сервера» (own server address) set in online_mod, the key goes to your server; on Android without one, straight to TorBox',
-        uk: 'У браузері запити до TorBox ідуть через цей проксі, і він бачить ваш API-ключ. Якщо в online_mod задано «Адрес своего сервера», ключ іде на ваш сервер; на Android без свого сервера — напряму в TorBox',
+        ru: 'В браузере запросы к TorBox идут через этот прокси, и он видит ваш API‑ключ. Если выше задан «Адрес своего сервера», ключ идёт на ваш сервер; на Android без своего сервера — напрямую в TorBox',
+        en: 'In a browser, TorBox requests go through this proxy, and it sees your API key. With «Own server address» set above, the key goes to your server; on Android without one, straight to TorBox',
+        uk: 'У браузері запити до TorBox ідуть через цей проксі, і він бачить ваш API-ключ. Якщо вище задано «Адреса свого сервера», ключ іде на ваш сервер; на Android без свого сервера — напряму в TorBox',
       },
       torbox_settings_api_name: { ru: 'API‑ключ', en: 'API key', uk: 'API-ключ' },
       torbox_settings_api_desc: {
@@ -4775,6 +4787,17 @@ try {
       Lampa.SettingsApi.addComponent({ component: 'torbox_enh', name: 'TorBox', icon: ICON });
 
       const params = [
+        {
+          // Same Lampa.Storage key as online_mod's field, so both plugins share one value.
+          key: 'online_mod_alloha_server',
+          name: translate('torbox_settings_server_name'),
+          desc: translate('torbox_settings_server_desc'),
+          type: 'input',
+          default: '',
+          placeholder: 'https://xxx.trycloudflare.com',
+          get: () => normalizeHelperServer(Lampa.Storage.get('online_mod_alloha_server', '')),
+          set: (v) => Lampa.Storage.set('online_mod_alloha_server', normalizeHelperServer(v)),
+        },
         {
           key: 'torbox_proxy_url',
           name: translate('torbox_settings_proxy_name'),
