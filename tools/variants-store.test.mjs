@@ -63,4 +63,16 @@ disk.online_mod_variants = JSON.stringify({ 'kodik:tmdb_1': { t: Date.now(), r: 
 const v2 = { cache: {} };
 new Function('episodeVariants', 'Lampa', src.slice(from, to))(v2, Lampa);
 assert.strictEqual(v2.load('kodik:tmdb_1'), null);
+// answers saved under other placement rules are not reused
+episodeVariants.save('kodik:tmdb_3', entry);
+const rules = { cache: {} };
+new Function('episodeVariants', 'Lampa', src.slice(from, to))(rules, Lampa);
+assert(rules.load('kodik:tmdb_3'));
+const kept = JSON.parse(disk.online_mod_variants_v2);
+assert.strictEqual(kept['kodik:tmdb_3'].w, rules.rules);
+delete kept['kodik:tmdb_3'].w;
+disk.online_mod_variants_v2 = JSON.stringify(kept);
+const nowRules = { cache: {} };
+new Function('episodeVariants', 'Lampa', src.slice(from, to))(nowRules, Lampa);
+assert.strictEqual(nowRules.load('kodik:tmdb_3'), null);
 console.log('variants-store OK');

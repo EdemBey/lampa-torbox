@@ -539,6 +539,37 @@
         if (start.episode > counts[start.season]) return null;
         return hi || at.season === start.season ? at : null;
       },
+      // Where a merged Kodik season sits among the franchise's TV parts: {index, bounds, first} for stacked().
+      // Which parts are TV is told by YummyAnime's TV parts (tv = alt.ys); without them an ONA or a special
+      // (Chibi Revengers) would count as one. -2: not known yet (asked again once the parts come); -1: not a TV part
+      kodikPart: function kodikPart(seasons, items, tv, season_id) {
+        var bounds = [0];
+        var index = -1;
+        var first = 0;
+        if (!tv) return { index: -2, bounds: bounds, first: first };
+        seasons.forEach(function (season) {
+          // Kodik's season "0" is the part's specials, never a TV season
+          if (season.single || season.kodik_key === '0') return;
+          var seen = {};
+          var shiki = '';
+          items.forEach(function (c) {
+            var s = c.seasons && c.seasons[season.id];
+            if (!s) return;
+            if (!shiki && c.shikimori_id) shiki = String(c.shikimori_id);
+            if (s.episodes) Object.keys(s.episodes).forEach(function (e) {
+              if (e >= 1) seen[e] = true;
+            });
+          });
+          if (!shiki || tv.indexOf(shiki) < 0) return;
+          var keys = Object.keys(seen).map(Number);
+          if (season.id == season_id) {
+            index = bounds.length - 1;
+            first = keys.length ? Math.min.apply(null, keys) : 0;
+          }
+          bounds.push(bounds[bounds.length - 1] + keys.length);
+        });
+        return { index: index, bounds: bounds, first: first };
+      },
       // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
       place: function place(map, counts, anime, q, alt) {
         var r = this.rule(map, counts, anime, q);
@@ -14648,10 +14679,13 @@
             keys.forEach(function (k) {
               var sid = seasons.length + 1;
               map[k] = sid;
-              seasons.push({
+              var merged = {
                 id: sid,
                 title: title + (keys.length > 1 ? ' / ' + k : '')
-              });
+              };
+              // only beside other seasons is "0" the specials; a lone "0" is the show itself
+              if (keys.length > 1) merged.kodik_key = k;
+              seasons.push(merged);
               if (part.id === preselect_id) wanted_id = sid;
             });
           }
@@ -15130,38 +15164,11 @@
        */
 
 
-      // For watch.stacked: where a merged season sits among the franchise's TV parts. Which parts are TV is told by
-      // YummyAnime's TV parts (alt.ys); without them an ONA or a special (Chibi Revengers) would count as one
+      // For watch.stacked: where a merged season sits among the franchise's TV parts
       function watchPart(season_id, ex) {
         ex = ex || extract;
-        var alt = watch.altOf(object.movie) || {};
-        var tv = alt.ys || 0;
-        var bounds = [0];
-        var index = -1;
-        var first = 0;
-        // not known yet (-2): pending, asked again once YummyAnime's parts come; a part that is not TV (-1): never linked
-        if (!tv || !ex) return { index: -2, bounds: bounds, first: first };
-        ex.seasons.forEach(function (season) {
-          if (season.single) return;
-          var seen = {};
-          var shiki = '';
-          ex.items.forEach(function (c) {
-            var s = c.seasons && c.seasons[season.id];
-            if (!s) return;
-            if (!shiki && c.shikimori_id) shiki = String(c.shikimori_id);
-            if (s.episodes) Object.keys(s.episodes).forEach(function (e) {
-              if (e >= 1) seen[e] = true;
-            });
-          });
-          if (!shiki || tv.indexOf(shiki) < 0) return;
-          var keys = Object.keys(seen).map(Number);
-          if (season.id == season_id) {
-            index = bounds.length - 1;
-            first = keys.length ? Math.min.apply(null, keys) : 0;
-          }
-          bounds.push(bounds[bounds.length - 1] + keys.length);
-        });
-        return { index: index, bounds: bounds, first: first };
+        if (!ex) return { index: -2, bounds: [0], first: 0 };
+        return watch.kodikPart(ex.seasons, ex.items, (watch.altOf(object.movie) || {}).ys || 0, season_id);
       }
 
 
@@ -21359,6 +21366,8 @@
     // Read from Lampa's storage once per session, then kept in memory.
     // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
     episodeVariants.store = 'online_mod_variants_v2';
+    // bump when the placement rules change: answers saved under older rules are not reused
+    episodeVariants.rules = 2;
     episodeVariants.all = function () {
       if (!episodeVariants.mem) {
         var old = Lampa.Storage.get('online_mod_variants', '{}');
@@ -21370,7 +21379,7 @@
     };
     episodeVariants.load = function (key) {
       var s = episodeVariants.all()[key];
-      if (!s || typeof s != 'object' || !s.r || Date.now() - (s.t || 0) > 6 * 3600 * 1000) return null;
+      if (!s || typeof s != 'object' || !s.r || s.w !== episodeVariants.rules || Date.now() - (s.t || 0) > 6 * 3600 * 1000) return null;
       var rows = s.r.map(function (r) {
         var element = { season: r[2], episode: r[3], quality: s.q[r[4]] || '', watch_place: r[5] ? { season: r[5], episode: r[6] } : null, watch_info: r[7] ? { src: 1 } : null };
         if (r[8] && s.b) {
@@ -21401,7 +21410,7 @@
         if (!base && el.quality_base) base = el.quality_base;
         return [row.season, index(voices, row.voice), el.season, el.episode, index(quals, el.quality || ''), w ? w.season : 0, w ? w.episode : 0, el.watch_info && el.watch_info.src ? 1 : 0, el.quality_base && el.quality_tid ? el.quality_tid : 0, el.quality_uhd ? 1 : 0];
       });
-      var one = { t: Date.now(), s: entry.res.status, l: entry.labels, d: entry.done, a: entry.all, v: voices, q: quals, r: rows };
+      var one = { t: Date.now(), w: episodeVariants.rules, s: entry.res.status, l: entry.labels, d: entry.done, a: entry.all, v: voices, q: quals, r: rows };
       if (base) one.b = base;
       var size = JSON.stringify(one).length;
       var all = episodeVariants.all();

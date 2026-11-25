@@ -176,6 +176,26 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const part5 = { index: 1, bounds: [0, 12, 25], first: 13 };
   assert.deepStrictEqual(watch.stacked(part5, 13, { 1: 25 }), { season: 1, episode: 13 });
 }
+// kodikPart: Kodik's specials ("season 0") of a TV part never count as a TV season
+{
+  const seasons = [{ id: 1, title: 'TV-1' }, { id: 2, title: 'mini', single: true }, { id: 3, title: 'Kegon / 0', kodik_key: '0' }, { id: 4, title: 'Kegon / 2', kodik_key: '2' }];
+  const eps = (n) => { const o = {}; for (let i = 1; i <= n; i++) o[i] = 'x'; return o; };
+  const items = [
+    { shikimori_id: 58811, seasons: { 1: { episodes: eps(24) } } },
+    { shikimori_id: 99999, seasons: { 2: { episodes: { 1: 'x' } } } },
+    { shikimori_id: 63181, seasons: { 3: { episodes: eps(2) }, 4: { episodes: eps(8) } } }
+  ];
+  const tv = ['58811', '63181'];
+  const real = watch.kodikPart(seasons, items, tv, 4);
+  assert.deepStrictEqual(real, { index: 1, bounds: [0, 24, 32], first: 1 });
+  assert.strictEqual(watch.kodikPart(seasons, items, tv, 3).index, -1);
+  assert.strictEqual(watch.kodikPart(seasons, items, tv, 1).index, 0);
+  assert.strictEqual(watch.kodikPart(seasons, items, 0, 4).index, -2);
+  assert.deepStrictEqual(watch.stacked(real, 2, { 1: 24, 2: 24 }), { season: 2, episode: 2 });
+  // a part whose only Kodik key was "0" has no kodik_key and still counts
+  const lone = watch.kodikPart([{ id: 1, title: 'Lone' }], [{ shikimori_id: 7, seasons: { 1: { episodes: eps(12) } } }], ['7'], 1);
+  assert(lone.index >= 0);
+}
 // episode 0 -> false
 {
   const part = { index: 1, bounds: [0, 12, 25], first: 1 };
