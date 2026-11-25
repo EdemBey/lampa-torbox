@@ -44,6 +44,7 @@
 //25.11.2026 - Skip button on Alloha: the player's own opening/ending marks (bnsi skipTime) via the helper's /skips
 //25.11.2026 - One "watched" across balancers and TorBox: TMDB season/episode key with Timeline.link (TimeCode server sync); unproven numbering keeps its own key
 //25.11.2026 - Watched: single-TMDB-season anime use Lampa's own air-date split (as its episode list); old marks get the card link once (TimeCode only, not CUB)
+//25.11.2026 - Watched: unproven anime seasons are cross-checked with YummyAnime and TMDB's "Seasons" group, else asked once before playback (Kodik entries: from the item menu); answers sync through Lampac Storage
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -391,6 +392,7 @@
     var watch = {
       store: 'online_mod_watch_map',
       links: {},
+      asks: [],
       // Single-TMDB-season cards: episode counts of Lampa's own air-date split (what its episode list shows)
       splits: null,
       splitOf: function splitOf(card) {
@@ -462,9 +464,13 @@
       // {season, episode} = proven or answered; false = never linked; null = not proven, ask
       rule: function rule(map, counts, anime, q) {
         var own = map[q.balancer + ':' + q.season];
-        var saved = q.src ? map[q.src] : own !== undefined ? own : map['std:' + q.season];
+        // a merged Kodik franchise answers per part (one shikimori entry can hold several of its seasons)
+        var saved = q.src ? map[q.part ? q.src + ':' + q.season : q.src] : own !== undefined ? own : map['std:' + q.season];
         if (saved === 0) return false;
         if (saved) return this.canon(saved, q.episode, counts) || false;
+        // the title's season list picked in the match menu
+        var listed = this.byParts(map.parts, counts, q);
+        if (listed) return listed;
         if (q.part) return this.stacked(q.part, q.episode, counts);
         if (q.src) return null;
         var same = { season: q.season, episode: q.episode };
@@ -479,7 +485,9 @@
         if (q.max > counts[q.season] && !last) return q.season == 1 && this.whole(q.max, counts) ? this.canon([1, 1, 1], q.episode, counts) : null;
         // anime seasons after the first are split differently too often: one answer per title (map.std)
         // Lampa's own split of a single TMDB season: a season that lists exactly its episodes is that season
-        return !anime || q.season == 1 || map.std || q.split && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season] ? same : null;
+        // std was answered for balancers that have TMDB's number of seasons
+        var alike = !q.seasons || q.seasons === Object.keys(counts).length;
+        return !anime || q.season == 1 || map.std && alike || q.split && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season] ? same : null;
       },
       // Kodik franchise part, placed by the episodes of the TV parts before it. Proven when the franchise and
       // TMDB count the same at some end after the part, or (first TMDB season of the part only) at its start.
@@ -665,6 +673,141 @@
           });
         }, fail);
       },
+      // A season list (the answer map.parts, or a source's for the menu) applied to this season: the balancer
+      // must have as many seasons and the listed numbers must fit (the last season may run on: still airing)
+      byParts: function byParts(parts, counts, q) {
+        if (!parts || q.src || parts.length !== q.seasons || !parts[q.season - 1]) return null;
+        var from = 0;
+        for (var i = 0; i < q.season - 1; i++) from += parts[i];
+        var n = parts[q.season - 1];
+        var run = q.season > 1 && q.min > from;
+        var top = q.season < parts.length ? (run ? from : 0) + n : Infinity;
+        // run-on numbers that would also fit a season counted from 1 are not told apart
+        if (q.max > top || run && q.max <= n) return null;
+        return this.canon([1, 1, 1], run ? q.episode : from + q.episode, counts);
+      },
+      // answers hold canonical numbers: they stand while the seasons known then are the same (the last may grow)
+      stands: function stands(c, counts) {
+        for (var i = 0; i < c.length; i++) {
+          if (i < c.length - 1 ? counts[i + 1] !== c[i] : !(counts[i + 1] >= c[i])) return false;
+        }
+        return true;
+      },
+      // An answer of the match menu: a null value deletes the key, patch null forgets the title's answers.
+      // t orders the devices' copies, c are the season sizes the answer was given for.
+      save: function save(card, patch) {
+        var all = Lampa.Storage.get(this.store, '{}') || {};
+        var id = this.id(card);
+        var counts = this.counts(card);
+        var cur = patch && all[id] || {};
+        if (cur.c && !this.stands(cur.c, counts)) cur = {};
+        Object.keys(patch || {}).forEach(function (k) {
+          if (patch[k] === null) delete cur[k];else cur[k] = patch[k];
+        });
+        cur.t = Date.now();
+        cur.c = [];
+        for (var s = 1; counts[s]; s++) cur.c.push(counts[s]);
+        all[id] = cur;
+        Lampa.Storage.set(this.store, all);
+        this.cached = null;
+        this.sync();
+      },
+      title: function title(p) {
+        return Lampa.Lang.translate('online_mod_season') + ' ' + p.season + ', ' + Lampa.Lang.translate('online_mod_episode').toLowerCase() + ' ' + p.episode;
+      },
+      // The match menu: what the sources' lists make of this episode first, then Lampa's own numbers,
+      // a manual pick, no link. patch is what save() writes.
+      options: function options(a) {
+        var self = this;
+        var q = a.element.watch_q;
+        var counts = this.counts(a.card);
+        var alt = this.altOf(a.card) || {};
+        var key = q.src ? (q.part ? q.src + ':' + q.season : q.src) : q.balancer + ':' + q.season;
+        var L = Lampa.Lang.translate;
+        var out = [];
+        var add = function add(title, subtitle, patch, value) {
+          patch[key] = value;
+          out.push({ title: title, subtitle: subtitle, patch: patch });
+        };
+        [['y', 'YummyAnime'], ['g', 'TMDB']].forEach(function (s) {
+          var parts = alt[s[0]];
+          var place = self.byParts(parts, counts, q);
+          if (!place) return;
+          if (out[0] && out[0].patch.parts.join() === parts.join()) out[0].subtitle = out[0].subtitle.replace(':', ' + ' + s[1] + ':');else add(self.title(place), L('online_mod_watch_by') + ' ' + s[1] + ': ' + parts.join(' / '), { parts: parts, std: null }, null);
+        });
+        var same = counts[q.season] && this.canon([1, q.season, 1], q.episode, counts);
+        // std is for the whole title; the anchor settles this season whatever the list's numbers
+        // Kodik's season is its own part number, not TMDB's: no "as in Lampa" row for it
+        if (same && !q.src) add(this.title(same), L('online_mod_watch_same'), !q.src && (!q.seasons || q.seasons === Object.keys(counts).length) ? { std: 1, parts: null } : {}, [1, q.season, 1]);
+        if (counts[1]) out.push({ title: L('online_mod_watch_manual'), manual: key });
+        add(L('online_mod_watch_none'), '', {}, 0);
+        return out;
+      },
+      uid: '',
+      // the address of the user's Lampac, '' when not set
+      server: function server() {
+        var s = ((Lampa.Storage.get('online_mod_lampac_server', '') || '') + '').replace(/^\s+|\s+$/g, '').replace(/\/+$/, '');
+        return !s || /^https?:\/\//i.test(s) ? s : 'http://' + s;
+      },
+      // the newest answer of a title wins (t); a title only one side has is kept
+      merge: function merge(mine, theirs) {
+        var out = {};
+        [theirs || {}, mine || {}].forEach(function (side) {
+          Object.keys(side).forEach(function (id) {
+            var v = side[id];
+            if (v && typeof v == 'object' && (!out[id] || (v.t || 0) >= (out[id].t || 0))) out[id] = v;
+          });
+        });
+        return out;
+      },
+      // Answers are shared through Lampac's Storage module under the uid its TimeCode plugin uses:
+      // read, merge, write back what the server lacks. Without the server everything stays local.
+      sync: function sync(call) {
+        var self = this;
+        var s = this.server();
+        var done = function done() {
+          if (call) call();
+        };
+        if (!s) return done();
+        var net = new Lampa.Reguest();
+        net.timeout(3000);
+        var run = function run() {
+          var url = s + '/storage/get?path=onlinemod&pathfile=watchmap&uid=' + encodeURIComponent(self.uid);
+          net.silent(url, function (json) {
+            var theirs = {};
+            try {
+              var parsed = json && json.success && json.data ? JSON.parse(json.data) : null;
+              if (parsed && typeof parsed == 'object') theirs = parsed;
+            } catch (e) {}
+            var mine = Lampa.Storage.get(self.store, '{}') || {};
+            var both = self.merge(mine, theirs);
+            var text = JSON.stringify(both);
+            if (text !== JSON.stringify(mine)) {
+              Lampa.Storage.set(self.store, both);
+              self.cached = null;
+            }
+            // shortcut: every answered title is kept (~100 bytes each); prune by t if the file nears Lampac's 10 MiB
+            if (text !== JSON.stringify(theirs)) $.ajax({ url: url.replace('/storage/get?', '/storage/set?'), type: 'POST', data: text, contentType: false, processData: false, timeout: 3000 });
+            done();
+          }, done);
+        };
+        if (this.uid) return run();
+        if (this.uid === false) return done();
+        net.silent(s + '/timecode.js', function (js) {
+          // a server that hands out no identity: the TimeCode plugin's own id; nothing at all is not asked again
+          self.uid = (/server_uid\s*=\s*['"]([^'"]+)['"]/.exec(js || '') || [])[1] || Lampa.Storage.get('lampac_unic_id', '') || false;
+          if (self.uid) run();else done();
+        }, done, false, { dataType: 'text' });
+      },
+      // the title has answers of the match menu (t and c are bookkeeping)
+      answered: function answered(card) {
+        var map = this.map(card);
+        // answers TMDB's renumbering voided are not offered for reset
+        if (map.c && !this.stands(map.c, this.counts(card))) return false;
+        return Object.keys(map).some(function (k) {
+          return k !== 't' && k !== 'c';
+        });
+      },
       id: function id(card) {
         return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
       },
@@ -674,6 +817,8 @@
       // canonical timeline hash of a list element; '' = keep the source's own key
       hashOf: function hashOf(card, balancer, element, items, seasons) {
         element.watch_place = null;
+        element.watch_pending = false;
+        element.watch_q = null;
         var season = parseInt(element.season);
         var episode = parseInt(element.episode);
         var split = this.splitOf(card);
@@ -683,6 +828,7 @@
         if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !split) return '';
         // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
         if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength || seasons !== this.cachedSeasons || this.splitOf(card) !== this.cachedSplitObj || this.altOf(card) !== this.cachedAlt) {
+          if (items && (items !== this.cached || card !== this.cachedCard)) this.asks = [];
           this.cached = items;
           this.cachedCard = card;
           this.cachedSeason = season;
@@ -694,6 +840,7 @@
           });
           this.cachedMap = this.map(card);
           this.cachedCounts = this.counts(card);
+          if (this.cachedMap.c && !this.stands(this.cachedMap.c, this.cachedCounts)) this.cachedMap = {};
           this.cachedSplitObj = this.splitOf(card);
           this.cachedSeasons = seasons;
           this.cachedAlt = this.altOf(card);
@@ -742,6 +889,100 @@
           });
         }
       },
+      // the list element a timeline object belongs to (by identity: a legacy hash may equal another episode's key)
+      ctx: function ctx(view, asks) {
+        asks = asks || this.asks;
+        for (var i = 0; i < asks.length; i++) if (asks[i].view === view) return asks[i];
+        return null;
+      },
+      // Answers or sources changed: place every element of the list on screen again and hand the new
+      // timelines to the player items (first and the playlist cells hold the old objects)
+      rekey: function rekey(list) {
+        var self = this;
+        var asks = this.asks;
+        this.asks = [];
+        this.cached = null;
+        asks.forEach(function (a) {
+          a.next = a.element.timeline = self.view(a.card, a.balancer, a.element, a.legacy, a.items, a.seasons);
+        });
+        (list || []).forEach(function (item) {
+          var a = item && self.ctx(item.timeline, asks);
+          if (a) item.timeline = a.next;
+        });
+        if (this.refresh) this.refresh();
+      },
+      // The match menu. Back answers nothing, and the caller does not go on.
+      dialog: function dialog(a, enabled, done) {
+        var self = this;
+        var q = a.element.watch_q;
+        var counts = this.counts(a.card);
+        var L = Lampa.Lang.translate;
+        var pick = function pick(title, items, onSelect) {
+          Lampa.Select.show({
+            title: title,
+            items: items,
+            onBack: function onBack() {
+              Lampa.Controller.toggle(enabled);
+            },
+            onSelect: function (item) {
+              Lampa.Controller.toggle(enabled);
+              onSelect(item);
+            }
+          });
+        };
+        var answer = function answer(patch) {
+          self.save(a.card, patch);
+          done();
+        };
+        pick(this.title(q) + ' — ' + L('online_mod_watch_ask'), this.options(a), function (o) {
+          if (!o.manual) return answer(o.patch);
+          pick(L('online_mod_watch_manual'), Object.keys(counts).map(function (s) {
+            return { title: L('online_mod_season') + ' ' + s, subtitle: counts[s] + L('online_mod_episodes_short'), season: +s };
+          }), function (s) {
+            var eps = [];
+            // shortcut: one row per episode; a number input if seasons of 500+ episodes turn up
+            for (var e = 1; e <= counts[s.season]; e++) eps.push({ title: self.title({ season: s.season, episode: e }), episode: e });
+            pick(self.title(q) + ' =', eps, function (e) {
+              var patch = {};
+              patch[o.manual] = [q.episode, s.season, e.episode];
+              answer(patch);
+            });
+          });
+        });
+      },
+      // Before playback: an unproven episode first takes the answers kept on the server and the other sources'
+      // lists (4 s at most), is placed again, and only then asks. Back plays nothing.
+      ask: function ask(first, playlist, done) {
+        var self = this;
+        var a = this.ctx(first.timeline);
+        if (!a || !a.element.watch_pending) return done();
+        // Kodik's own seasons (one shikimori entry each) are matched from the menu, not asked at every new title
+        if (a.element.watch_q && a.element.watch_q.src && !a.element.watch_q.part) return done();
+        var list = [first].concat(playlist || []);
+        // Lampa.Loading does not hand the controller back
+        var enabled = Lampa.Controller.enabled().name == 'loading' ? 'content' : Lampa.Controller.enabled().name;
+        var over = false;
+        var go = function go(cancel) {
+          if (over) return;
+          over = true;
+          Lampa.Loading.stop();
+          Lampa.Controller.toggle(enabled);
+          if (cancel === true) return;
+          self.rekey(list);
+          if (!a.element.watch_pending) return done();
+          self.dialog(a, enabled, function () {
+            self.rekey(list);
+            done();
+          });
+        };
+        Lampa.Loading.start(function () {
+          go(true);
+        });
+        setTimeout(go, 4000);
+        this.sync(function () {
+          self.alt(a.card, go);
+        });
+      },
       view: function view(card, balancer, element, legacy, items, seasons) {
         this.install();
         var hash = this.hashOf(card, balancer, element, items, seasons);
@@ -766,6 +1007,8 @@
             Lampa.Timeline.update(view);
           }
         }
+        // what rekey() and the match menu need to place this element again; the list on screen only
+        if (items && element.watch_q) this.asks.push({ view: view, card: card, balancer: balancer, element: element, legacy: legacy, items: items, seasons: seasons });
         return view;
       }
     };
@@ -1222,8 +1465,12 @@
       }
     }
 
-    function playWithoutPreroll(first, playlist) {
+    function playWithoutPreroll(first, playlist, asked) {
       if (!first) return;
+      // an episode whose place in Lampa's numbering is not proven is settled (or asked once) before the player takes its timeline
+      if (!asked) return watch.ask(first, playlist, function () {
+        playWithoutPreroll(first, playlist, true);
+      });
 
       if (isExternalAndroidPlayer()) {
         var list = playlist && playlist.length ? playlist : [first];
@@ -19155,6 +19402,19 @@
             });
           }
 
+          var matched = params.element && watch.ctx(params.element.timeline);
+
+          if (matched) {
+            menu.push({
+              title: Lampa.Lang.translate('online_mod_watch_match'),
+              watch_match: true
+            });
+            if (watch.answered(object.movie)) menu.push({
+              title: Lampa.Lang.translate('online_mod_watch_reset'),
+              watch_reset: true
+            });
+          }
+
           Lampa.Select.show({
             title: Lampa.Lang.translate('title_action'),
             items: menu,
@@ -19201,6 +19461,15 @@
               }
 
               Lampa.Controller.toggle(enabled);
+
+              if (a.watch_match) watch.dialog(matched, enabled, function () {
+                watch.rekey();
+              });
+
+              if (a.watch_reset) {
+                watch.save(object.movie, null);
+                watch.rekey();
+              }
 
               if (a.player) {
                 Lampa.Player.runas(a.player);
@@ -19270,6 +19539,16 @@
       };
       watch.prefetch(object.movie);
       if (animeSkip.isAnime(object.movie)) watch.alt(object.movie);
+      // rekey() changed the elements' timelines: redraw their bars and let the menu reset the new ones
+      watch.refresh = function () {
+        contextmenu_all.forEach(function (p) {
+          var v = p.element && p.element.timeline;
+          if (!v || v === p.view) return;
+          p.item.find('.time-line').replaceWith(Lampa.Timeline.render(v));
+          if (Lampa.Timeline.details) p.item.find('.time-line-details').replaceWith(Lampa.Timeline.details(v, ' / '));
+          p.view = v;
+        });
+      };
       /**
        * Начать навигацию по файлам
        */
@@ -19426,6 +19705,13 @@
         online_mod_episodes_short: { ru: ' эп.', en: ' ep.' },
         online_mod_season: { ru: 'Сезон', en: 'Season' },
         online_mod_episode: { ru: 'Серия', en: 'Episode' },
+        online_mod_watch_ask: { ru: 'какая это серия в Lampa?', en: 'which episode is it in Lampa?' },
+        online_mod_watch_by: { ru: 'По данным', en: 'According to' },
+        online_mod_watch_same: { ru: 'Нумерация как в Lampa (TMDB)', en: 'Numbered as in Lampa (TMDB)' },
+        online_mod_watch_manual: { ru: 'Выбрать сезон и серию вручную', en: 'Pick the season and episode' },
+        online_mod_watch_none: { ru: 'Не связывать с карточкой', en: 'Do not link to the card' },
+        online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
+        online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_original: { ru: 'Оригинал', en: 'Original' },
         online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
         online_mod_rezka_login_disabled: { ru: 'Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)', en: 'HDrezka login without the Tampermonkey bridge or your own server is off: the password would go through a third-party proxy (Settings → online_mod → HDrezka → "Your server address")' },
@@ -20393,9 +20679,8 @@
 
     // Lampac's TimeCode plugin syncs Lampa.Timeline through the user's own Lampac; nothing is loaded without its address
     function loadTimecode() {
-      var s = ((Lampa.Storage.get('online_mod_lampac_server', '') || '') + '').replace(/^\s+|\s+$/g, '').replace(/\/+$/, '');
+      var s = watch.server();
       if (!s || window.lampac_timecode_plugin) return;
-      if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
       Lampa.Utils.putScriptAsync([s + '/timecode.js'], function () {});
     }
 
@@ -20408,6 +20693,7 @@
       initSettings();
       watch.install();
       loadTimecode();
+      watch.sync();
     }
 
     startPlugin();

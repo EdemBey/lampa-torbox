@@ -481,4 +481,294 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   watch.yummy = ownY; watch.groups = ownG;
 }
 
+// rekey: an answer saved after the list was drawn moves the elements and the player items
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  const ownY = watch.yummy, ownG = watch.groups;
+  watch.yummy = (c, call) => call(0); watch.groups = (c, call) => call(0);
+  watch.splits = null; watch.alts = null; watch.cached = undefined; watch.asks = [];
+  const card = { id: 70, original_title: 'R', anime: true, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const items = [{ season: '2', episode: '1' }, { season: '2', episode: '2' }];
+  items.forEach((el) => { el.timeline = watch.view(card, 'alloha', el, 'legacy' + el.episode, items, 2); });
+  assert.strictEqual(items[1].watch_pending, true);
+  const first = { timeline: items[1].timeline };
+  const cell = { timeline: items[0].timeline };
+  store['online_mod_watch_map'] = { tmdb_70: { std: 1 } };
+  let redrawn = 0;
+  watch.refresh = () => { redrawn++; };
+  watch.rekey([first, cell, first]);
+  assert.strictEqual(first.timeline.hash, 'h:22R');
+  assert.strictEqual(cell.timeline.hash, 'h:21R');
+  assert.strictEqual(items[1].timeline, first.timeline);
+  assert.strictEqual(items[1].watch_pending, false);
+  assert.strictEqual(watch.asks.length, 2);
+  assert.strictEqual(redrawn, 1);
+  watch.refresh = null; watch.yummy = ownY; watch.groups = ownG;
+}
+
+// answers: map.parts, the std guard, the sizes an answer stands on, save
+{
+  for (const k in store) delete store[k];
+  watch.alts = null; watch.splits = null; watch.cached = undefined;
+  const P = { parts: [24, 13, 13, 13] };
+  const qq = { src: '', balancer: 'alloha', season: 2, episode: 9, min: 1, max: 13, seasons: 4 };
+  const w = (extra) => Object.assign({}, qq, extra);
+  assert.deepStrictEqual(watch.place(P, { 1: 63 }, true, w({ min: 3, max: 9 })), { season: 1, episode: 33 });
+  assert.deepStrictEqual(watch.place(P, { 1: 63 }, true, w({ episode: 33, min: 25, max: 37 })), { season: 1, episode: 33 });
+  assert.strictEqual(watch.place(P, { 1: 63 }, true, w({ seasons: 3 })), null);
+  assert.strictEqual(watch.place(P, { 1: 63 }, true, w({ max: 14 })), null);
+  // the last season is still airing: more episodes than the list had
+  assert.deepStrictEqual(watch.place(P, { 1: 70 }, true, w({ season: 4, episode: 15, max: 15 })), { season: 1, episode: 65 });
+  // 13..24 of a 24-episode season 2: counted from 1 or run on from 12?
+  assert.strictEqual(watch.place({ parts: [12, 24, 12] }, { 1: 48 }, true, { src: '', balancer: 'x', season: 2, episode: 13, min: 13, max: 24, seasons: 3 }), null);
+  // std answered for TMDB's two seasons does not apply to a balancer with three
+  assert.strictEqual(watch.place({ std: 1 }, { 1: 12, 2: 12 }, true, { src: '', balancer: 'rezka2', season: 2, episode: 3, min: 1, max: 12, seasons: 3 }), null);
+  assert.strictEqual(watch.stands([24, 13], { 1: 24, 2: 13, 3: 13 }), true);
+  assert.strictEqual(watch.stands([24, 13], { 1: 24, 2: 15 }), true);
+  assert.strictEqual(watch.stands([24, 13], { 1: 25, 2: 13 }), false);
+  assert.strictEqual(watch.stands([63], { 1: 24, 2: 39 }), false);
+  const card = { id: 80, original_name: 'O', original_title: 'O', anime: true, number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 63 }] };
+  store['online_mod_watch_split'] = { tmdb_80: { 1: 63 } };
+  watch.splits = null;
+  store['online_mod_watch_map'] = { tmdb_80: { std: 1, 'alloha:2': 0, t: 1, c: [63] } };
+  watch.save(card, { parts: [24, 13, 13, 13], std: null, 'alloha:2': null });
+  const saved = store['online_mod_watch_map'].tmdb_80;
+  assert.deepStrictEqual(saved.parts, [24, 13, 13, 13]);
+  assert.deepStrictEqual(saved.c, [63]);
+  assert.ok(saved.t > 1 && !('std' in saved) && !('alloha:2' in saved));
+  watch.save(card, null);
+  assert.deepStrictEqual(Object.keys(store['online_mod_watch_map'].tmdb_80).sort(), ['c', 't']);
+  // TMDB renumbered the seasons after the answer: it is not applied
+  store['online_mod_watch_map'] = { tmdb_81: { std: 1, t: 1, c: [12, 12] } };
+  const card81 = { id: 81, original_title: 'N', anime: true, number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const ownY = watch.yummy, ownG = watch.groups;
+  watch.yummy = (c, call) => call(0); watch.groups = (c, call) => call(0);
+  const el = { season: '2', episode: '3' };
+  assert.strictEqual(watch.hashOf(card81, 'x', el, [el], 2), 'h:23N');
+  card81.seasons[0].episode_count = 13;
+  const el2 = { season: '2', episode: '3' };
+  assert.strictEqual(watch.hashOf(card81, 'x', el2, [el2], 2), '');
+  watch.yummy = ownY; watch.groups = ownG;
+}
+
+// the match menu
+{
+  for (const k in store) delete store[k];
+  watch.alts = null; watch.splits = null; watch.cached = undefined;
+  const ownLang = Lampa.Lang;
+  Lampa.Lang = { translate: (k) => k };
+  const card = { id: 80, original_name: 'O', original_title: 'O', anime: true, seasons: [{ season_number: 1, episode_count: 63 }] };
+  store['online_mod_watch_alt'] = { tmdb_80: { t: Date.now(), k: 0, y: [24, 13, 13, 13], g: [24, 13, 13, 13] } };
+  const a = { card: card, element: { watch_q: { src: '', balancer: 'alloha', season: 2, episode: 9, min: 1, max: 12, seasons: 4 } } };
+  const opts = watch.options(a);
+  // both sources say the same: one row; TMDB has no season 2: no "as in Lampa" row
+  assert.strictEqual(opts.length, 3);
+  assert.strictEqual(opts[0].title, 'online_mod_season 1, online_mod_episode 33');
+  assert.strictEqual(opts[0].subtitle, 'online_mod_watch_by YummyAnime + TMDB: 24 / 13 / 13 / 13');
+  assert.deepStrictEqual(opts[0].patch, { parts: [24, 13, 13, 13], std: null, 'alloha:2': null });
+  assert.strictEqual(opts[1].manual, 'alloha:2');
+  assert.deepStrictEqual(opts[2].patch, { 'alloha:2': 0 });
+  // what the first row saves places the episode
+  watch.save(card, opts[0].patch);
+  assert.deepStrictEqual(watch.place(watch.map(card), watch.counts(card), true, a.element.watch_q), { season: 1, episode: 33 });
+  // TMDB has the season and as many seasons as the balancer: std for the title plus this season's anchor
+  const card2 = { id: 82, original_title: 'P', anime: true, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const same = watch.options({ card: card2, element: { watch_q: { src: '', balancer: 'x', season: 2, episode: 3, min: 1, max: 12, seasons: 2 } } })[0];
+  assert.deepStrictEqual(same.patch, { std: 1, parts: null, 'x:2': [1, 2, 1] });
+  // Kodik: its season is its own part number, so no "as in Lampa" row; its own key for the manual pick
+  const kodik = watch.options({ card: card2, element: { watch_q: { src: 'shiki:7', balancer: 'kodik', season: 2, episode: 3, min: 1, max: 12 } } });
+  assert.strictEqual(kodik[0].manual, 'shiki:7');
+  assert.deepStrictEqual(kodik[1].patch, { 'shiki:7': 0 });
+  Lampa.Lang = ownLang;
+}
+
+// answers on the server: the newest answer of a title wins, the rest is united
+{
+  for (const k in store) delete store[k];
+  const mine = { a: { std: 1, t: 5 }, b: { t: 9 }, d: { std: 1 } };
+  const theirs = { a: { parts: [12, 12], t: 7 }, b: { std: 1, t: 3 }, c: { std: 1, t: 1 }, junk: 5 };
+  assert.deepStrictEqual(watch.merge(mine, theirs), { a: theirs.a, b: mine.b, c: theirs.c, d: mine.d });
+  assert.deepStrictEqual(watch.merge(mine, null), mine);
+  assert.strictEqual(watch.server(), '');
+  store['online_mod_lampac_server'] = ' 192.168.1.50:9118/ ';
+  assert.strictEqual(watch.server(), 'http://192.168.1.50:9118');
+  delete store['online_mod_lampac_server'];
+  // no server: nothing is requested, the caller goes on
+  let went = 0;
+  watch.sync(() => { went++; });
+  assert.strictEqual(went, 1);
+}
+
+// dialog: a manual pick writes an anchor for this balancer season; Back writes nothing
+{
+  for (const k in store) delete store[k];
+  watch.alts = null; watch.splits = null; watch.cached = undefined;
+  const own = { Lang: Lampa.Lang, Controller: Lampa.Controller, Select: Lampa.Select };
+  Lampa.Lang = { translate: (k) => k };
+  const shown = [];
+  Lampa.Controller = { enabled: () => ({ name: 'content' }), toggle: () => {} };
+  Lampa.Select = { show: (p) => { shown.push(p); } };
+  const card = { id: 91, original_title: 'D', anime: true, seasons: [{ season_number: 1, episode_count: 24 }, { season_number: 2, episode_count: 12 }] };
+  const a = { card: card, element: { watch_q: { src: '', balancer: 'alloha', season: 2, episode: 3, min: 1, max: 12, seasons: 3 } } };
+  let done = 0;
+  watch.dialog(a, 'content', () => { done++; });
+  shown[0].onBack();
+  assert.strictEqual(done, 0);
+  assert.strictEqual(store['online_mod_watch_map'], undefined);
+  shown[0].onSelect(shown[0].items.filter((o) => o.manual)[0]);
+  shown[1].onSelect(shown[1].items[0]);
+  shown[2].onSelect(shown[2].items[14]);
+  assert.strictEqual(done, 1);
+  assert.deepStrictEqual(store['online_mod_watch_map'].tmdb_91['alloha:2'], [3, 1, 15]);
+  assert.deepStrictEqual(watch.place(watch.map(card), watch.counts(card), true, a.element.watch_q), { season: 1, episode: 15 });
+  Object.assign(Lampa, own);
+}
+
+// ask before playback: asked once, the answer re-keys first and the playlist
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  watch.splits = null; watch.alts = null; watch.cached = undefined; watch.asks = [];
+  const own = { Lang: Lampa.Lang, Controller: Lampa.Controller, Select: Lampa.Select, Loading: Lampa.Loading };
+  Lampa.Lang = { translate: (k) => k };
+  let shown = null;
+  Lampa.Loading = { start: () => {}, stop: () => {} };
+  Lampa.Controller = { enabled: () => ({ name: 'loading' }), toggle: (n) => { assert.strictEqual(n, 'content'); } };
+  Lampa.Select = { show: (p) => { shown = p; } };
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = () => 0;
+  const card = { id: 90, original_title: 'Q', anime: true, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const items = [{ season: '2', episode: '1' }, { season: '2', episode: '2' }];
+  items.forEach((el) => { el.timeline = watch.view(card, 'alloha', el, 'old' + el.episode, items, 2); });
+  const first = { timeline: items[0].timeline };
+  const playlist = [first, { timeline: items[1].timeline }];
+  let played = 0;
+  watch.ask(first, playlist, () => { played++; });
+  assert.strictEqual(played, 0);
+  shown.onSelect(shown.items.filter((o) => o.patch && o.patch.std === 1)[0]);
+  assert.strictEqual(played, 1);
+  assert.strictEqual(first.timeline.hash, 'h:21Q');
+  assert.strictEqual(first.timeline.episode, 1);
+  assert.strictEqual(playlist[1].timeline.hash, 'h:22Q');
+  assert.strictEqual(store['online_mod_watch_map'].tmdb_90.std, 1);
+  // answered: the next start does not ask; a movie item has no element
+  shown = null;
+  watch.ask({ timeline: items[1].timeline }, [], () => { played++; });
+  watch.ask({}, null, () => { played++; });
+  assert.strictEqual(played, 3);
+  assert.strictEqual(shown, null);
+  globalThis.setTimeout = timer;
+  Object.assign(Lampa, own);
+}
+
+// Kodik: merged parts keep answers per part and get no "as in Lampa" row; its own seasons are not asked before playback
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  watch.splits = null; watch.alts = null; watch.cached = undefined; watch.asks = [];
+  const own = { Lang: Lampa.Lang, Select: Lampa.Select, Loading: Lampa.Loading, Controller: Lampa.Controller };
+  Lampa.Lang = { translate: (k) => k };
+  const card = { id: 95, original_title: 'K', anime: true, number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 63 }] };
+  store['online_mod_watch_split'] = { tmdb_95: { 1: 63 } };
+  watch.splits = null;
+  const part = { index: 2, bounds: [0, 24, 37, 50], first: 1 };
+  const opts = watch.options({ card: card, element: { watch_q: { src: 'shiki:7', part: part, balancer: 'kodik', season: 3, episode: 2, min: 1, max: 13 } } });
+  assert.ok(opts.every((o) => !o.patch || !('std' in o.patch)));
+  assert.strictEqual(opts.filter((o) => o.patch && Array.isArray(o.patch['shiki:7:3'])).length, 0);
+  assert.strictEqual(opts[0].manual, 'shiki:7:3');
+  assert.deepStrictEqual(watch.place({ 'shiki:7:3': [1, 1, 25] }, { 1: 63 }, true, { src: 'shiki:7', part: part, balancer: 'kodik', season: 3, episode: 2, min: 1, max: 13 }), { season: 1, episode: 26 });
+  // a Kodik entry of its own (no part): pending, but not asked
+  let shown = 0;
+  Lampa.Select = { show: () => { shown++; } };
+  Lampa.Loading = { start: () => {}, stop: () => {} };
+  Lampa.Controller = { enabled: () => ({ name: 'content' }), toggle: () => {} };
+  const el = { season: '1', episode: '3', watch_info: { src: 'shiki:7' } };
+  el.timeline = watch.view(card, 'kodik', el, 'k3', [el], 1);
+  assert.strictEqual(el.watch_pending, true);
+  let played = 0;
+  watch.ask({ timeline: el.timeline }, [], () => { played++; });
+  assert.strictEqual(played, 1);
+  assert.strictEqual(shown, 0);
+  Object.assign(Lampa, own);
+}
+
+// ask: Back during the wait plays nothing; the late timer does nothing either
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  watch.splits = null; watch.alts = null; watch.cached = undefined; watch.asks = [];
+  const own = { Lang: Lampa.Lang, Select: Lampa.Select, Loading: Lampa.Loading, Controller: Lampa.Controller, Reguest: Lampa.Reguest };
+  Lampa.Lang = { translate: (k) => k };
+  let cancel = null, shown = 0, timerFn = null;
+  Lampa.Loading = { start: (cb) => { cancel = cb; }, stop: () => {} };
+  Lampa.Controller = { enabled: () => ({ name: 'content' }), toggle: () => {} };
+  Lampa.Select = { show: () => { shown++; } };
+  // the server never answers
+  Lampa.Reguest = function () { this.timeout = () => {}; this.silent = () => {}; };
+  store['online_mod_lampac_server'] = 'http://x';
+  watch.uid = 'u';
+  const timer = globalThis.setTimeout;
+  globalThis.setTimeout = (fn) => { timerFn = fn; return 0; };
+  const card = { id: 96, original_title: 'W', anime: true, number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const items = [{ season: '2', episode: '1' }];
+  items[0].timeline = watch.view(card, 'alloha', items[0], 'w1', items, 3);
+  let played = 0;
+  watch.ask({ timeline: items[0].timeline }, [], () => { played++; });
+  cancel();
+  timerFn();
+  assert.strictEqual(played, 0);
+  assert.strictEqual(shown, 0);
+  globalThis.setTimeout = timer;
+  watch.uid = '';
+  Object.assign(Lampa, own);
+}
+
+// sync: the server's answers are merged in; a POST only when the server lacks something
+{
+  for (const k in store) delete store[k];
+  const own = { Reguest: Lampa.Reguest };
+  const posts = [];
+  const ownDollar = globalThis.$;
+  globalThis.$ = { ajax: (o) => posts.push(o) };
+  let reply = { success: true, data: JSON.stringify({ tmdb_1: { std: 1, t: 5 } }) };
+  Lampa.Reguest = function () { this.timeout = () => {}; this.silent = (url, ok) => ok(reply); };
+  store['online_mod_lampac_server'] = 'http://x';
+  watch.uid = 'u';
+  let done = 0;
+  watch.sync(() => { done++; });
+  assert.strictEqual(done, 1);
+  assert.deepStrictEqual(store['online_mod_watch_map'], { tmdb_1: { std: 1, t: 5 } });
+  assert.strictEqual(posts.length, 0);
+  store['online_mod_watch_map'] = { tmdb_1: { std: 1, t: 5 }, tmdb_2: { std: 1, t: 9 } };
+  watch.sync();
+  assert.strictEqual(posts.length, 1);
+  assert.ok(posts[0].url.indexOf('/storage/set?path=onlinemod&pathfile=watchmap&uid=u') > 0);
+  assert.deepStrictEqual(JSON.parse(posts[0].data), store['online_mod_watch_map']);
+  // a server that hands out no identity: the TimeCode plugin's own id, and timecode.js is fetched once
+  watch.uid = '';
+  let fetched = 0;
+  Lampa.Reguest = function () { this.timeout = () => {}; this.silent = (url, ok) => { if (/timecode\.js/.test(url)) { fetched++; ok("var server_uid = '';"); } else ok(reply); }; };
+  store['lampac_unic_id'] = 'abc';
+  watch.sync();
+  assert.strictEqual(watch.uid, 'abc');
+  delete store['lampac_unic_id'];
+  watch.uid = '';
+  watch.sync(); watch.sync();
+  assert.strictEqual(fetched, 2);
+  watch.uid = '';
+  delete store['online_mod_lampac_server'];
+  globalThis.$ = ownDollar;
+  Object.assign(Lampa, own);
+}
+
+// the menu offers the reset only for a title that has answers
+{
+  for (const k in store) delete store[k];
+  store['online_mod_watch_map'] = { tmdb_92: { t: 1, c: [12] }, tmdb_93: { std: 1, t: 1 } };
+  assert.strictEqual(watch.answered({ id: 92 }), false);
+  assert.strictEqual(watch.answered({ id: 93 }), true);
+  assert.strictEqual(watch.answered({ id: 94 }), false);
+}
+
 console.log('watch-map OK');
