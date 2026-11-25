@@ -215,7 +215,7 @@
 
       function update() {
         try {
-          $('.loading-layer .loading-layer__text').text('Подготовка плейлиста: ' + done + ' / ' + limit);
+          $('.loading-layer .loading-layer__text').text(Lampa.Lang.translate('online_mod_playlist_prepare') + done + ' / ' + limit);
         } catch (e) {}
       }
 
@@ -761,7 +761,7 @@
      */
     var browserSkip = {
       cache: {},
-      names: { op: 'Пропустить опенинг', ed: 'Пропустить эндинг', recap: 'Пропустить пересказ' },
+      names: { op: 'online_mod_skip_op', ed: 'online_mod_skip_ed', recap: 'online_mod_skip_recap' },
       fetch: function fetch(url, call) {
         var cache = this.cache;
         if (url in cache) return call(cache[url]);
@@ -922,7 +922,7 @@
           active = next;
           if (!active) return button.hide();
           if (!button.parent().length) $('.player').append(button);
-          button.text(self.names[active.type] || self.names.op).show();
+          button.text(Lampa.Lang.translate(self.names[active.type] || self.names.op)).show();
         });
         // Enter with the panel hidden skips while the button is shown (Lampa's keypad listens on window)
         window.addEventListener('keydown', function (e) {
@@ -1058,7 +1058,7 @@
         ranges.push(from === nums[i] ? '' + from : from + '-' + nums[i]);
       }
 
-      return ranges.length ? ranges.join(',') + ' эп.' : '';
+      return ranges.length ? ranges.join(',') + Lampa.Lang.translate('online_mod_episodes_short') : '';
     }
 
     var myIp = '';
@@ -1876,7 +1876,7 @@
               season_count++;
               seasons.push({
                 season_id: 1,
-                season_name: 'Сезон 1',
+                season_name: Lampa.Lang.translate('online_mod_season') + ' 1',
                 episodes: json.player.media
               });
               season_num.push(1);
@@ -3143,7 +3143,7 @@
           devVoiceName = $(translation[1]).text().trim();
         }
 
-        if (!devVoiceName) devVoiceName = 'Оригинал';
+        if (!devVoiceName) devVoiceName = Lampa.Lang.translate('online_mod_original');
         var defVoice, defSeason, defEpisode;
 
         if (cdnSeries) {
@@ -3154,11 +3154,11 @@
             id: cdnSeries[2]
           };
           defSeason = {
-            name: 'Сезон ' + cdnSeries[3],
+            name: Lampa.Lang.translate('online_mod_season') + ' ' + cdnSeries[3],
             id: cdnSeries[3]
           };
           defEpisode = {
-            name: 'Серия ' + cdnSeries[4],
+            name: Lampa.Lang.translate('online_mod_episode') + ' ' + cdnSeries[4],
             season_id: cdnSeries[3],
             episode_id: cdnSeries[4]
           };
@@ -3471,7 +3471,7 @@
               });
             } else if (video && component.parsePlaylist(video).length) {
               // Every quality was the Premium placeholder
-              error('Перевод доступен только с HDrezka Premium');
+              error(Lampa.Lang.translate('online_mod_rezka_premium_only'));
               return;
             }
 
@@ -4251,7 +4251,7 @@
       var host = prox && !proxy_mirror ? Utils.rezka2Host() : Utils.rezka2Mirror();
 
       if (!prox && !returnHeaders) {
-        Lampa.Noty.show('Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)');
+        Lampa.Noty.show(Lampa.Lang.translate('online_mod_rezka_login_disabled'));
         if (error) error();
         return;
       }
@@ -12922,13 +12922,13 @@
       }
 
       var servers = [{
-        name: 'Основной',
+        name: Lampa.Lang.translate('online_mod_server_main'),
         url: 'https://video1.anilib.me/.%D0%B0s/'
       }, {
-        name: 'Резервный 1',
+        name: Lampa.Lang.translate('online_mod_server_reserve') + ' 1',
         url: 'https://video2.anilib.me/.%D0%B0s/'
       }, {
-        name: 'Резервный 2',
+        name: Lampa.Lang.translate('online_mod_server_reserve') + ' 2',
         url: 'https://video3.anilib.me/.%D0%B0s/'
       }];
       var filter_items = {};
@@ -14562,7 +14562,7 @@
         object = _object;
         select_title = object.search || object.movie.title;
         var error = component.empty.bind(component);
-        if (!server) return component.empty('Укажите адрес сервера Alloha в настройках');
+        if (!server) return component.empty(Lampa.Lang.translate('online_mod_alloha_no_server'));
         var kp = parseInt(kinopoisk_id, 10) || 0;
         var imdb = object.movie.imdb_id || '';
         if (!kp && !imdb) return component.emptyForQuery(select_title);
@@ -14818,7 +14818,7 @@
               for (var quality in qualities) {
                 var _media = qualities[quality];
                 filtred.push({
-                  title: (_media.translation || select_title) + (_media.directors_cut ? ' (Режиссёрская версия)' : ''),
+                  title: (_media.translation || select_title) + (_media.directors_cut ? Lampa.Lang.translate('online_mod_directors_cut') : ''),
                   quality: (_media.uhd ? '360p ~ 2160p' : '360p ~ 1080p') + (_media.quality ? ' / ' + _media.quality : ''),
                   info: '',
                   media: _media
@@ -15192,8 +15192,8 @@
           "default": ''
         },
         field: {
-          name: 'Адрес своего сервера (server/)',
-          description: 'Один сервер для Alloha, Turbo и HDrezka в браузере'
+          name: Lampa.Lang.translate('online_mod_helper_server'),
+          description: Lampa.Lang.translate('online_mod_helper_server_descr')
         }
       });
     }
@@ -15279,7 +15279,7 @@
       this.search = function (_object, kinopoisk_id) {
         object = _object;
         select_title = object.search || object.movie.title;
-        if (!server) return component.empty('Turbo работает через сервер Alloha: укажите его адрес в настройках Alloha');
+        if (!server) return component.empty(Lampa.Lang.translate('online_mod_turbo_no_server'));
         var kp = parseInt(kinopoisk_id, 10) || 0;
         var imdb = object.movie.imdb_id || '';
         if (!kp && !imdb) return component.emptyForQuery(select_title);
@@ -15317,7 +15317,7 @@
         var controller = Lampa.Controller.enabled().name;
         var link = server + '/turbo/verify?url=' + encodeURIComponent(embed);
         // A TV remote cannot tick a checkbox inside an iframe: the phone opens the same check through the server, which keeps the approval.
-        var html = $('<div style="display:flex;gap:1.5em;height:70vh"><style>.turbo-qr svg,.turbo-qr img{display:block;width:100%;height:auto}</style><iframe src="' + link + '" style="flex:1;min-width:0;height:100%;border:0;border-radius:.6em;background:#111"></iframe><div class="turbo-qr-box" style="width:15em;flex-shrink:0;text-align:center"><div class="turbo-qr" style="background:#fff;padding:.7em;border-radius:.6em"></div><div style="margin-top:1em;line-height:1.4">С пульта галочку не нажать? Отсканируйте код телефоном и поставьте галочку там — окно закроется само.</div></div></div>');
+        var html = $('<div style="display:flex;gap:1.5em;height:70vh"><style>.turbo-qr svg,.turbo-qr img{display:block;width:100%;height:auto}</style><iframe src="' + link + '" style="flex:1;min-width:0;height:100%;border:0;border-radius:.6em;background:#111"></iframe><div class="turbo-qr-box" style="width:15em;flex-shrink:0;text-align:center"><div class="turbo-qr" style="background:#fff;padding:.7em;border-radius:.6em"></div><div style="margin-top:1em;line-height:1.4">' + Lampa.Lang.translate('online_mod_turbo_qr') + '</div></div></div>');
         if (Lampa.Utils.qrcode) Lampa.Utils.qrcode(link, html.find('.turbo-qr'), function () {
           html.find('.turbo-qr-box').remove();
         });else html.find('.turbo-qr-box').remove();
@@ -15328,12 +15328,12 @@
           Lampa.Controller.toggle(controller);
         };
         Lampa.Modal.open({
-          title: 'Turbo: поставьте галочку «Подтвердите, что вы человек»',
+          title: Lampa.Lang.translate('online_mod_turbo_captcha'),
           html: html,
           size: 'large',
           onBack: function onBack() {
             stop();
-            component.empty('Turbo ждёт подтверждения: откройте балансер снова');
+            component.empty(Lampa.Lang.translate('online_mod_turbo_waiting'));
           }
         });
         poll = setInterval(function () {
@@ -16460,8 +16460,8 @@
       }
 
       function languageLabel(language) {
-        if (language === 'dub') return russian() ? 'Озвучка' : 'Dub';
-        if (language === 'sub') return russian() ? 'Субтитры' : 'Subtitles';
+        if (language === 'dub') return Lampa.Lang.translate('online_mod_dub');
+        if (language === 'sub') return Lampa.Lang.translate('online_mod_sub');
         return language;
       }
 
@@ -16470,7 +16470,7 @@
       }
 
       function seasonName(season) {
-        var label = (season.label || (russian() && season.titleRussian) || season.titleEnglish || 'Season') + '';
+        var label = (season.label || (russian() && season.titleRussian) || season.titleEnglish || Lampa.Lang.translate('online_mod_season')) + '';
         if (season.year && label.indexOf(String(season.year)) === -1) label += ' (' + season.year + ')';
         return label;
       }
@@ -16560,7 +16560,7 @@
         var show = episodeShowName(episode);
         var number = episode.episodeNumber;
         var title = episode.title ? ' — ' + episode.title : '';
-        var label = russian() ? 'Серия' : 'Episode';
+        var label = Lampa.Lang.translate('online_mod_episode');
         return show + (number != null ? ' · ' + label + ' ' + number : '') + title;
       }
 
@@ -16584,7 +16584,7 @@
 
       function playEpisodeDirect(episode) {
         var languages = languagesOf(episode);
-        var noSources = russian() ? 'У этой серии нет доступных источников' : 'No playable sources for this episode';
+        var noSources = Lampa.Lang.translate('online_mod_no_sources');
 
         if (!languages.length) {
           Lampa.Noty.show(noSources);
@@ -18985,7 +18985,7 @@
               }
 
               if (a.copylink) {
-                params.file(selectQuality('Ссылки', function (b, extra) {
+                params.file(selectQuality(Lampa.Lang.translate('online_mod_links'), function (b, extra) {
                   Lampa.Utils.copyTextToClipboard(b && b.file || extra && extra.file, function () {
                     Lampa.Noty.show(Lampa.Lang.translate('copy_secuses'));
                   }, function () {
@@ -19192,6 +19192,32 @@
           en: 'Watch online',
           zh: '在线观看'
         },
+        online_mod_playlist_prepare: { ru: 'Подготовка плейлиста: ', en: 'Preparing playlist: ' },
+        online_mod_skip_op: { ru: 'Пропустить опенинг', en: 'Skip opening' },
+        online_mod_skip_ed: { ru: 'Пропустить эндинг', en: 'Skip ending' },
+        online_mod_skip_recap: { ru: 'Пропустить пересказ', en: 'Skip recap' },
+        online_mod_episodes_short: { ru: ' эп.', en: ' ep.' },
+        online_mod_season: { ru: 'Сезон', en: 'Season' },
+        online_mod_episode: { ru: 'Серия', en: 'Episode' },
+        online_mod_original: { ru: 'Оригинал', en: 'Original' },
+        online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
+        online_mod_rezka_login_disabled: { ru: 'Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)', en: 'HDrezka login without the Tampermonkey bridge or your own server is off: the password would go through a third-party proxy (Settings → online_mod → HDrezka → "Your server address")' },
+        online_mod_server_main: { ru: 'Основной', en: 'Main' },
+        online_mod_server_reserve: { ru: 'Резервный', en: 'Backup' },
+        online_mod_alloha_no_server: { ru: 'Укажите адрес сервера Alloha в настройках', en: 'Set the Alloha server address in the settings' },
+        online_mod_directors_cut: { ru: ' (Режиссёрская версия)', en: " (Director's cut)" },
+        online_mod_helper_server: { ru: 'Адрес своего сервера (server/)', en: 'Your server address (server/)' },
+        online_mod_helper_server_descr: { ru: 'Один сервер для Alloha, Turbo и HDrezka в браузере', en: 'One server for Alloha, Turbo and HDrezka in a browser' },
+        online_mod_turbo_no_server: { ru: 'Turbo работает через сервер Alloha: укажите его адрес в настройках Alloha', en: 'Turbo works through the Alloha server: set its address in the Alloha settings' },
+        online_mod_turbo_qr: { ru: 'С пульта галочку не нажать? Отсканируйте код телефоном и поставьте галочку там — окно закроется само.', en: "Can't tick the box with the remote? Scan the code with your phone and tick it there; this window closes by itself." },
+        online_mod_turbo_captcha: { ru: 'Turbo: поставьте галочку «Подтвердите, что вы человек»', en: 'Turbo: tick "Confirm you are human"' },
+        online_mod_turbo_waiting: { ru: 'Turbo ждёт подтверждения: откройте балансер снова', en: 'Turbo is waiting for the confirmation: open the source again' },
+        online_mod_dub: { ru: 'Озвучка', en: 'Dub' },
+        online_mod_sub: { ru: 'Субтитры', en: 'Subtitles' },
+        online_mod_no_sources: { ru: 'У этой серии нет доступных источников', en: 'No playable sources for this episode' },
+        online_mod_links: { ru: 'Ссылки', en: 'Links' },
+        online_mod_lampac_server: { ru: 'Адрес Lampac (синхронизация просмотров)', en: 'Lampac address (watched sync)' },
+        online_mod_lampac_server_descr: { ru: 'Подключает timecode.js с вашего Lampac: «просмотрено» общее на всех устройствах. Пусто — ничего не грузится. Действует после перезапуска Lampa. Lampa в браузере по https не загрузит http-адрес', en: 'Loads timecode.js from your Lampac: "watched" shared on all devices. Empty: nothing is loaded. Takes effect after restarting Lampa. Lampa in a browser over https cannot load an http address' },
         online_mod_nolink: {
           ru: 'Не удалось извлечь ссылку',
           uk: 'Неможливо отримати посилання',
@@ -19951,7 +19977,7 @@
         }
       };
       Lampa.Manifest.plugins = manifest;
-      var button = "<div class=\"full-start__button selector view--online_mod\" data-subtitle=\"online_mod " + mod_version + "\">\n        <svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:svgjs=\"http://svgjs.com/svgjs\" version=\"1.1\" width=\"512\" height=\"512\" x=\"0\" y=\"0\" viewBox=\"0 0 244 260\" style=\"enable-background:new 0 0 512 512\" xml:space=\"preserve\" class=\"\">\n        <g xmlns=\"http://www.w3.org/2000/svg\">\n            <path d=\"M242,88v170H10V88h41l-38,38h37.1l38-38h38.4l-38,38h38.4l38-38h38.3l-38,38H204L242,88L242,88z M228.9,2l8,37.7l0,0 L191.2,10L228.9,2z M160.6,56l-45.8-29.7l38-8.1l45.8,29.7L160.6,56z M84.5,72.1L38.8,42.4l38-8.1l45.8,29.7L84.5,72.1z M10,88 L2,50.2L47.8,80L10,88z\" fill=\"currentColor\"/>\n        </g></svg>\n\n        <span>Смотреть онлайн</span>\n        </div>";
+      var button = "<div class=\"full-start__button selector view--online_mod\" data-subtitle=\"online_mod " + mod_version + "\">\n        <svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:svgjs=\"http://svgjs.com/svgjs\" version=\"1.1\" width=\"512\" height=\"512\" x=\"0\" y=\"0\" viewBox=\"0 0 244 260\" style=\"enable-background:new 0 0 512 512\" xml:space=\"preserve\" class=\"\">\n        <g xmlns=\"http://www.w3.org/2000/svg\">\n            <path d=\"M242,88v170H10V88h41l-38,38h37.1l38-38h38.4l-38,38h38.4l38-38h38.3l-38,38H204L242,88L242,88z M228.9,2l8,37.7l0,0 L191.2,10L228.9,2z M160.6,56l-45.8-29.7l38-8.1l45.8,29.7L160.6,56z M84.5,72.1L38.8,42.4l38-8.1l45.8,29.7L84.5,72.1z M10,88 L2,50.2L47.8,80L10,88z\" fill=\"currentColor\"/>\n        </g></svg>\n\n        <span>" + Lampa.Lang.translate('online_mod_watch') + "</span>\n        </div>";
       Lampa.Listener.follow('full', function (e) {
         if (e.type == 'complite') {
           var btn = $(Lampa.Lang.translate(button));
@@ -20123,8 +20149,8 @@
             "default": ''
           },
           field: {
-            name: 'Адрес Lampac (синхронизация просмотров)',
-            description: 'Подключает timecode.js с вашего Lampac: «просмотрено» общее на всех устройствах. Пусто — ничего не грузится. Действует после перезапуска Lampa. Lampa в браузере по https не загрузит http-адрес'
+            name: Lampa.Lang.translate('online_mod_lampac_server'),
+            description: Lampa.Lang.translate('online_mod_lampac_server_descr')
           }
         });
       }
