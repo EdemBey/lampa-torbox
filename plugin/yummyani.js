@@ -154,17 +154,18 @@
   }
 
   // yani_url -> TMDB match (0 = searched, not found), kept across sessions.
-  function remember(url, hit) {
+  // Re-reads the store before writing: parallel enrich calls would otherwise drop each other's hits.
+  function remember(entries) {
     var map = Lampa.Storage.get(STORE, '{}');
     if (Object.keys(map).length > 3000) map = {};
-    map[url] = hit || 0;
+    for (var url in entries) map[url] = entries[url] || 0;
     Lampa.Storage.set(STORE, map);
   }
 
   // Gives yani cards Lampa's (TMDB) poster and backdrop; unmatched cards keep the yani poster.
   function enrich(cards, done) {
     var map = Lampa.Storage.get(STORE, '{}');
-    if (Object.keys(map).length > 3000) map = {};
+    var found = {};
     var dirty = false;
     var left = cards.length;
     if (!left) return done(cards);
@@ -177,14 +178,14 @@
           card.backdrop_path = hit.backdrop_path;
         }
         if (--left === 0) {
-          if (dirty) Lampa.Storage.set(STORE, map);
+          if (dirty) remember(found);
           done(cards);
         }
       };
       if (map[card.yani_url] !== undefined) return apply(map[card.yani_url]);
       findTmdb(card, function (hit) {
         if (hit !== undefined) {
-          map[card.yani_url] = hit || 0;
+          found[card.yani_url] = hit;
           dirty = true;
         }
         apply(hit);
@@ -556,7 +557,11 @@
       };
       var search = function (card, full) {
         findTmdb(full, function (found) {
-          if (found !== undefined) remember(card.yani_url, found);
+          if (found !== undefined) {
+            var entry = {};
+            entry[card.yani_url] = found;
+            remember(entry);
+          }
           open(card, found);
         });
       };
