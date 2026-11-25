@@ -45,6 +45,7 @@
 //25.11.2026 - One "watched" across balancers and TorBox: TMDB season/episode key with Timeline.link (TimeCode server sync); unproven numbering keeps its own key
 //25.11.2026 - Watched: single-TMDB-season anime use Lampa's own air-date split (as its episode list); old marks get the card link once (TimeCode only, not CUB)
 //25.11.2026 - Watched: unproven anime seasons are cross-checked with YummyAnime and TMDB's "Seasons" group, else asked once before playback (Kodik entries: from the item menu); answers sync through Lampac Storage
+//25.11.2026 - Watched: KinoPub joins the shared key; AniLibria, AniLiberty and AnimeLib releases are matched from the item menu
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -824,6 +825,8 @@
         var split = this.splitOf(card);
         // without original_title the key would be shared by every show
         if (!card || !card.original_title || !season || isNaN(episode)) return '';
+        // a movie card (a source listing its several videos as season 1) has no episodes of Lampa's
+        if (!card.original_name && !card.number_of_seasons && !(card.seasons && card.seasons.length)) return '';
         // Lampa splits a single TMDB season on its card; until that split is known, keep the source's own key
         if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !split) return '';
         // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
@@ -6308,6 +6311,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -10814,6 +10818,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -11498,6 +11503,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -11966,6 +11972,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -12443,6 +12450,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -12786,6 +12794,8 @@
                 info: '',
                 season: 1,
                 episode: _episode.episode,
+                // a release has its own numbering (season 2 is its own "season 1"): matched from the menu only
+                watch_info: { src: 'anilibria:' + (extract.id || extract.code || extract.en_title || extract.ru_title || '') },
                 media: _items
               });
             }
@@ -12829,7 +12839,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title + element.title);
           element.timeline = view;
@@ -12881,6 +12891,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -13215,6 +13226,7 @@
                 info: '',
                 season: 1,
                 episode: episode.ordinal,
+                watch_info: { src: 'anilibria2:' + (extract.id || extract.alias || extract.en_title || extract.ru_title || '') },
                 media: items
               });
             });
@@ -13258,7 +13270,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title + element.title);
           element.timeline = view;
@@ -13312,6 +13324,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -13758,6 +13771,7 @@
                 info: ' / ' + voice_name + ' / ' + server.name,
                 season: 1,
                 episode: episode.item_number,
+                watch_info: { src: 'animelib:' + (extract.id || extract.slug_url || extract.slug || extract.orig_title || extract.en_title || '') },
                 media: {
                   episode: episode,
                   player: player,
@@ -13849,7 +13863,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.orig_title + element.title);
           element.timeline = view;
@@ -16788,7 +16802,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.orig_title + element.title);
           element.timeline = view;
@@ -16842,6 +16856,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function file(call) {
@@ -17770,6 +17785,7 @@
           component.contextmenu({
             item: item,
             view: view,
+            element: element,
             viewed: viewed,
             hash_file: hash_file,
             file: function (call) {

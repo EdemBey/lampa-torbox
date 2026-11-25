@@ -269,8 +269,15 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
 }
 // every TMDB-like balancer and Kodik go through the shared key; the six with their own keys do not yet
 {
-  assert.strictEqual(src.split('component.watchView(element, hash, items)').length - 1, 17);
-  assert.strictEqual(src.split('var view = Lampa.Timeline.view(hash);').length - 1, 6);
+  // redheadsound (movies) and Naruto Based (its own tracking keys) keep their own keys
+  assert.strictEqual(src.split('component.watchView(element, hash, items)').length - 1, 21);
+  assert.strictEqual(src.split('var view = Lampa.Timeline.view(hash);').length - 1, 2);
+  // release-numbered balancers are never placed by the TMDB rules: their own release key
+  ['anilibria:', 'anilibria2:', 'animelib:'].forEach((s) => assert.ok(src.indexOf("watch_info: { src: '" + s + "'") > 0, s));
+  // every item menu gets its element: "Match episodes…" and the redraw after an answer look it up
+  const menus = src.split('component.contextmenu({').slice(1);
+  assert.ok(menus.length >= 21);
+  menus.forEach((rest, i) => assert.ok(rest.slice(0, rest.indexOf('});')).indexOf('element: element') >= 0, 'contextmenu #' + (i + 1) + ' without element'));
 }
 // place: split
 {
