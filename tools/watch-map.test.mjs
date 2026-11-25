@@ -831,6 +831,8 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.strictEqual(watch.pinRow({ season: 3, episode: 1 }, rows), null);
   // an episode whose place is not proven is found by its own numbers; a proven one wins
   assert.strictEqual(watch.pinRow({ season: 3, episode: 1 }, rows.concat([{ item: 'd', element: { season: '3', episode: '1' } }])), 'd');
+  // a source numbering by its own releases (Kodik's parts: an OVA as season 2) is not taken by its numbers
+  assert.strictEqual(watch.pinRow({ season: 3, episode: 1 }, rows.concat([{ item: 'k', element: { season: '3', episode: '1', watch_info: { src: 'shiki:5' } } }])), null);
   assert.strictEqual(watch.pinRow({ season: 2, episode: 9 }, [{ item: 'e', element: { season: '2', episode: '9' } }].concat(rows)), 'c');
   assert.strictEqual(watch.pinSeason({ season: 2, episode: 9 }, ['Сезон 1', 'Сезон 2']), 1);
   assert.strictEqual(watch.pinSeason({ season: 5, episode: 1 }, ['Сезон 1', 'Сезон 2']), -1);

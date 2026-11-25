@@ -753,7 +753,7 @@
         Lampa.Storage.set(this.store, all);
         this.cached = null;
         // «По сериям» rows carry the places of the old answers
-        if (typeof episodeVariants != 'undefined') episodeVariants.cache = {};
+        if (typeof episodeVariants != 'undefined') episodeVariants.clear();
         this.sync();
       },
       title: function title(p) {
@@ -884,8 +884,9 @@
           var el = rows[i].element || {};
           var w = el.watch_place;
           if (w && w.season == pin.season && w.episode == pin.episode) return rows[i].item;
-          // an episode whose place is not proven: its own numbers only move the focus
-          if (!w && !raw && el.season == pin.season && el.episode == pin.episode) raw = rows[i].item;
+          // an episode whose place is not proven: its own numbers only move the focus; a source numbering by its own
+          // releases (Kodik's parts with an OVA as a season, AniLibria) is never taken by its numbers
+          if (!w && !raw && el.season == pin.season && el.episode == pin.episode && !(el.watch_info && el.watch_info.src)) raw = rows[i].item;
         }
         return raw;
       },
@@ -3834,12 +3835,10 @@
         parts = null;
         var list = rezkaParts(str);
         var own = rezkaPageIds(str);
+        // every part is opened and matched by its IMDb/Kinopoisk ids (one request each, kept for the session);
         // shortcut: a list longer than eight (a big franchise of films) is not merged; raise it if a long anime shows up
         if (!extract.is_series || extract.season.length !== 1 || list.length < 2 || list.length > 8 || !own.imdb && !own.kp) return done();
-        // the parts of one Kinopoisk entry share its rating; another rating is another title (a film), not opened
-        var cur = list.filter(function (p) {
-          return p.current;
-        })[0];
+
         var keep = [];
         var i = 0;
         // one page at a time; a part that cannot be read (an error, a bot check) leaves the pages as they are,
@@ -3865,8 +3864,10 @@
             return next();
           }
           if (!p.link) return done();
-          // the list's ratings are snapshots of one entry taken at different times: a small drift is the same title
-          if (cur && cur.rating && p.rating && Math.abs(p.rating - cur.rating) > 0.1) return next();
+          // a page already known to be another title is not opened again
+          var known = rezkaIds[p.link];
+          if (known && !(own.imdb && known.imdb === own.imdb || own.kp && known.kp === own.kp)) return next();
+
           var net = new Lampa.Reguest();
           loaders.push(net);
           net.timeout(5000);
@@ -20955,11 +20956,14 @@
         // a season the source numbers otherwise (Kodik's parts) cannot be told: what was walked stands
         return i < 0 || !!entry.done[i];
       };
-      var hit = episodeVariants.cache[key];
+      var hit = episodeVariants.cache[key] || (episodeVariants.cache[key] = episodeVariants.load(key));
+      if (!hit) delete episodeVariants.cache[key];
       if (hit && covers(hit, pin)) return done(hit.res, true);
       if (episodeVariants.pending[key]) return episodeVariants.pending[key].push({ pin: pin, done: done });
       var waiting = episodeVariants.pending[key] = [];
       var rows = [];
+      // an anime probed before the other sources' season lists came is placed without them, even if they come meanwhile
+      var altLate = animeSkip.isAnime(card) && !watch.altOf(card);
       var labels = null;
       var batch = [];
       var walked = {};
@@ -20983,8 +20987,15 @@
         clearTimeout(stepTimer);
         var res = { status: status, rows: rows, similars: extra && extra.similars || null, message: extra && extra.message || '' };
         var entry = { res: res, labels: labels && labels.season ? labels.season.slice() : [], done: walked, all: status === 'none' || status === 'ok' && !cut };
-        // a list placed before Lampa split a single TMDB season keeps TMDB's numbers: not kept
-        if ((status === 'ok' || status === 'none') && !(Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card))) episodeVariants.cache[key] = entry;
+        // a list placed before Lampa split a single TMDB season keeps TMDB's numbers, an anime's before the other
+        // sources' season lists came (watch.alt) is not placed yet: neither is kept
+        var unsure = Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) || altLate;
+        if ((status === 'ok' || status === 'none') && !unsure) {
+          episodeVariants.cache[key] = entry;
+          try {
+            episodeVariants.save(key, entry);
+          } catch (e) {}
+        }
         delete episodeVariants.pending[key];
         try {
           probe.destroy();
@@ -21145,6 +21156,76 @@
     }
     episodeVariants.cache = {};
     episodeVariants.pending = {};
+    // «По сериям» answers kept between sessions (6 h), in the few fields the screen needs: the voice, the quality,
+    // the source's own numbers, the place on Lampa's numbering, whether the source numbers by its own releases.
+    // Read from Lampa's storage once per session, then kept in memory.
+    episodeVariants.store = 'online_mod_variants';
+    episodeVariants.all = function () {
+      if (!episodeVariants.mem) {
+        var all = Lampa.Storage.get(episodeVariants.store, '{}');
+        episodeVariants.mem = all && typeof all == 'object' ? all : {};
+      }
+      return episodeVariants.mem;
+    };
+    episodeVariants.load = function (key) {
+      var s = episodeVariants.all()[key];
+      if (!s || typeof s != 'object' || !s.r || Date.now() - (s.t || 0) > 6 * 3600 * 1000) return null;
+      var rows = s.r.map(function (r) {
+        return {
+          season: r[0],
+          voice: s.v[r[1]],
+          element: { season: r[2], episode: r[3], quality: s.q[r[4]] || '', watch_place: r[5] ? { season: r[5], episode: r[6] } : null, watch_info: r[7] ? { src: 1 } : null }
+        };
+      });
+      return { res: { status: s.s, rows: rows, similars: null, message: '' }, labels: s.l || [], done: s.d || {}, all: !!s.a };
+    };
+    episodeVariants.save = function (key, entry) {
+      var voices = [];
+      var quals = [];
+      var index = function index(list, x) {
+        var i = list.indexOf(x);
+        if (i < 0) {
+          list.push(x);
+          i = list.length - 1;
+        }
+        return i;
+      };
+      var rows = entry.res.rows.map(function (row) {
+        var el = row.element || {};
+        var w = el.watch_place;
+        return [row.season, index(voices, row.voice), el.season, el.episode, index(quals, el.quality || ''), w ? w.season : 0, w ? w.episode : 0, el.watch_info && el.watch_info.src ? 1 : 0];
+      });
+      var one = { t: Date.now(), s: entry.res.status, l: entry.labels, d: entry.done, a: entry.all, v: voices, q: quals, r: rows };
+      var size = JSON.stringify(one).length;
+      var all = episodeVariants.all();
+      delete all[key];
+      // a long anime of a source with many voices stays out of the store (the memory copy still serves this session)
+      if (size > 100000) return Lampa.Storage.set(episodeVariants.store, all);
+      all[key] = one;
+      // shortcut: about 1 MB in all (a TV's storage is small and shared with Lampa's own); the oldest go first
+      var keys = Object.keys(all);
+      var total = JSON.stringify(all).length;
+      while (keys.length > 1 && total > 1000000) {
+        var old = keys.shift();
+        total -= JSON.stringify(all[old]).length;
+        delete all[old];
+      }
+      Lampa.Storage.set(episodeVariants.store, all);
+    };
+    episodeVariants.forget = function (key) {
+      delete episodeVariants.cache[key];
+      var all = episodeVariants.all();
+      if (all[key]) {
+        delete all[key];
+        Lampa.Storage.set(episodeVariants.store, all);
+      }
+    };
+    episodeVariants.clear = function () {
+      episodeVariants.cache = {};
+      episodeVariants.mem = {};
+      Lampa.Storage.set(episodeVariants.store, {});
+    };
+
 
     // "По сериям", one episode: every source as a row with its state (loading, its voices for this episode, ✕, !),
     // filled in as the sources answer. A voice plays the episode; a source row opens the source on it.
@@ -21230,7 +21311,7 @@
       // forget what this source found (and the title picked for it), then look again
       var again = function again(b, title) {
         if (title) watch.similarClear(card, b.name);
-        delete episodeVariants.cache[b.name + ':' + watch.id(card)];
+        episodeVariants.forget(b.name + ':' + watch.id(card));
         ask(b);
       };
       var actions = function actions(b) {
