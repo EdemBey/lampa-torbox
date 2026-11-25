@@ -104,7 +104,20 @@ docker compose logs tunnel | grep trycloudflare   # публичный https-а�
 Обновление после `git pull`:
 
 ```
-docker compose up -d --build alloha
+cd server
+docker compose up -d --build --no-deps alloha
 ```
 
 Пересобирайте только `alloha`. Если перезапустится `tunnel`, адрес trycloudflare сменится и его придётся заново вписать в Lampa.
+
+Если контейнеры впервые запускали из папки с другим именем (другой compose-проект), команда упадёт с ошибкой «container name "/alloha" is already in use». Тогда передайте имя того проекта через `-p`. Узнать его можно так:
+
+```
+docker inspect alloha --format '{{ index .Config.Labels "com.docker.compose.project" }}'
+```
+
+Затем обновите (тоже из папки `server/`):
+
+```
+docker compose -p <имя> up -d --build --no-deps alloha
+```
