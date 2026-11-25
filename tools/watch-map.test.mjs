@@ -769,6 +769,46 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   Object.assign(Lampa, own);
 }
 
+// Kodik entries placed by YummyAnime: the TV part with the entry's shikimori id
+{
+  const alt = { y: [24, 13, 13, 13], ys: ['100', '200', '300', '400'] };
+  const k = (extra) => Object.assign({ src: 'shiki:200', balancer: 'kodik', season: 1, episode: 5, min: 1, max: 13, seasons: 1 }, extra);
+  // Lampa's split of a single TMDB season
+  assert.deepStrictEqual(watch.place({}, { 1: 24, 2: 13, 3: 13, 4: 13 }, true, k(), alt), { season: 2, episode: 5 });
+  // a single TMDB season Lampa does not split: the part's place inside it needs TMDB's "Seasons" group to confirm the order
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, k(), alt), null);
+  assert.deepStrictEqual(watch.place({}, { 1: 63 }, true, k(), { y: alt.y, ys: alt.ys, g: [24, 13, 13, 13] }), { season: 1, episode: 29 });
+  // a Kodik entry with a season of its own other than 1
+  assert.strictEqual(watch.place({}, { 1: 24, 2: 13, 3: 13, 4: 13 }, true, k({ season: 2 }), alt), null);
+  // YummyAnime's watch order puts a prequel first that aired last: its parts do not meet TMDB's season ends
+  assert.strictEqual(watch.place({}, { 1: 24, 2: 13, 3: 12 }, true, k({ src: 'shiki:2', max: 24 }), { y: [12, 24, 13], ys: ['1', '2', '3'] }), null);
+  // the entry lists other episodes than its part
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, k({ max: 12 }), alt), null);
+  // an entry YummyAnime does not list as a TV part
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, k({ src: 'shiki:999' }), alt), null);
+  // TMDB's "Seasons" group counts other parts
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, k(), { y: alt.y, ys: alt.ys, g: [24, 26, 13] }), null);
+  // a saved answer still wins
+  assert.strictEqual(watch.place({ 'shiki:200': 0 }, { 1: 63 }, true, k(), alt), false);
+  // the YummyAnime fetch keeps the parts' shikimori ids
+  for (const s in store) delete store[s];
+  watch.alts = null;
+  const ownGet = animeSkip.get, ownG = watch.groups;
+  watch.groups = (c, call) => call(0);
+  const eps = { '/anime/p1?need_videos=false': [24, 100], '/anime/p2?need_videos=false': [13, 200] };
+  animeSkip.get = (path, ok, fail) => {
+    if (path === '/anime?limit=1&kp_ids=88') return ok([{ anime_id: 1, anime_url: 'p1' }]);
+    if (!(path in eps)) return fail();
+    ok({ episodes: { count: eps[path][0], aired: eps[path][0] }, remote_ids: { shikimori_id: eps[path][1] }, viewing_order: [
+      { anime_id: 1, anime_url: 'p1', type: { alias: 'tv' } }, { anime_id: 2, anime_url: 'p2', type: { alias: 'tv' } }] });
+  };
+  const card = { id: 97, original_name: 'S', original_title: 'S', kinopoisk_id: 88, seasons: [{ season_number: 1, episode_count: 37 }] };
+  watch.alt(card);
+  assert.deepStrictEqual(watch.altOf(card).y, [24, 13]);
+  assert.deepStrictEqual(watch.altOf(card).ys, ['100', '200']);
+  animeSkip.get = ownGet; watch.groups = ownG;
+}
+
 // the menu offers the reset only for a title that has answers
 {
   for (const k in store) delete store[k];

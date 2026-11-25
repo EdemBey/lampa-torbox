@@ -46,6 +46,7 @@
 //25.11.2026 - Watched: single-TMDB-season anime use Lampa's own air-date split (as its episode list); old marks get the card link once (TimeCode only, not CUB)
 //25.11.2026 - Watched: unproven anime seasons are cross-checked with YummyAnime and TMDB's "Seasons" group, else asked once before playback (Kodik entries: from the item menu); answers sync through Lampac Storage
 //25.11.2026 - Watched: KinoPub joins the shared key; AniLibria, AniLiberty and AnimeLib releases are matched from the item menu
+//25.11.2026 - Watched: Kodik entries are placed by YummyAnime (the franchise TV part with the entry's shikimori id)
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -517,7 +518,8 @@
       // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
       place: function place(map, counts, anime, q, alt) {
         var r = this.rule(map, counts, anime, q);
-        return r === null && alt && !q.src ? this.agree(alt, counts, q) : r;
+        if (r !== null || !alt) return r;
+        return q.src ? this.kodik(alt, counts, q) : this.agree(alt, counts, q);
       },
       // A source's season list proves this season when the balancer has as many seasons, lists exactly this
       // season's episodes, and the list meets TMDB's seasons at an end (stacked). Every list that fits must
@@ -579,7 +581,9 @@
             cb();
           });
         };
-        this.yummy(card, function (parts) {
+        this.yummy(card, function (parts, ids) {
+          // the TV parts' shikimori ids place Kodik's entries
+          if (!('ys' in out)) out.ys = parts && ids || have && have.ys || 0;
           settle('y', parts);
         });
         this.groups(card, function (parts) {
@@ -660,15 +664,17 @@
             });
             if (!tv.length) tv = [list[0]];
             var parts = [];
+            var ids = [];
             var left = tv.length;
             tv.forEach(function (v, i) {
               one(v, function (part) {
                 var eps = part.episodes || {};
                 // an announced part (aired: 0) is not a season yet
                 parts[i] = eps.aired === 0 ? 0 : eps.aired || eps.count || 0;
+                ids[i] = String(part.remote_ids && (part.remote_ids.shikimori_id || part.remote_ids.myanimelist_id) || '');
                 if (--left) return;
                 while (parts.length && !parts[parts.length - 1]) parts.pop();
-                call(parts.length && parts.every(Boolean) ? parts : 0);
+                call(parts.length && parts.every(Boolean) ? parts : 0, ids.slice(0, parts.length));
               });
             });
           });
@@ -809,6 +815,31 @@
           return k !== 't' && k !== 'c';
         });
       },
+      // A Kodik entry (one shikimori id each) is the franchise's TV part with that id in YummyAnime's viewing
+      // order: proven when it lists exactly that part and the parts meet Lampa's seasons (stacked); TMDB's
+      // "Seasons" group, when known, must count the same parts
+      kodik: function kodik(alt, counts, q) {
+        var m = /^shiki:(\d+)$/.exec(q.src || '');
+        var k = m && alt.ys ? alt.ys.indexOf(m[1]) : -1;
+        // an entry's own seasons other than 1 are not told apart here
+        if (k < 0 || q.part || q.season != 1 || !alt.y || q.min !== 1 || q.max !== alt.y[k]) return null;
+        if (alt.g && alt.g.join() !== alt.y.join()) return null;
+        var bounds = [0];
+        alt.y.forEach(function (c) {
+          bounds.push(bounds[bounds.length - 1] + c);
+        });
+        // YummyAnime's viewing order is a watch order: without TMDB's group to confirm it, the part must sit
+        // exactly between two of Lampa's season ends
+        var ends = { 0: true };
+        for (var s = 1, sum = 0; counts[s]; s++) {
+          sum += counts[s];
+          ends[sum] = true;
+        }
+        if (!alt.g && !(ends[bounds[k]] && ends[bounds[k + 1]])) return null;
+        var r = this.stacked({ index: k, bounds: bounds, first: 1 }, q.episode, counts);
+        // only the user settles "never link"
+        return r === false ? null : r;
+      },
       id: function id(card) {
         return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
       },
@@ -864,7 +895,7 @@
         var anime = animeSkip.isAnime(card, skipOf(element));
         var place = this.place(this.cachedMap, this.cachedCounts, anime, q, this.cachedAlt);
         // what the rules cannot prove another source may: fetched once, used when the list is placed again
-        if (place === null && anime && !q.src && items) this.alt(card);
+        if (place === null && anime && (!q.src || /^shiki:/.test(q.src)) && items) this.alt(card);
         // read by the match menu (phase 2c)
         element.watch_q = q;
         // one file without its list (TorBox) proves no run-on numbering: only its own numbers
