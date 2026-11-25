@@ -874,6 +874,11 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.deepStrictEqual(watch.agree({ y: [24, 13, 13] }, { 1: 24, 2: 13, 3: 13 }, { season: 2, seasons: 3, min: 1, max: 13, episode: 1 }), { season: 2, episode: 1 });
   // one part more or less proves nothing
   assert.strictEqual(watch.agree({ y: [24, 13, 13] }, { 1: 24, 2: 13, 3: 13 }, { season: 2, seasons: 4, min: 1, max: 13, episode: 1 }), null);
+  // Kodik's merged franchise: TV-2 after TV-1 (the ONA between them is no TV part) lands on Lampa's season 2
+  assert.deepStrictEqual(watch.stacked({ index: 1, bounds: [0, 24, 37, 50], first: 1 }, 1, { 1: 24, 2: 13, 3: 13, 4: 13 }), { season: 2, episode: 1 });
+  // a part that is not TV is never linked; YummyAnime's parts not known yet: pending
+  assert.strictEqual(watch.stacked({ index: -1, bounds: [0], first: 0 }, 1, { 1: 24, 2: 13 }), false);
+  assert.strictEqual(watch.stacked({ index: -2, bounds: [0], first: 0 }, 1, { 1: 24, 2: 13 }), null);
   assert.strictEqual(watch.similarKey({ title: 'Y', year: 2021 }), 'Y/2021');
   assert.strictEqual(watch.similarKey(null), '');
   Lampa.Lang = ownLang;

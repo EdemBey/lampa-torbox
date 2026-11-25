@@ -517,6 +517,7 @@
       // Kodik franchise part, placed by the episodes of the TV parts before it. Proven when the franchise and
       // TMDB count the same at some end after the part, or (first TMDB season of the part only) at its start.
       stacked: function stacked(part, episode, counts) {
+        if (part.index === -2) return null;
         if (part.index < 0 || episode < 1) return false;
         var from = part.bounds[part.index];
         var ends = { 0: true };
@@ -596,7 +597,9 @@
         var kp = id && (card.kinopoisk_id || card.kp_id) || 0;
         var have = id && this.altOf(card);
         // shortcut: refetched after 12 h (a running season grows), or once the Kinopoisk id turns up
-        if (!id || have && Date.now() - have.t < 43200000 && (have.k || !kp)) return call && call();
+        // a card whose YummyAnime parts were not found yet but now can be (its viewing order came): asked again after 10 min
+        var urls = card && card.yani_order_urls && card.yani_order_urls.length;
+        if (!id || have && Date.now() - have.t < 43200000 && (have.k || !kp) && (have.y || kp || !urls || Date.now() - have.t < 600000)) return call && call();
         if (this.waits[id]) return call && this.waits[id].push(call);
         var waiting = this.waits[id] = call ? [call] : [];
         var out = { t: Date.now(), k: kp };
@@ -611,6 +614,9 @@
           // shortcut: keeps the 200 newest cards, like the splits
           if (ids.length > 200) delete self.alts[ids[0]];
           Lampa.Storage.set('online_mod_watch_alt', self.alts);
+          // «По сериям» rows of this card were placed without these lists (a refetch that brought the same keeps them)
+          var same = have && JSON.stringify([out.y, out.ys, out.g]) === JSON.stringify([have.y, have.ys, have.g]);
+          if (!same && typeof episodeVariants != 'undefined') episodeVariants.forgetCard(id);
           delete self.waits[id];
           waiting.forEach(function (cb) {
             cb();
@@ -690,28 +696,39 @@
         var one = function one(v, ok) {
           animeSkip.get('/anime/' + (v.anime_url || v.anime_id) + '?need_videos=false', ok, fail);
         };
-        if (!kp) return fail();
+        var walk = function walk(first, full) {
+          var tv = (full.viewing_order || []).filter(function (v) {
+            return v.type && v.type.alias == 'tv';
+          });
+          if (!tv.length) tv = [first];
+          var parts = [];
+          var ids = [];
+          var left = tv.length;
+          tv.forEach(function (v, i) {
+            one(v, function (part) {
+              var eps = part.episodes || {};
+              // an announced part (aired: 0) is not a season yet
+              parts[i] = eps.aired === 0 ? 0 : eps.aired || eps.count || 0;
+              ids[i] = String(part.remote_ids && (part.remote_ids.shikimori_id || part.remote_ids.myanimelist_id) || '');
+              if (--left) return;
+              while (parts.length && !parts[parts.length - 1]) parts.pop();
+              call(parts.length && parts.every(Boolean) ? parts : 0, ids.slice(0, parts.length));
+            });
+          });
+        };
+        // without a Kinopoisk id: the YummyAnime page the card was matched to (its viewing order) tells the same
+        var url = card.yani_order_urls && card.yani_order_urls[0];
+        if (!kp) {
+          if (!url) return fail();
+          var page = { anime_url: url };
+          return one(page, function (full) {
+            walk(page, full);
+          });
+        }
         animeSkip.get('/anime?limit=1&kp_ids=' + kp, function (list) {
           if (!list[0]) return fail();
           one(list[0], function (full) {
-            var tv = (full.viewing_order || []).filter(function (v) {
-              return v.type && v.type.alias == 'tv';
-            });
-            if (!tv.length) tv = [list[0]];
-            var parts = [];
-            var ids = [];
-            var left = tv.length;
-            tv.forEach(function (v, i) {
-              one(v, function (part) {
-                var eps = part.episodes || {};
-                // an announced part (aired: 0) is not a season yet
-                parts[i] = eps.aired === 0 ? 0 : eps.aired || eps.count || 0;
-                ids[i] = String(part.remote_ids && (part.remote_ids.shikimori_id || part.remote_ids.myanimelist_id) || '');
-                if (--left) return;
-                while (parts.length && !parts[parts.length - 1]) parts.pop();
-                call(parts.length && parts.every(Boolean) ? parts : 0, ids.slice(0, parts.length));
-              });
-            });
+            walk(list[0], full);
           });
         }, fail);
       },
@@ -990,7 +1007,7 @@
         var info = element.watch_info || {};
         var q = {
           src: info.src || '',
-          part: info.part,
+          part: typeof info.part == 'function' ? info.part() : info.part,
           balancer: balancer,
           season: season,
           episode: episode,
@@ -15010,20 +15027,30 @@
        */
 
 
-      // For watch.stacked: where a merged season sits among the franchise's TV parts
-      function watchPart(season_id) {
+      // For watch.stacked: where a merged season sits among the franchise's TV parts. Which parts are TV is told by
+      // YummyAnime's TV parts (alt.ys); without them an ONA or a special (Chibi Revengers) would count as one
+      function watchPart(season_id, ex) {
+        ex = ex || extract;
+        var alt = watch.altOf(object.movie) || {};
+        var tv = alt.ys || 0;
         var bounds = [0];
         var index = -1;
         var first = 0;
-        extract.seasons.forEach(function (season) {
+        // not known yet (-2): pending, asked again once YummyAnime's parts come; a part that is not TV (-1): never linked
+        if (!tv || !ex) return { index: -2, bounds: bounds, first: first };
+        ex.seasons.forEach(function (season) {
           if (season.single) return;
           var seen = {};
-          extract.items.forEach(function (c) {
+          var shiki = '';
+          ex.items.forEach(function (c) {
             var s = c.seasons && c.seasons[season.id];
-            if (s && s.episodes) Object.keys(s.episodes).forEach(function (e) {
+            if (!s) return;
+            if (!shiki && c.shikimori_id) shiki = String(c.shikimori_id);
+            if (s.episodes) Object.keys(s.episodes).forEach(function (e) {
               if (e >= 1) seen[e] = true;
             });
           });
+          if (!shiki || tv.indexOf(shiki) < 0) return;
           var keys = Object.keys(seen).map(Number);
           if (season.id == season_id) {
             index = bounds.length - 1;
@@ -15031,9 +15058,10 @@
           }
           bounds.push(bounds[bounds.length - 1] + keys.length);
         });
-        // shortcut: every multi-episode part counts as a TV part, a mismatch only fails the proof; use anime_kind if Kodik rows carry it
         return { index: index, bounds: bounds, first: first };
       }
+
+
 
 
       function filtred() {
@@ -15050,7 +15078,14 @@
           if (translation) {
             var episodes = translation.seasons[season_id] && translation.seasons[season_id].episodes || {};
 
-            var part = kodik_merged ? watchPart(season_id) : null;
+            // the list the rows came from, and the place kept until YummyAnime's parts change
+            var ex = extract;
+            var memo = null;
+            var part = kodik_merged ? function () {
+              var alt = watch.altOf(object.movie);
+              if (!memo || memo.alt !== alt) memo = { alt: alt, part: watchPart(season_id, ex) };
+              return memo.part;
+            } : null;
             for (var episode_id in episodes) {
               var link = episodes[episode_id];
               filtred.push({
@@ -21219,6 +21254,19 @@
         delete all[key];
         Lampa.Storage.set(episodeVariants.store, all);
       }
+    };
+    episodeVariants.forgetCard = function (id) {
+      var all = episodeVariants.all();
+      var hit = false;
+      Object.keys(episodeVariants.cache).concat(Object.keys(all)).forEach(function (key) {
+        if (key.slice(-id.length - 1) !== ':' + id) return;
+        delete episodeVariants.cache[key];
+        if (all[key]) {
+          delete all[key];
+          hit = true;
+        }
+      });
+      if (hit) Lampa.Storage.set(episodeVariants.store, all);
     };
     episodeVariants.clear = function () {
       episodeVariants.cache = {};
