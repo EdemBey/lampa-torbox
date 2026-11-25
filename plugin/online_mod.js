@@ -21447,7 +21447,6 @@
             return;
           }
           started = true;
-          Lampa.Loading.stop();
         };
         onDestroy = function onDestroy() {
           if (listener) {
@@ -21460,16 +21459,13 @@
           listener.follow('start', onStart);
           listener.follow('destroy', onDestroy);
         }
-        // a stream that never comes (the source showed its error): the loader goes, the source with it
-        timer = setTimeout(function () {
-          Lampa.Loading.stop();
-        }, 15000);
         // safety: if the player never started within 60 s, tear down
         setTimeout(function () {
           if (!started) onDestroy();
         }, 60000);
         setTimeout(function () {
           if (cancelled) return;
+          Lampa.Loading.stop(); // Lampa's player takes the remote; stopping the loader after it would hand the remote back to the screen.
           row.trigger('hover:enter');
         }, 0);
       };
