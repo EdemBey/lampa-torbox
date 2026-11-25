@@ -848,6 +848,19 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   Lampa.Lang = ownLang;
 }
 
+// a forced prefetch on a fresh start (the card page opened first): the cache is loaded before the callback writes
+{
+  for (const k in store) delete store[k];
+  watch.splits = null;
+  const ownApi = Lampa.Api, ownSplit = Lampa.Utils.splitEpisodesIntoSeasons;
+  Lampa.Api = { seasons: (c, list, cb) => cb({ 1: { episodes_original: new Array(37).fill({}) } }) };
+  Lampa.Utils.splitEpisodesIntoSeasons = (eps) => ({ 1: eps.slice(0, 24), 2: eps.slice(24) });
+  const card = { id: 98, original_name: 'F', original_title: 'F', number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 37 }] };
+  watch.prefetch(card, true);
+  assert.deepStrictEqual(watch.splitOf(card), { 1: 24, 2: 13 });
+  Lampa.Api = ownApi; Lampa.Utils.splitEpisodesIntoSeasons = ownSplit;
+}
+
 // the menu offers the reset only for a title that has answers
 {
   for (const k in store) delete store[k];

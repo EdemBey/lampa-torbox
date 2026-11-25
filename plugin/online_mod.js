@@ -406,7 +406,9 @@
       prefetch: function prefetch(card, force) {
         var self = this;
         if (!card || !card.id || !card.original_name || !Lampa.Api || !Lampa.Api.seasons || !Lampa.Utils.splitEpisodesIntoSeasons) return;
-        if (Lampa.Utils.countSeasons(card) !== 1 || (!force && this.splitOf(card))) return;
+        // splitOf() also loads the cache the callback writes into, so it runs even when forced
+        var known = this.splitOf(card);
+        if (Lampa.Utils.countSeasons(card) !== 1 || !force && known) return;
         Lampa.Api.seasons(card, [1], function (v) {
           var s = v && v[1];
           var eps = s && (s.episodes_original || s.episodes);
