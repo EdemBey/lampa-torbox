@@ -924,18 +924,17 @@
           return self.pinRow(pin, by[v]);
         }).filter(Boolean);
       },
-      // the best resolution any row names (720p, 1080p, 4K); HDrezka's 1080 is really 720, so it stops at HD
+      // the best resolution any row names (720p, 1080p, 4K), capped at cap: the highest that really plays for this source (0 = no cap)
       // shortcut: a source's placeholder '360p ~ 1080p' (quality unknown) reads as FHD; give such sources '' if the badge misleads
-      qualityBadge: function qualityBadge(qualities, balancer) {
+      qualityBadge: function qualityBadge(qualities, cap) {
         var best = 0;
         (qualities || []).forEach(function (q) {
           var s = String(q || '');
           (s.match(/(\d{3,4})p/gi) || []).forEach(function (p) { best = Math.max(best, parseInt(p, 10)); });
           if (/\b4k\b/i.test(s)) best = Math.max(best, 2160);
         });
-        var badge = !best ? '' : best >= 2160 ? '4K' : best >= 1080 ? 'FHD' : best >= 720 ? 'HD' : 'SD';
-        if (balancer === 'rezka2' && (badge === '4K' || badge === 'FHD')) badge = 'HD';
-        return badge;
+        if (cap) best = Math.min(best, cap);
+        return !best ? '' : best >= 2160 ? '4K' : best >= 1080 ? 'FHD' : best >= 720 ? 'HD' : 'SD';
       },
       // a source's list of similar titles settled by the user, per card and source (kept for the next search)
       similarStore: 'online_mod_similar',
@@ -3396,6 +3395,14 @@
     // page link -> its ids, for the session (one page is opened once)
     var rezkaIds = {};
 
+    // what this account plays: items are the qualities left after the Premium stubs were dropped, offered counts them before
+    // 0 = the title has no premium tiers and nothing was dropped, so it says nothing about the account
+    function rezkaBest(items, offered) {
+      var best = items.some(function (item) { return item.quality >= 2160; }) ? 2160
+        : items.some(function (item) { return item.quality > 1080 || /ultra/i.test(item.label); }) ? 1080 : 720;
+      return best === 720 && items.length >= offered ? 0 : best;
+    }
+
     function rezka2(component, _object, config) {
       var network = new Lampa.Reguest();
       var loaders = [];
@@ -4347,6 +4354,9 @@
             var items = extractItems(video);
 
             if (items && items.length) {
+              // a title without premium tiers leaves the account's value alone
+              var best = rezkaBest(items, component.parsePlaylist(video).length);
+              if (best && best !== +Lampa.Storage.get('online_mod_rezka2_best', 0)) Lampa.Storage.set('online_mod_rezka2_best', best);
               file = items[0].file;
               quality = {};
               items.forEach(function (item) {
@@ -21569,7 +21579,9 @@
           g.head.find('.online-mod-variant__subtitle').text(L('online_mod_variants_choose'));
         } else if (!found.length) status.text('—');
         if (res.status === 'ok' && found.length) {
-          var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), b.name);
+          // before any HDrezka playback there is no saved result yet: the Premium setting decides
+          var cap = b.name === 'rezka2' ? +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720) : 0;
+          var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), cap);
           g.head.find('.online-mod-variant__subtitle').text([badge, L('online_mod_variants_voices') + ' ' + found.length].filter(Boolean).join(' · '));
         }
         var after = g.head;
