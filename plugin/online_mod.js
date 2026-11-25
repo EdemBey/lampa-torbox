@@ -534,6 +534,14 @@
           if (out && (out.season !== p.season || out.episode !== p.episode)) clash = true;
           out = out || p;
         };
+        var ends = { 0: true };
+        for (var s = 1, sum = 0; counts[s]; s++) {
+          sum += counts[s];
+          ends[sum] = true;
+        }
+        var confirmed = alt.g && alt.y && alt.g.join() === alt.y.join();
+        // the two sources count this balancer's seasons differently: nothing is proven
+        if (alt.g && alt.y && !confirmed && alt.g.length === q.seasons && alt.y.length === q.seasons) return null;
         [alt.y, alt.g].forEach(function (parts) {
           var n = parts && parts.length === q.seasons && parts[q.season - 1];
           if (!n) return;
@@ -544,6 +552,9 @@
           var from = bounds[q.season - 1];
           var run = q.min > 1;
           if (q.min !== (run ? from + 1 : 1) || q.max !== (run ? from : 0) + n) return;
+          // YummyAnime's viewing order is a watch order: a season counted from 1 needs TMDB's group to confirm it,
+          // or must sit exactly between two of Lampa's season ends (run-on numbers do not depend on the order)
+          if (parts === alt.y && !run && !confirmed && !(ends[from] && ends[from + n])) return;
           take(self.stacked({ index: q.season - 1, bounds: bounds, first: q.min }, q.episode, counts));
         });
         if (out && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season]) take({ season: q.season, episode: q.episode });

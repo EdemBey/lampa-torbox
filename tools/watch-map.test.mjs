@@ -374,7 +374,13 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const alt = { y: [24, 13, 13, 13] };
   const qq = { src: '', balancer: 'alloha', season: 2, episode: 9, min: 1, max: 13, seasons: 4 };
   const w = (extra) => Object.assign({}, qq, extra);
-  assert.deepStrictEqual(watch.place({}, { 1: 63 }, true, qq, alt), { season: 1, episode: 33 });
+  // a season counted from 1 inside one TMDB season: YummyAnime's watch order alone does not place it, TMDB's group confirms
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, qq, alt), null);
+  assert.deepStrictEqual(watch.place({}, { 1: 63 }, true, qq, { y: alt.y, g: [24, 13, 13, 13] }), { season: 1, episode: 33 });
+  // Lampa's split has the part's ends: YummyAnime alone is enough
+  assert.deepStrictEqual(watch.place({}, { 1: 24, 2: 13, 3: 13, 4: 13 }, true, w({ seasons: 4 }), { y: [24, 13, 13, 13] }), { season: 2, episode: 9 });
+  // a prequel listed first that aired last
+  assert.strictEqual(watch.place({}, { 1: 24, 2: 13, 3: 12 }, true, { src: '', balancer: 'x', season: 2, episode: 5, min: 1, max: 24, seasons: 3 }, { y: [12, 24, 13] }), null);
   assert.strictEqual(watch.place({}, { 1: 63 }, true, w({ max: 12 }), alt), null);
   assert.strictEqual(watch.place({}, { 1: 63 }, true, w({ seasons: 5 }), alt), null);
   assert.strictEqual(watch.place({}, { 1: 60 }, true, qq, alt), null);
@@ -394,13 +400,13 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const own = [watch.yummy, watch.groups];
   let calls = 0;
   watch.yummy = (c, call) => { calls++; call([24, 13, 13, 13]); };
-  watch.groups = (c, call) => { call(0); call([1]); };
+  watch.groups = (c, call) => { call([24, 13, 13, 13]); call([1]); };
   const card = { id: 60, original_name: 'T', original_title: 'T', source: 'tmdb', anime: true, number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 63 }] };
   const items = [];
   for (let i = 1; i <= 13; i++) items.push({ season: '2', episode: String(i) });
   assert.strictEqual(watch.view(card, 'alloha', items[0], 'legacy1', items, 4).hash, 'legacy1');
   assert.strictEqual(calls, 1);
-  assert.strictEqual(watch.altOf(card).g, 0);
+  assert.deepStrictEqual(watch.altOf(card).g, [24, 13, 13, 13]);
   const v9 = watch.view(card, 'alloha', items[8], 'legacy9', items, 4);
   assert.strictEqual(v9.hash, 'h:133T');
   assert.strictEqual(v9.episode, 33);
