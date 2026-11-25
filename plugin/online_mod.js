@@ -43,6 +43,7 @@
 //24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
 //25.11.2026 - Skip button on Alloha: the player's own opening/ending marks (bnsi skipTime) via the helper's /skips
 //25.11.2026 - One "watched" across balancers and TorBox: TMDB season/episode key with Timeline.link (TimeCode server sync); unproven numbering keeps its own key
+//25.11.2026 - Watched: single-TMDB-season anime use Lampa's own air-date split (as its episode list); old marks get the card link once (TimeCode only, not CUB)
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -390,13 +391,48 @@
     var watch = {
       store: 'online_mod_watch_map',
       links: {},
+      // Single-TMDB-season cards: episode counts of Lampa's own air-date split (what its episode list shows)
+      splits: null,
+      splitOf: function splitOf(card) {
+        if (!this.splits) this.splits = Lampa.Storage.get('online_mod_watch_split', '{}') || {};
+        // TMDB may later split the show into real seasons: then Lampa shows those, not its air-date split
+        return card && Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && this.splits[this.id(card)] || null;
+      },
+      prefetch: function prefetch(card, force) {
+        var self = this;
+        if (!card || !card.id || !card.original_name || !Lampa.Api || !Lampa.Api.seasons || !Lampa.Utils.splitEpisodesIntoSeasons) return;
+        if (Lampa.Utils.countSeasons(card) !== 1 || (!force && this.splitOf(card))) return;
+        Lampa.Api.seasons(card, [1], function (v) {
+          var s = v && v[1];
+          var eps = s && (s.episodes_original || s.episodes);
+          if (!eps || !eps.length) return;
+          var parts = Lampa.Utils.splitEpisodesIntoSeasons(eps);
+          var out = {};
+          Object.keys(parts).forEach(function (k) {
+            out[k] = parts[k].length;
+          });
+          self.splits[self.id(card)] = out;
+          var keys = Object.keys(self.splits);
+          // shortcut: keeps the 200 newest cards; an evicted card is fetched again when opened
+          if (keys.length > 200) delete self.splits[keys[0]];
+          Lampa.Storage.set('online_mod_watch_split', self.splits);
+        });
+      },
       // TMDB season number -> episode count
       counts: function counts(card) {
-        var out = {};
+        var split = this.splitOf(card);
+        if (split && Object.keys(split).length >= 2) {
+          var out = {};
+          Object.keys(split).forEach(function (k) {
+            out[+k] = split[k];
+          });
+          return out;
+        }
+        var out2 = {};
         (card && card.seasons || []).forEach(function (s) {
-          if (s && s.season_number > 0 && s.episode_count > 0) out[s.season_number] = s.episode_count;
+          if (s && s.season_number > 0 && s.episode_count > 0) out2[s.season_number] = s.episode_count;
         });
-        return out;
+        return out2;
       },
       // Lampa's own timeline key of a card episode
       key: function key(card, season, episode) {
@@ -442,7 +478,8 @@
         if (before && q.min > before) return q.max > counts[q.season] && (last || q.max <= before + counts[q.season]) ? this.canon([1, 1, 1], q.episode, counts) : null;
         if (q.max > counts[q.season] && !last) return q.season == 1 && this.whole(q.max, counts) ? this.canon([1, 1, 1], q.episode, counts) : null;
         // anime seasons after the first are split differently too often: one answer per title (map.std)
-        return !anime || q.season == 1 || map.std ? same : null;
+        // Lampa's own split of a single TMDB season: a season that lists exactly its episodes is that season
+        return !anime || q.season == 1 || map.std || q.split && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season] ? same : null;
       },
       // Kodik franchise part, placed by the episodes of the TV parts before it. Proven when the franchise and
       // TMDB count the same at some end after the part, or (first TMDB season of the part only) at its start.
@@ -473,14 +510,17 @@
         return (Lampa.Storage.get(this.store, '{}') || {})[this.id(card)] || {};
       },
       // canonical timeline hash of a list element; '' = keep the source's own key
-      hashOf: function hashOf(card, balancer, element, items) {
+      hashOf: function hashOf(card, balancer, element, items, seasons) {
         element.watch_place = null;
         var season = parseInt(element.season);
         var episode = parseInt(element.episode);
+        var split = this.splitOf(card);
         // without original_title the key would be shared by every show
         if (!card || !card.original_title || !season || isNaN(episode)) return '';
+        // Lampa splits a single TMDB season on its card; until that split is known, keep the source's own key
+        if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !split) return '';
         // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
-        if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength) {
+        if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength || seasons !== this.cachedSeasons || this.splitOf(card) !== this.cachedSplitObj) {
           this.cached = items;
           this.cachedCard = card;
           this.cachedSeason = season;
@@ -492,6 +532,8 @@
           });
           this.cachedMap = this.map(card);
           this.cachedCounts = this.counts(card);
+          this.cachedSplitObj = this.splitOf(card);
+          this.cachedSeasons = seasons;
         }
         var nums = this.cachedNums.concat([episode]);
         var info = element.watch_info || {};
@@ -502,7 +544,9 @@
           season: season,
           episode: episode,
           min: Math.min.apply(null, nums),
-          max: Math.max.apply(null, nums)
+          max: Math.max.apply(null, nums),
+          split: !!(split && Object.keys(split).length >= 2),
+          seasons: seasons
         });
         // one file without its list (TorBox) proves no run-on numbering: only its own numbers
         if (!items && place && (place.season !== season || place.episode !== episode)) place = null;
@@ -521,18 +565,28 @@
           var meta = links[data.hash];
           var road = data.road;
           if (!meta || !road || road.card) return;
-          Lampa.Timeline.update({ hash: data.hash, percent: road.percent, time: road.time, duration: road.duration, profile: road.profile, card: meta.card, season: meta.season, episode: meta.episode });
+          Lampa.Timeline.update({ hash: data.hash, percent: road.percent, time: road.time, duration: road.duration, profile: road.profile, updated: road.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
         });
+        if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
+          Lampa.Listener.follow('full', function (e) {
+            if (e.type == 'complite' && e.data && e.data.movie) watch.prefetch(e.data.movie, true);
+          });
+        }
       },
-      view: function view(card, balancer, element, legacy, items) {
+      view: function view(card, balancer, element, legacy, items, seasons) {
         this.install();
-        var hash = this.hashOf(card, balancer, element, items);
+        var hash = this.hashOf(card, balancer, element, items, seasons);
         var place = element.watch_place;
         var meta = hash && Lampa.Timeline.link ? Lampa.Timeline.link(card, place.season, place.episode) : null;
         // a card without original_name links as a movie
         if (meta && meta.season === undefined) meta = null;
         if (meta) this.links[hash] = meta;
         var view = Lampa.Timeline.view(hash || legacy, meta || undefined);
+        // A mark already under this key but written without the link (older code, Android): link it once, same time
+        var stored = meta && Lampa.Timeline.filename ? (Lampa.Storage.get(Lampa.Timeline.filename(), '{}') || {})[hash] : null;
+        if (stored && typeof stored == 'object' && !stored.card && (stored.percent || stored.time)) {
+          Lampa.Timeline.update({ hash: hash, percent: stored.percent, time: stored.time, duration: stored.duration, profile: stored.profile, updated: stored.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
+        }
         if (hash && hash !== legacy && !view.percent && !view.time && legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode)))) {
           var old = Lampa.Timeline.view(legacy);
           if (old.percent || old.time) {
@@ -17731,6 +17785,7 @@
       var filter = new Lampa.Filter(object);
       var balanser = Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
       var last_bls = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.cache('online_mod_last_balanser', 200, {}) : {};
+      var last_filter = null;
       var forcedQuality = '';
       var qualityFilter = {
         title: Lampa.Lang.translate('settings_player_quality'),
@@ -18734,6 +18789,7 @@
 
 
       this.filter = function (filter_items, choice) {
+        last_filter = filter_items;
         var select = [];
 
         var add = function add(type, title) {
@@ -19041,8 +19097,9 @@
       };
       // Timeline of a list element under the shared canonical key (see watch)
       this.watchView = function (element, hash, items) {
-        return watch.view(object.movie, balanser, element, hash, items);
+        return watch.view(object.movie, balanser, element, hash, items, last_filter && last_filter.season ? last_filter.season.length : 0);
       };
+      watch.prefetch(object.movie);
       /**
        * Начать навигацию по файлам
        */
@@ -20179,6 +20236,7 @@
       initLang();
       initMain();
       initSettings();
+      watch.install();
       loadTimecode();
     }
 
