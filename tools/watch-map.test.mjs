@@ -130,6 +130,39 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.deepStrictEqual(watch.place({}, {}, false, q({ season: 2, episode: 3, min: 1, max: 3 })), { season: 2, episode: 3 });
 }
 
+// resumeTarget
+{
+  const counts = { 1: 12, 2: 12, 3: 10 };
+  const rec = (s, e, idx) => ({ p: { season: s, episode: e }, s: idx });
+  assert.deepStrictEqual(watch.resumeTarget(rec(2, 11, 1), counts, 40), { pin: { season: 2, episode: 11 }, s: 1 });
+  assert.deepStrictEqual(watch.resumeTarget(rec(2, 11, 1), counts, 90), { pin: { season: 2, episode: 12 }, s: 1 });
+  assert.deepStrictEqual(watch.resumeTarget(rec(2, 12, 1), counts, 95), { pin: { season: 3, episode: 1 }, s: 2 });
+  assert.deepStrictEqual(watch.resumeTarget(rec(3, 10, 2), counts, 100), { pin: { season: 3, episode: 10 }, s: 2 });
+}
+
+// remember
+{
+  store.online_mod_resume = undefined;
+  const el = { season: 1, watch_place: { season: 1, episode: 4 } };
+  const card = (id) => ({ id: id, original_title: 't' + id });
+  watch.remember(card(1), 'kodik', 'Voice', 2, { season: 1 });
+  assert.strictEqual(store.online_mod_resume, undefined);
+  watch.remember(card(1), 'kodik', 'Voice', 2, el);
+  assert.deepStrictEqual(Object.keys(store.online_mod_resume), ['tmdb_1']);
+  assert.deepStrictEqual(store.online_mod_resume.tmdb_1.p, { season: 1, episode: 4 });
+  assert.strictEqual(store.online_mod_resume.tmdb_1.s, 2);
+  watch.remember(card(2), 'kodik', '', 0, el);
+  watch.remember(card(1), 'alloha', 'V2', 0, el);
+  assert.deepStrictEqual(Object.keys(store.online_mod_resume), ['tmdb_2', 'tmdb_1']);
+  assert.strictEqual(store.online_mod_resume.tmdb_1.b, 'alloha');
+  for (let i = 3; i <= 101; i++) watch.remember(card(i), 'kodik', '', 0, el);
+  const keys = Object.keys(store.online_mod_resume);
+  assert.strictEqual(keys.length, 100);
+  assert.strictEqual(keys.indexOf('tmdb_2'), -1);
+  assert.strictEqual(keys[0], 'tmdb_1');
+  assert.strictEqual(keys[99], 'tmdb_101');
+}
+
 // stacked
 {
   const part = { index: 1, bounds: [0, 12, 25], first: 1 };

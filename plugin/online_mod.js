@@ -908,6 +908,26 @@
         }
         return raw;
       },
+      // «Продолжить»: the episode last played, or the next one when it is finished (percent >= 90); s: the source's season index guess
+      resumeTarget: function resumeTarget(rec, counts, percent) {
+        var p = rec.p;
+        if (!(percent >= 90)) return { pin: { season: p.season, episode: p.episode }, s: rec.s };
+        if (counts[p.season] > p.episode) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
+        if (counts[p.season + 1]) return { pin: { season: p.season + 1, episode: 1 }, s: rec.s + 1 };
+        return { pin: { season: p.season, episode: p.episode }, s: rec.s };
+      },
+      // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
+      remember: function remember(card, balancer, voice_name, season_index, element) {
+        if (!card || !element || !element.season || !element.watch_place) return;
+        var all = Lampa.Storage.get('online_mod_resume', '{}');
+        if (!all || typeof all != 'object') all = {};
+        var id = this.id(card);
+        delete all[id];
+        all[id] = { b: balancer, v: voice_name || '', s: season_index || 0, p: { season: element.watch_place.season, episode: element.watch_place.episode }, t: Date.now() };
+        var keys = Object.keys(all);
+        while (keys.length > 100) delete all[keys.shift()];
+        Lampa.Storage.set('online_mod_resume', all);
+      },
       // "По сериям": per voice, the row of the pinned episode (rows: {season, voice, element}, in the source's order)
       pinVariants: function pinVariants(pin, rows) {
         var by = {};
@@ -19928,6 +19948,10 @@
 
       this.contextmenu = function (params) {
         contextmenu_all.push(params);
+        params.item.on('hover:enter', function () {
+          var voice = last_filter && last_filter.voice && last_choice ? last_filter.voice[last_choice.voice] : '';
+          watch.remember(object.movie, balanser, voice, last_choice && last_choice.season, params.element);
+        });
         params.item.on('hover:long', function () {
           var enabled = Lampa.Controller.enabled().name;
 
@@ -20361,6 +20385,9 @@
         online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
+        online_mod_resume: { ru: 'Продолжить', en: 'Continue' },
+        online_mod_season_short: { ru: 'С', en: 'S' },
+        online_mod_episode_short: { ru: 'Е', en: 'E' },
         online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
         online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
         online_mod_variants_voices: { ru: 'озвучек:', en: 'voices:' },
@@ -21552,6 +21579,8 @@
             return;
           }
           started = true;
+          // the player really started: only then is it what the user last played
+          watch.remember(card, balancer, pick.voice_name, pick.season, rowEntry && rowEntry.element);
         };
         onDestroy = function onDestroy() {
           if (listener) {
@@ -22066,6 +22095,47 @@
               Lampa.Activity.push({ url: '', title: Lampa.Lang.translate('online_mod_by_episodes'), component: 'online_mod_episodes', card: card, page: 1 });
             });
             btn.after(by);
+            // read when pressed or focused, not when the card opened: what was played meanwhile counts
+            var resume = function resume() {
+              var all = Lampa.Storage.get('online_mod_resume', '{}');
+              var rec = all && typeof all == 'object' ? all[watch.id(card)] : null;
+              if (!rec || !rec.p || !rec.b) return null;
+              var tl = Lampa.Timeline.view(Lampa.Utils.hash(watch.key(card, rec.p.season, rec.p.episode)));
+              var target = watch.resumeTarget(rec, watch.counts(card), tl && tl.percent);
+              return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
+            };
+            var label = function label(r) {
+              return Lampa.Lang.translate('online_mod_resume') + ' · ' + Lampa.Lang.translate('online_mod_season_short') + r.target.pin.season + ' ' + Lampa.Lang.translate('online_mod_episode_short') + r.target.pin.episode;
+            };
+            var first = resume();
+            if (first) {
+              var go = $('<div class="full-start__button selector view--online_mod_resume"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>' + label(first) + '</span></div>');
+              go.on('hover:focus', function () {
+                var r = resume();
+                if (r) go.find('span').text(label(r));
+              });
+              go.on('hover:enter', function () {
+                var r = resume();
+                if (!r) {
+                  online_loading = false;
+                  return loadOnline(card);
+                }
+                Utils.setMyIp('');
+                checkMyIp(function () {
+                  checkCurrentFanserialsHost(function () {
+                    var screen = function screen() {
+                      online_loading = false;
+                      loadOnline(card, r.rec.b, r.target.pin, r.pick);
+                    };
+                    playVariant(card, r.rec.b, r.target.pin, r.pick, function () {
+                      // the next season's index was a guess: try the season it was left in, then the source's screen
+                      if (r.target.s !== r.rec.s) playVariant(card, r.rec.b, r.target.pin, { season: r.rec.s, voice_name: r.rec.v }, screen);else screen();
+                    });
+                  });
+                });
+              });
+              by.after(go);
+            }
           }
         }
       });
