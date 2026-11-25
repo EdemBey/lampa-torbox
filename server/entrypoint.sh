@@ -49,6 +49,7 @@ if [ -f /opt/wireproxy.conf ]; then
   (
     while :; do
       (
+        started=0
         while :; do
           stop_tunnel
           wireproxy -c /opt/wireproxy.conf &
@@ -61,6 +62,10 @@ if [ -f /opt/wireproxy.conf ]; then
             i=$((i + 1))
             sleep 1
           done
+          # A replaced tunnel exits from another address: the helper (this shell's pid after exec)
+          # drops what it prepared through the old one.
+          [ "$started" = 1 ] && kill -USR2 $$ 2>/dev/null || true
+          started=1
           while kill -0 "$WP" 2>/dev/null; do
             # Short window: hls.js gives up on fragments after a few failed retries, so a wedged
             # tunnel has to be replaced before the player decides playback is unrecoverable.

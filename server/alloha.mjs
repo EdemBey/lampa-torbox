@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
-import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, skipsOf, sourceFor } from './alloha-sign.mjs';
+import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, skipsOf, sourceFor, withDeadline } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 import { handleRezka, isRezkaPath } from './rezka.mjs';
 import { handleTorbox } from './torbox.mjs';
@@ -439,6 +439,20 @@ const origins = new Map();
 const moves = new Map();
 const refreshes = new Map();
 const REFRESH_EVERY = 2 * 60 * 1000;
+
+// entrypoint.sh signals a replaced WARP tunnel. Sessions and signatures from the old exit only lead
+// into long recovery chains (seen: play.m3u8 hanging past the player's 10 s until a restart), so
+// prepared episodes start over; ones being prepared right now finish on their own.
+process.on('SIGUSR2', () => {
+  for (const [, hit] of sessions) dropSession(hit.s);
+  infos.clear();
+  // running ones stay: their shared promise keeps parallel segments from re-signing twice
+  for (const [k, h] of recoveries) if (!h.promise) recoveries.delete(k);
+  for (const [k, h] of refreshes) if (!h.promise) refreshes.delete(k);
+  failures.clear();
+  sessionBlocks.clear();
+  console.log('tunnel replaced: prepared episodes and sessions dropped');
+});
 const dirOf = (u) => u.slice(0, u.lastIndexOf('/') + 1);
 
 // Only urls under the player's original path move, and only after a refresh; init segments,
@@ -626,7 +640,18 @@ http.createServer(async (req, res) => {
     if (url.pathname === '/play.m3u8' || url.pathname === '/stream.m3u8') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       // Without q (the plugin's fallback when /qualities failed) the best quality plays, not 360p.
-      const body = await playlist(base, src, q.get('q') || QUALITIES[QUALITIES.length - 1]);
+      // hls.js waits 10 s for a playlist and then gives up for good; a 503 before that makes it
+      // retry, and the retry finds the episode the work below kept preparing
+      const started = Date.now();
+      let body;
+      try {
+        body = await withDeadline(playlist(base, src, q.get('q') || QUALITIES[QUALITIES.length - 1]), 8000);
+      } catch (e) {
+        if (!e.deadline) throw e;
+        console.log('playlist not ready in 8 s, the player retries');
+        return send(res, 503, 'preparing, retry');
+      }
+      if (Date.now() - started > 3000) console.log('playlist took', Date.now() - started, 'ms');
       return send(res, 200, body, 'application/vnd.apple.mpegurl');
     }
     if (url.pathname === '/s') {

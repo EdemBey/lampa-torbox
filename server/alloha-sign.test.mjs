@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { borthFor, episodeKey, mapPlaylist, YB, pickQuality, skipsOf, sourceFor } from './alloha-sign.mjs';
+import { borthFor, episodeKey, mapPlaylist, YB, pickQuality, skipsOf, sourceFor, withDeadline } from './alloha-sign.mjs';
+
+test('withDeadline: the value in time, a deadline error when late, a late failure stays handled', async () => {
+  assert.equal(await withDeadline(Promise.resolve(5), 50), 5);
+  await assert.rejects(withDeadline(Promise.reject(new Error('boom')), 50), /boom/);
+  let late;
+  const slow = new Promise((_, bad) => { late = bad; });
+  await assert.rejects(withDeadline(slow, 20), (e) => e.deadline === true);
+  // the work fails after the deadline: no unhandled rejection reaches the process
+  late(new Error('too late'));
+  await new Promise((r) => setTimeout(r, 10));
+});
 
 test('Borth matches the player byte for byte', () => {
   // Captured from a live player page together with the Borth it sent.

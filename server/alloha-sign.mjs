@@ -116,3 +116,13 @@ export function sourceFor(info, src) {
   const hit = raw && (sources.find((x) => x.label === raw) || sources.find((x) => bareLabel(x.label) === bareLabel(raw)));
   return hit || sources.find((x) => x.default) || sources[0];
 }
+
+// The promise, or an error marked `deadline` once `ms` pass. The work itself goes on: a retry
+// finds it done (or cached), and its late failure stays handled by the race.
+export function withDeadline(promise, ms) {
+  let timer;
+  const late = new Promise((_, bad) => {
+    timer = setTimeout(() => bad(Object.assign(new Error('deadline'), { deadline: true })), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
