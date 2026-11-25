@@ -18627,6 +18627,46 @@
     var proxyCalls = {};
     var default_balanser = 'cdnvideohub';
 
+    // The user's order of the sources (the «По сериям» screen, the source list): their names in Lampa's storage,
+    // a source not listed keeps the plugin's order after them
+    function applyOrder() {
+      if (!applyOrder.base) applyOrder.base = Balancers.map(function (b) {
+        return b.name;
+      });
+      var order = Lampa.Storage.get('online_mod_order', '[]');
+      if (!Array.isArray(order)) order = [];
+      var base = applyOrder.base;
+      var rank = function rank(name) {
+        var i = order.indexOf(name);
+        return i >= 0 ? i : 1000 + base.indexOf(name);
+      };
+      Balancers.sort(function (a, b) {
+        return rank(a.name) - rank(b.name);
+      });
+    }
+
+    // a source one place up (-1), down (1) or first ('top') among the ones that are on
+    function moveBalancer(name, delta) {
+      var on = Balancers.filter(function (b) {
+        return !b.disabled;
+      }).map(function (b) {
+        return b.name;
+      });
+      var off = Balancers.filter(function (b) {
+        return b.disabled;
+      }).map(function (b) {
+        return b.name;
+      });
+      var i = on.indexOf(name);
+      if (i < 0) return;
+      var j = delta === 'top' ? 0 : Math.max(0, Math.min(on.length - 1, i + delta));
+      if (j === i) return;
+      on.splice(i, 1);
+      on.splice(j, 0, name);
+      Lampa.Storage.set('online_mod_order', on.concat(off));
+      applyOrder();
+    }
+
     function component(object) {
       var _this = this;
 
@@ -20239,6 +20279,9 @@
         online_mod_variants_open: { ru: 'Открыть источник', en: 'Open the source' },
         online_mod_variants_reset: { ru: 'Сбросить выбранный тайтл', en: 'Forget the picked title' },
         online_mod_variants_retry: { ru: 'Обновить', en: 'Reload' },
+        online_mod_variants_top: { ru: 'Сделать первым', en: 'Move to the top' },
+        online_mod_variants_up: { ru: 'Выше', en: 'Move up' },
+        online_mod_variants_down: { ru: 'Ниже', en: 'Move down' },
         online_mod_trakt_id: { ru: 'Trakt: Client ID', en: 'Trakt: Client ID' },
         online_mod_trakt_secret: { ru: 'Trakt: Client Secret', en: 'Trakt: Client Secret' },
         online_mod_trakt_in: { ru: 'Войти: код на экране, ввести на телефоне', en: 'Sign in: a code on screen, entered on the phone' },
@@ -21275,6 +21318,179 @@
     };
 
 
+    // «По сериям»: a voice plays without its source's screen. The source runs off screen with the screen's own list
+    // code (its rows, their timelines, the player and the next episodes it builds); its season and voice are set as
+    // picked and the row of the episode is pressed. It lives until the player closes. fallback() opens the source's
+    // screen instead: no such row, a question only the user answers, no answer in 30 s.
+    function playVariant(card, balancer, pin, pick, fallback) {
+      var noop = function noop() {};
+      var rows = [];
+      var labels = null;
+      var choice = null;
+      var stage = 'search';
+      var over = false;
+      var replays = 0;
+      var drawn = 0;
+      var wait = -1;
+      var cancelled = false;
+      var onDestroy = null;
+      var voiceRetried = false;
+      var probe;
+      var obj = { movie: card, balancer: balancer, search: card.title, search_one: card.title, search_two: card.original_title, page: 1 };
+      var stop = function stop() {
+        clearTimeout(timer);
+        try {
+          probe.destroy();
+        } catch (e) {}
+      };
+      var fail = function fail() {
+        if (over) return;
+        over = true;
+        Lampa.Loading.stop();
+        stop();
+        fallback();
+      };
+      var timer = setTimeout(fail, 30000);
+      // the probe's component would take over the screen's refresh hook
+      var hook = watch.refresh;
+      try {
+        probe = new component(obj);
+        watch.refresh = hook;
+      } catch (e) {
+        watch.refresh = hook;
+        return fail();
+      }
+      probe.activity = { loader: noop, toggle: noop };
+      probe.watch_probe = true;
+      ['loading', 'append', 'closeFilter'].forEach(function (m) {
+        probe[m] = noop;
+      });
+      var reset = probe.reset;
+      probe.reset = function () {
+        rows = [];
+        return reset.apply(this, arguments);
+      };
+      var filter = probe.filter;
+      probe.filter = function (items, current) {
+        if (items && items.season) {
+          drawn++;
+          labels = items;
+          choice = current;
+        }
+        return filter.apply(this, arguments);
+      };
+      probe.contextmenu = function (params) {
+        rows.push(params);
+      };
+      probe.empty = probe.emptyForQuery = function () {
+        fail();
+      };
+      // several titles: the one settled before (watch.similarSave) is taken, as in episodeVariants
+      probe.similars = function (items) {
+        items = items || [];
+        var level = items[0] && items[0].is_similars ? 'src' : 'find';
+        var saved = watch.similarKey(watch.similarOf(card, balancer, level));
+        var hit = null;
+        for (var i = 0; i < items.length && saved && !hit; i++) if (watch.similarKey(items[i]) === saved) hit = items[i];
+        if (!hit || replays++ >= 3) return fail();
+        obj.search = hit.title || hit.ru_title || hit.nameRu || hit.en_title || hit.orig_title || obj.search;
+        obj.search_date = hit.year || hit.start_date || '';
+        try {
+          probe.source().search(obj, hit.kp_id || hit.kinopoisk_id || hit.kinopoiskId || hit.filmId || hit.imdb_id, [hit]);
+        } catch (e) {
+          fail();
+        }
+      };
+      var next = function next(kind, index) {
+        wait = drawn;
+        setTimeout(function () {
+          if (over) return;
+          try {
+            probe.source().filter('filter', { stype: kind }, { index: index });
+          } catch (e) {
+            fail();
+          }
+        }, 0);
+      };
+      // each redraw of the source moves one step: the season, the voice, then the episode's row
+      probe.start = function () {
+        if (over || !labels) return;
+        if (wait >= 0 && drawn <= wait) return;
+        if (stage === 'search') {
+          stage = 'season';
+          if (labels.season && labels.season[pick.season] !== undefined && choice && choice.season !== pick.season) return next('season', pick.season);
+        }
+        if (stage === 'season') {
+          stage = 'voice';
+          var v = (labels.voice || []).indexOf(pick.voice_name);
+          if (v < 0 && labels.voice && labels.voice.length) return fail();
+          if (v >= 0 && choice && choice.voice !== v) return next('voice', v);
+        }
+        if (stage !== 'voice') return;
+        if (labels.voice && labels.voice.length && choice && labels.voice[choice.voice] !== pick.voice_name) {
+          if (voiceRetried) return fail();
+          var idx = (labels.voice || []).indexOf(pick.voice_name);
+          if (idx < 0) return fail();
+          voiceRetried = true;
+          return next('voice', idx);
+        }
+        stage = 'play';
+        var row = watch.pinRow(pin, rows);
+        if (!row) return fail();
+        over = true;
+        clearTimeout(timer);
+        var started = false;
+        var listener = Lampa.Player && Lampa.Player.listener;
+        var onStart = function onStart() {
+          if (cancelled) {
+            try { Lampa.Player.close(); } catch (e) {}
+            return;
+          }
+          started = true;
+          Lampa.Loading.stop();
+        };
+        onDestroy = function onDestroy() {
+          if (listener) {
+            listener.remove('start', onStart);
+            listener.remove('destroy', onDestroy);
+          }
+          stop();
+        };
+        if (listener) {
+          listener.follow('start', onStart);
+          listener.follow('destroy', onDestroy);
+        }
+        // a stream that never comes (the source showed its error): the loader goes, the source with it
+        timer = setTimeout(function () {
+          Lampa.Loading.stop();
+        }, 15000);
+        // safety: if the player never started within 60 s, tear down
+        setTimeout(function () {
+          if (!started) onDestroy();
+        }, 60000);
+        setTimeout(function () {
+          if (cancelled) return;
+          row.trigger('hover:enter');
+        }, 0);
+      };
+      // back while it loads: nothing plays
+      Lampa.Loading.start(function () {
+        cancelled = true;
+        Lampa.Loading.stop();
+        if (!over) {
+          over = true;
+          stop();
+        } else if (onDestroy) {
+          onDestroy();
+        }
+      });
+      try {
+        probe.find();
+      } catch (e) {
+        fail();
+      }
+    }
+
     // "По сериям", one episode: every source as a row with its state (loading, its voices for this episode, ✕, !),
     // filled in as the sources answer. A voice plays the episode; a source row opens the source on it.
     function variantsScreen(object) {
@@ -21307,9 +21523,14 @@
         Lampa.Controller.collectionSet(scroll.render());
         Lampa.Controller.collectionFocus(last || false, scroll.render());
       };
+      // a voice plays without the source's screen; the screen opens when that cannot be done (or no voice is picked)
       var open = function open(b, pick) {
-        online_loading = false;
-        loadOnline(card, b.name, pin, pick);
+        var screen = function screen() {
+          online_loading = false;
+          loadOnline(card, b.name, pin, pick);
+        };
+        if (pick) return playVariant(card, b.name, pin, pick, screen);
+        screen();
       };
       var fill = function fill(b, res) {
         var g = groups[b.name];
@@ -21363,11 +21584,11 @@
         ask(b);
       };
       var actions = function actions(b) {
-        var items = [{ title: L('online_mod_variants_open'), open: true }];
+        var items = [{ title: L('online_mod_variants_open'), open: true }, { title: L('online_mod_variants_top'), move: 'top' }, { title: L('online_mod_variants_up'), move: -1 }, { title: L('online_mod_variants_down'), move: 1 }];
         // while its search runs, a reset would be overwritten by that search's answer
         if (groups[b.name].res) {
           items.push({ title: L('online_mod_variants_retry'), retry: true });
-          if (watch.similarOf(card, b.name, 'src') || watch.similarOf(card, b.name, 'find')) items.splice(1, 0, { title: L('online_mod_variants_reset'), reset: true });
+          if (watch.similarOf(card, b.name, 'src') || watch.similarOf(card, b.name, 'find')) items.splice(4, 0, { title: L('online_mod_variants_reset'), reset: true });
         }
         Lampa.Select.show({
           title: b.title,
@@ -21378,6 +21599,11 @@
           onSelect: function onSelect(a) {
             Lampa.Controller.toggle('content');
             if (a.open) return open(b);
+            // the new order for every screen; this one is drawn again from what the sources already answered
+            if (a.move) {
+              moveBalancer(b.name, a.move);
+              return Lampa.Activity.replace({ focus_source: b.name });
+            }
             again(b, !!a.reset);
           }
         });
@@ -21438,6 +21664,7 @@
           });
           scroll.append(g.head);
         });
+        if (object.focus_source && groups[object.focus_source]) last = groups[object.focus_source].head[0];
         if (Lampa.Component.get && Lampa.Component.get('torbox_main')) {
           var torbox = row('TorBox', '');
           torbox.on('hover:enter', function () {
@@ -22192,6 +22419,7 @@
       logApp();
       initStorage();
       applyPluginParams();
+      applyOrder();
       initLang();
       initMain();
       initSettings();
