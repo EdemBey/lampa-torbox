@@ -873,6 +873,16 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.deepStrictEqual(watch.alts, {});
 }
 
+// plugin URL parameters (ultra?lampac=…&alloha=…), also when Lampa appends its own query after them
+{
+  const src = 'https://edembey.github.io/lampa-torbox/ultra?lampac=192.168.1.50:9118&alloha=x.trycloudflare.com?email=a&logged=true';
+  assert.strictEqual(watch.param(src, 'lampac'), '192.168.1.50:9118');
+  assert.strictEqual(watch.param(src, 'alloha'), 'x.trycloudflare.com');
+  assert.strictEqual(watch.param('https://h/ultra?email=a&lampac=http%3A%2F%2F10.0.0.2%3A9118', 'lampac'), 'http://10.0.0.2:9118');
+  assert.strictEqual(watch.param('https://h/ultra?email=a', 'lampac'), '');
+  assert.strictEqual(watch.param('', 'lampac'), '');
+}
+
 // the menu offers the reset only for a title that has answers
 {
   for (const k in store) delete store[k];

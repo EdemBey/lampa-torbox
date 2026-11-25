@@ -48,6 +48,7 @@
 //25.11.2026 - Watched: KinoPub joins the shared key; AniLibria, AniLiberty and AnimeLib releases are matched from the item menu
 //25.11.2026 - Watched: Kodik entries are placed by YummyAnime (the franchise TV part with the entry's shikimori id)
 //25.11.2026 - «По сериям» button: season → episode (Lampa's numbering, with progress) → source; the source opens on that episode
+//25.11.2026 - Plugin URL parameters ?lampac=…&alloha=… fill empty server address settings at start
 //25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
@@ -894,6 +895,15 @@
           if (n && +n[1] === +pin.season) return i;
         }
         return -1;
+      },
+      // a parameter of the plugin's URL (ultra?lampac=…&alloha=…); Lampa may append its own query after it
+      param: function param(src, key) {
+        var m = new RegExp('[?&]' + key + '=([^&#?]*)').exec(src || '');
+        try {
+          return m ? decodeURIComponent(m[1]) : '';
+        } catch (e) {
+          return '';
+        }
       },
       id: function id(card) {
         return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
@@ -20872,10 +20882,31 @@
       Lampa.Utils.putScriptAsync([s + '/timecode.js'], function () {});
     }
 
+    // The plugin's own URL can carry the server addresses (ultra?lampac=192.168.1.50:9118&alloha=…): they fill an empty
+    // setting at start, so a device only needs the plugin URL, and a setting that got blanked comes back by itself
+    function applyPluginParams() {
+      var carries = function carries(url) {
+        return /[?&](lampac|alloha)=/.test(url || '');
+      };
+      var src = document.currentScript && document.currentScript.src || '';
+      if (!carries(src)) [].slice.call(document.scripts || []).forEach(function (s) {
+        if (carries(s.src)) src = s.src;
+      });
+      // a plugin Lampa runs from its cache has no src: its URL is in the installed plugins list
+      if (!carries(src)) (Lampa.Storage.get('plugins', '[]') || []).forEach(function (p) {
+        if (p && carries(p.url)) src = p.url;
+      });
+      [['lampac', 'online_mod_lampac_server'], ['alloha', 'online_mod_alloha_server']].forEach(function (p) {
+        var value = watch.param(src, p[0]);
+        if (value && !((Lampa.Storage.get(p[1], '') || '') + '').replace(/^\s+|\s+$/g, '')) Lampa.Storage.set(p[1], value);
+      });
+    }
+
     function startPlugin() {
       if (Utils.isDebug3()) return;
       logApp();
       initStorage();
+      applyPluginParams();
       initLang();
       initMain();
       initSettings();
