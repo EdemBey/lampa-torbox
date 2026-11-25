@@ -825,17 +825,7 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   const card = { id: 105009, original_name: 'T', original_title: 'T', number_of_seasons: 1, seasons: [{ season_number: 0, episode_count: 44 }, { season_number: 1, episode_count: 63 }] };
   store['online_mod_watch_split'] = { tmdb_105009: { 1: 24, 2: 13, 3: 13, 4: 13 } };
   watch.splits = null;
-  const seasons = watch.seasonItems(card);
-  assert.deepStrictEqual(seasons.map((s) => s.season), [1, 2, 3, 4]);
-  assert.strictEqual(seasons[1].title, 'online_mod_season 2');
-  assert.strictEqual(seasons[1].subtitle, '13online_mod_episodes_short');
-  viewed['h:29T'] = { percent: 42, time: 595, duration: 1423 };
-  const eps = watch.episodeItems(card, 2);
-  assert.strictEqual(eps.length, 13);
-  assert.strictEqual(eps[8].title, 'online_mod_season 2, online_mod_episode 9');
-  assert.strictEqual(eps[8].subtitle, '42%');
-  assert.strictEqual(eps[0].subtitle, '');
-  assert.deepStrictEqual([eps[8].season, eps[8].episode], [2, 9]);
+
   const rows = [{ item: 'a', element: { watch_place: { season: 2, episode: 8 } } }, { item: 'b', element: {} }, { item: 'c', element: { watch_place: { season: 2, episode: 9 } } }];
   assert.strictEqual(watch.pinRow({ season: 2, episode: 9 }, rows), 'c');
   assert.strictEqual(watch.pinRow({ season: 3, episode: 1 }, rows), null);
@@ -855,6 +845,17 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   const picked = watch.pinVariants({ season: 2, episode: 9 }, vrows);
   assert.deepStrictEqual(picked.map((r) => [r.voice, r.season]), [['A', 1], ['B', 1]]);
   assert.deepStrictEqual(watch.pinVariants({ season: 2, episode: 9 }, null), []);
+  // a settled similar title is kept per card and source, its key prefers the id
+  watch.similarSave(card, 'rezka2', { id: 7, title: 'X', year: 2020, f: () => 1 });
+  assert.deepStrictEqual(watch.similarOf(card, 'rezka2', 'find'), { id: 7, title: 'X', year: 2020 });
+  assert.strictEqual(watch.similarOf(card, 'rezka2', 'src'), null);
+  watch.similarSave(card, 'rezka2', { id: 8, is_similars: true });
+  assert.deepStrictEqual(watch.similarOf(card, 'rezka2', 'src'), { id: 8, is_similars: true });
+  // an episode card is not kept
+  watch.similarSave(card, 'narutobased', { id: 9, episode: {} });
+  assert.strictEqual(watch.similarOf(card, 'narutobased', 'find'), null);
+  assert.strictEqual(watch.similarKey({ title: 'Y', year: 2021 }), 'Y/2021');
+  assert.strictEqual(watch.similarKey(null), '');
   Lampa.Lang = ownLang;
 }
 

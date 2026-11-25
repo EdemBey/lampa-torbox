@@ -860,24 +860,6 @@
         // only the user settles "never link"
         return r === false ? null : r;
       },
-      // "По сериям": the seasons Lampa shows (TMDB's, or its air-date split of a single season)
-      seasonItems: function seasonItems(card) {
-        var counts = this.counts(card);
-        return Object.keys(counts).map(Number).sort(function (a, b) {
-          return a - b;
-        }).map(function (s) {
-          return { title: Lampa.Lang.translate('online_mod_season') + ' ' + s, subtitle: counts[s] + Lampa.Lang.translate('online_mod_episodes_short'), season: s };
-        });
-      },
-      // its episodes, each with the progress kept under Lampa's own key
-      episodeItems: function episodeItems(card, season) {
-        var out = [];
-        for (var e = 1; e <= (this.counts(card)[season] || 0); e++) {
-          var view = Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, season, e)));
-          out.push({ title: this.title({ season: season, episode: e }), subtitle: view.percent ? view.percent + '%' : '', season: season, episode: e });
-        }
-        return out;
-      },
       // the list row of the pinned episode (rows: the item menu's entries, {item, element})
       pinRow: function pinRow(pin, rows) {
         var raw = null;
@@ -905,6 +887,24 @@
         return order.map(function (v) {
           return self.pinRow(pin, by[v]);
         }).filter(Boolean);
+      },
+      // a source's list of similar titles settled by the user, per card and source (kept for the next search)
+      similarStore: 'online_mod_similar',
+      similarOf: function similarOf(card, balancer, level) {
+        return (Lampa.Storage.get(this.similarStore, '{}') || {})[this.id(card) + ':' + balancer + ':' + level] || null;
+      },
+      // level: a source's own list ('src', is_similars) or the title search before it ('find')
+      similarSave: function similarSave(card, balancer, elem) {
+        // an episode card (Naruto Based lists episodes) picks one video, not the title
+        if (!elem || elem.episode) return;
+        var all = Lampa.Storage.get(this.similarStore, '{}') || {};
+        var copy = {};
+        for (var k in elem) if (typeof elem[k] != 'function') copy[k] = elem[k];
+        all[this.id(card) + ':' + balancer + ':' + (elem.is_similars ? 'src' : 'find')] = copy;
+        Lampa.Storage.set(this.similarStore, all);
+      },
+      similarKey: function similarKey(e) {
+        return e ? String(e.id || e.link || e.kp_id || e.kinopoisk_id || e.kinopoiskId || e.filmId || e.imdb_id || (e.title || '') + '/' + (e.year || e.start_date || '')) : '';
       },
       // the balancer season whose label carries the pinned season's number, -1 if none
       pinSeason: function pinSeason(pin, labels) {
@@ -15913,6 +15913,8 @@
       }
 
       function verify(embed) {
+        // the «По сериям» probe opens no window: the source's own screen asks
+        if (component.watch_probe) return component.empty(Lampa.Lang.translate('online_mod_turbo_captcha'));
         component.loading(false);
         var controller = Lampa.Controller.enabled().name;
         var link = server + '/turbo/verify?url=' + encodeURIComponent(embed);
@@ -17184,6 +17186,8 @@
       }
 
       function playEpisodeDirect(episode) {
+        // the «По сериям» probe never plays: the source's own screen does
+        if (component.watch_probe) return component.empty('');
         var languages = languagesOf(episode);
         var noSources = Lampa.Lang.translate('online_mod_no_sources');
 
@@ -18391,6 +18395,10 @@
       var pin_done = false;
       var pin_tried = false;
       var pick_done = false;
+      // «По сериям»: until when the picked voice may still start playing; the source's last choice
+      var pick_play = 0;
+      var last_choice = null;
+      var similar_auto = {};
       var extended;
       var selected_id;
       var filter_translate = {
@@ -19206,8 +19214,13 @@
 
       this.similars = function (json, search_more, more_params) {
         var _this6 = this;
+        // the title picked here before (or in «По сериям») is opened again without asking; a clarified search asks
+        var level = json[0] && json[0].is_similars ? 'src' : 'find';
+        var saved = object.clarification ? '' : watch.similarKey(watch.similarOf(object.movie, balanser, level));
+        var auto = null;
 
         json.forEach(function (elem) {
+          var elem_key = watch.similarKey(elem);
           var title = elem.title || elem.ru_title || elem.nameRu || elem.en_title || elem.nameEn || elem.orig_title || elem.nameOriginal;
           var orig_title = elem.orig_title || elem.nameOriginal || elem.en_title || elem.nameEn;
           var year = elem.start_date || elem.year || '';
@@ -19219,7 +19232,7 @@
           elem.quality = year ? (year + '').slice(0, 4) : '----';
           elem.info = info.length ? ' / ' + info.join(' / ') : '';
           var item = Lampa.Template.get('online_mod_folder', elem);
-          item.on('hover:enter', function () {
+          var choose = function choose() {
             _this6.activity.loader(true);
 
             _this6.reset();
@@ -19231,7 +19244,12 @@
             _this6.extendChoice();
 
             sources[balanser].search(object, elem.kp_id || elem.kinopoisk_id || elem.kinopoiskId || elem.filmId || elem.imdb_id, [elem]);
+          };
+          item.on('hover:enter', function () {
+            watch.similarSave(object.movie, balanser, elem);
+            choose();
           });
+          if (saved && !auto && elem_key === saved) auto = choose;
 
           _this6.append(item);
         });
@@ -19251,6 +19269,13 @@
             search_more(more_params);
           });
           this.append(item);
+        }
+
+        // once per screen and list level: a source that answers with the same list again is not looped
+        if (auto && !similar_auto[level]) {
+          similar_auto[level] = true;
+          // after the source has finished drawing this list (it hides the loader right after)
+          setTimeout(auto, 0);
         }
       };
       /**
@@ -19347,6 +19372,7 @@
 
       this.filter = function (filter_items, choice) {
         last_filter = filter_items;
+        last_choice = choice;
         var select = [];
 
         var add = function add(type, title) {
@@ -19697,7 +19723,6 @@
 
       this.start = function (first_select) {
         if (Lampa.Activity.active().activity !== this.activity) return; //обязательно, иначе наблюдается баг, активность создается но не стартует, в то время как компонент загружается и стартует самого себя.
-
         if (first_select) {
           var last_views = scroll.render().find('.selector.online').find('.torrent-item__viewed').parent().last();
           if (object.movie.number_of_seasons && last_views.length) last = last_views.eq(0)[0];else last = scroll.render().find('.selector').eq(0)[0];
@@ -19714,6 +19739,7 @@
           if (pick_voice >= 0) sources[balanser].filter('filter', { stype: 'voice' }, { index: pick_voice });
           // the redraws above may have focused a row of the list they replaced: find it again in the final one
           pin_done = false;
+          pick_play = pick_voice >= 0 ? Date.now() + 20000 : 0;
         }
 
         if (object.watch_pin && !pin_done) {
@@ -19721,6 +19747,13 @@
           if (pinned) {
             last = pinned[0];
             pin_done = true;
+            // a voice picked in «По сериям» plays once its own list is on screen (a source that loads per voice redraws later)
+            if (pick_play > Date.now() && last_filter && last_choice && (last_filter.voice || [])[last_choice.voice] === object.watch_pick.voice_name) {
+              pick_play = 0;
+              setTimeout(function () {
+                pinned.trigger('hover:enter');
+              }, 0);
+            }
           } else if (!pin_tried && last_filter && last_filter.season) {
             pin_tried = true;
             var pin_season = watch.pinSeason(object.watch_pin, last_filter.season);
@@ -19882,7 +19915,7 @@
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
         online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
-        online_mod_wait: { ru: 'Загружаю сезоны, нажмите ещё раз через секунду', en: 'Loading the seasons, press again in a second' },
+        online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
         online_mod_original: { ru: 'Оригинал', en: 'Original' },
         online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
         online_mod_rezka_login_disabled: { ru: 'Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)', en: 'HDrezka login without the Tampermonkey bridge or your own server is off: the password would go through a third-party proxy (Settings → online_mod → HDrezka → "Your server address")' },
@@ -20612,54 +20645,165 @@
       Lampa.Filter = ModssFilter;
     }
 
-    // "По сериям": a source run without its screen. Every season and voice is listed once per card, each row
-    // placed on Lampa's numbering by the rules the list itself uses. done(rows) gets [] when nothing is known.
-    function episodeVariants(card, balancer, done) {
+    // "По сериям": a source run without its screen. Seasons and voices are walked one redraw at a time: a source that
+    // answers a switch at once (Alloha, Kodik, HDrezka, Turbo: all in one answer) is walked whole, one that asks the
+    // network per switch only for the wanted season. Rows are placed on Lampa's numbering by the rules the list uses.
+    // done(res, covered): res = {status: 'ok'|'none'|'error'|'choose', rows, similars, message}; covered is false when a
+    // probe started for another season answered and the wanted one was not walked (ask again).
+    function episodeVariants(card, balancer, pin, done) {
       var key = balancer + ':' + watch.id(card);
-      if (episodeVariants.cache[key]) {
-        done(episodeVariants.cache[key]);
-        return function () {};
-      }
+      var covers = function covers(entry, p) {
+        if (entry.all || !p) return true;
+        var i = watch.pinSeason(p, entry.labels);
+        // a season the source numbers otherwise (Kodik's parts) cannot be told: what was walked stands
+        return i < 0 || !!entry.done[i];
+      };
+      var hit = episodeVariants.cache[key];
+      if (hit && covers(hit, pin)) return done(hit.res, true);
+      if (episodeVariants.pending[key]) return episodeVariants.pending[key].push({ pin: pin, done: done });
+      var waiting = episodeVariants.pending[key] = [];
       var rows = [];
       var labels = null;
       var batch = [];
-      var walking = false;
+      var walked = {};
+      var seasons = null;
+      var voices = [];
+      var names = [];
+      var current = -1;
+      var wanted = -1;
+      var step = null;
+      var stepTimer = null;
+      var slow = false;
+      var cut = false;
       var finished = false;
       var noop = function noop() {};
       var probe;
-      var finish = function finish(walked) {
+      var obj = { movie: card, balancer: balancer, search: card.title, search_one: card.title, search_two: card.original_title, page: 1 };
+      var finish = function finish(status, extra) {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
-        // only a finished walk is kept: an error or a timeout is tried again next time
-        if (walked === true) episodeVariants.cache[key] = rows;
+        clearTimeout(stepTimer);
+        var res = { status: status, rows: rows, similars: extra && extra.similars || null, message: extra && extra.message || '' };
+        var entry = { res: res, labels: labels && labels.season ? labels.season.slice() : [], done: walked, all: status === 'none' || status === 'ok' && !cut };
+        // a list placed before Lampa split a single TMDB season keeps TMDB's numbers: not kept
+        if ((status === 'ok' || status === 'none') && !(Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card))) episodeVariants.cache[key] = entry;
+        delete episodeVariants.pending[key];
         try {
           probe.destroy();
         } catch (e) {}
-        done(rows);
+        done(res, true);
+        waiting.forEach(function (w) {
+          w.done(res, covers(entry, w.pin));
+        });
       };
-      var timer = setTimeout(finish, 9000);
+      // what was walked by then stands
+      var timer = setTimeout(function () {
+        cut = true;
+        finish(rows.length ? 'ok' : 'error');
+      }, 60000);
+      var stepDone = function stepDone(ok) {
+        var me = step;
+        if (!me) return;
+        step = null;
+        clearTimeout(stepTimer);
+        if (ok && me.kind === 'season') {
+          names = (labels && labels.voice || []).slice();
+          voices = names.map(function (n, i) {
+            return i;
+          });
+        }
+        // a season that did not load is not walked: not kept as done
+        if (!ok && me.kind === 'season') {
+          cut = true;
+          voices = [];
+          current = -1;
+        }
+        if (ok && me.kind === 'voice') {
+          for (var i = 0; i < batch.length; i++) rows.push({ season: current, voice: names[me.index], element: batch[i] });
+        }
+        setTimeout(next, 0);
+      };
+      var go = function go(kind, index) {
+        var me = step = { kind: kind, index: index };
+        batch = [];
+        clearTimeout(stepTimer);
+        // a redraw that never comes ends the walk: a late one would be taken for the next step
+        stepTimer = setTimeout(function () {
+          if (step !== me) return;
+          step = null;
+          cut = true;
+          finish(rows.length ? 'ok' : 'error');
+        }, 15000);
+        try {
+          probe.source().filter('filter', { stype: kind }, { index: index });
+        } catch (e) {
+          if (step === me) return stepDone(false);
+        }
+        // the redraw did not come within the call: this source asks the network per switch
+        if (step === me) slow = true;
+      };
+      var next = function next() {
+        if (finished || step) return;
+        if (voices.length) return go('voice', voices.shift());
+        if (current >= 0) walked[current] = true;
+        // a slow source stops once the wanted season (without one: the first) is walked
+        if (slow && seasons.length && (wanted < 0 || walked[wanted] || cut)) {
+          cut = true;
+          seasons = [];
+        }
+        if (!seasons.length) return finish('ok');
+        current = seasons.shift();
+        go('season', current);
+      };
       // the probe's component would take over the screen's refresh hook
       var refresh = watch.refresh;
       try {
-        probe = new component({ movie: card, balancer: balancer, search: card.title, search_one: card.title, search_two: card.original_title, page: 1 });
+        probe = new component(obj);
         watch.refresh = refresh;
       } catch (e) {
         watch.refresh = refresh;
-        finish();
-        return function () {};
+        return finish('error');
       }
       probe.activity = { loader: noop, toggle: noop };
       probe.watch_probe = true;
       ['loading', 'reset', 'append', 'contextmenu', 'saveChoice', 'extendChoice', 'closeFilter', 'updateQualityFilter'].forEach(function (m) {
         probe[m] = noop;
       });
-      // not found is kept; an error, or several titles only the user chooses between, is tried again
+      // inside a walk a failed redraw only skips that step
+      // between two steps a stray answer is ignored
       probe.emptyForQuery = function () {
-        finish(true);
+        if (step) return stepDone(false);
+        if (seasons) return;
+        finish('none');
       };
-      probe.empty = probe.similars = function () {
-        finish();
+      probe.empty = function (message) {
+        if (step) return stepDone(false);
+        if (seasons) return;
+        finish('error', { message: typeof message == 'string' ? message : '' });
+      };
+      // several titles: the user settles it once (watch.similarSave), the next probe goes straight to it
+      var replays = 0;
+      probe.similars = function (items) {
+        if (step) return stepDone(false);
+        if (seasons) return;
+        items = items || [];
+        var level = items[0] && items[0].is_similars ? 'src' : 'find';
+        var saved = watch.similarKey(watch.similarOf(card, balancer, level));
+        var pick = null;
+        for (var i = 0; i < items.length && saved && !pick; i++) if (watch.similarKey(items[i]) === saved) pick = items[i];
+        // the title settled before: on to it, as a click in the source's list does (a list that keeps coming back stops)
+        if (pick && replays++ < 3) {
+          obj.search = pick.title || pick.ru_title || pick.nameRu || pick.en_title || pick.orig_title || obj.search;
+          obj.search_date = pick.year || pick.start_date || '';
+          try {
+            probe.source().search(obj, pick.kp_id || pick.kinopoisk_id || pick.kinopoiskId || pick.filmId || pick.imdb_id, [pick]);
+          } catch (e) {
+            finish('error');
+          }
+          return;
+        }
+        finish('choose', { similars: items });
       };
       probe.filter = function (items) {
         if (items && items.season) labels = items;
@@ -20670,131 +20814,305 @@
         return Lampa.Timeline.view(hash);
       };
       probe.start = function () {
-        if (walking || finished) return;
-        walking = true;
-        var source = probe.source();
-        if (!source || !source.filter || !labels || !labels.season || !labels.season.length) return finish();
-        try {
-          for (var s = 0; s < labels.season.length; s++) {
-            source.filter('filter', { stype: 'season' }, { index: s });
-            var voices = (labels.voice || []).slice();
-            for (var v = 0; v < voices.length; v++) {
-              batch = [];
-              source.filter('filter', { stype: 'voice' }, { index: v });
-              for (var i = 0; i < batch.length; i++) rows.push({ season: s, voice: voices[v], element: batch[i] });
-            }
-          }
-        } catch (e) {
-          return finish();
+        if (finished) return;
+        if (step) return stepDone(true);
+        // a redraw nobody asked for
+        if (seasons) return;
+        // shortcut: a source that lists a series without a season filter shows nothing here; open it from its row
+        if (!labels || !labels.season || !labels.season.length) return finish('none');
+        wanted = pin ? watch.pinSeason(pin, labels.season) : -1;
+        seasons = labels.season.map(function (n, i) {
+          return i;
+        });
+        if (wanted > 0) {
+          seasons.splice(wanted, 1);
+          seasons.unshift(wanted);
         }
-        // shortcut: every season × voice is redrawn once per card (fast for Alloha/Kodik, all in one answer); limit to the pinned season if weak TVs stall
-        finish(true);
+        setTimeout(next, 0);
       };
-      probe.find();
-      return function () {
-        finish();
-      };
+      try {
+        probe.find();
+      } catch (e) {
+        finish('error');
+      }
     }
     episodeVariants.cache = {};
-    episodeVariants.sources = ['alloha', 'kodik'];
+    episodeVariants.pending = {};
 
-    // "По сериям": season → episode → source; an online source opens on that episode, TorBox on the card
-    function episodesMenu(card, enabled) {
+    // "По сериям", one episode: every source as a row with its state (loading, its voices for this episode, ✕, !),
+    // filled in as the sources answer. A voice plays the episode; a source row opens the source on it.
+    function variantsScreen(object) {
       var L = Lampa.Lang.translate;
-      // read once: while a select box is open it is the active controller
-      enabled = enabled || Lampa.Controller.enabled().name;
-      var back = function back() {
-        Lampa.Controller.toggle(enabled);
+      var card = object.card;
+      var pin = object.pin;
+      var self = this;
+      var scroll = new Lampa.Scroll({ mask: true, over: true });
+      var html = $('<div class="online-mod-variants"></div>');
+      var last = null;
+      var alive = true;
+      var groups = {};
+      var row = function row(title, subtitle, cls) {
+        var item = $('<div class="online-mod-variant selector"><div class="online-mod-variant__text"><div class="online-mod-variant__title"></div><div class="online-mod-variant__subtitle"></div></div><div class="online-mod-variant__status"></div></div>');
+        item.find('.online-mod-variant__title').text(title);
+        item.find('.online-mod-variant__subtitle').text(subtitle || '');
+        if (cls) item.addClass(cls);
+        item.on('hover:focus', function (e) {
+          last = e.target;
+          scroll.update($(e.target), true);
+        });
+        return item;
       };
-      // Lampa's split of a single TMDB season is still loading: the numbers would be TMDB's
-      // (asked once per card: a split that cannot load falls back to TMDB's numbers on the next press)
-      if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) && !episodesMenu.waited[card.id]) {
-        episodesMenu.waited[card.id] = true;
-        watch.prefetch(card);
-        return Lampa.Noty.show(L('online_mod_wait'));
-      }
-      var episodes = function episodes(season) {
+      // new rows join the remote's navigation without moving the focus
+      var refresh = function refresh() {
+        if (!alive || Lampa.Activity.active().activity !== self.activity || Lampa.Controller.enabled().name !== 'content') return;
+        Lampa.Controller.collectionSet(scroll.render());
+        Lampa.Controller.collectionFocus(last || false, scroll.render());
+      };
+      var open = function open(b, pick) {
+        online_loading = false;
+        loadOnline(card, b.name, pin, pick);
+      };
+      var fill = function fill(b, res) {
+        var g = groups[b.name];
+        g.rows.forEach(function (r) {
+          if (last === r[0]) last = g.head[0];
+          r.remove();
+        });
+        g.rows = [];
+        g.res = res;
+        var status = g.head.find('.online-mod-variant__status').removeClass('is-loading is-error is-choose').text('');
+        g.head.find('.online-mod-variant__subtitle').text('');
+        if (!res) {
+          status.addClass('is-loading');
+          return refresh();
+        }
+        var found = res.status === 'ok' ? watch.pinVariants(pin, res.rows) : [];
+        if (res.status === 'error') {
+          status.addClass('is-error').text('✕');
+          if (res.message) g.head.find('.online-mod-variant__subtitle').text(res.message);
+        } else if (res.status === 'choose') {
+          status.addClass('is-choose').text('!');
+          g.head.find('.online-mod-variant__subtitle').text(L('online_mod_variants_choose'));
+        } else if (!found.length) status.text('—');
+        var after = g.head;
+        found.forEach(function (r) {
+          var el = r.element;
+          var item = row(r.voice, [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · '), 'online-mod-variant--voice');
+          item.on('hover:enter', function () {
+            open(b, { season: r.season, voice_name: r.voice });
+          });
+          after.after(item);
+          after = item;
+          g.rows.push(item);
+        });
+        refresh();
+      };
+      var ask = function ask(b) {
+        fill(b, null);
+        episodeVariants(card, b.name, pin, function (res, covered) {
+          if (!alive) return;
+          if (!covered) return ask(b);
+          fill(b, res);
+        });
+      };
+      var choose = function choose(b) {
+        var list = groups[b.name].res.similars || [];
         Lampa.Select.show({
-          title: L('online_mod_season') + ' ' + season,
-          items: watch.episodeItems(card, season),
-          onBack: function onBack() {
-            episodesMenu(card, enabled);
-          },
-          onSelect: function onSelect(e) {
-            var pin = { season: e.season, episode: e.episode };
-            var enabledList = Balancers.filter(function (b) {
-              return !b.disabled;
-            });
-            var probed = enabledList.filter(function (b) {
-              return episodeVariants.sources.indexOf(b.name) >= 0;
-            });
-            var found = {};
-            var cancels = [];
-            var left = probed.length;
-            var shown = false;
-            var show = function show() {
-              if (shown) return;
-              shown = true;
-              clearTimeout(guard);
-              cancels.forEach(function (c) {
-                c();
-              });
-              Lampa.Loading.stop();
-              var items = [];
-              probed.forEach(function (b) {
-                watch.pinVariants(pin, found[b.name]).forEach(function (r) {
-                  var el = r.element;
-                  items.push({
-                    title: b.title + ' · ' + r.voice,
-                    subtitle: [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · '),
-                    balancer: b.name,
-                    pick: { season: r.season, voice_name: r.voice }
-                  });
-                });
-              });
-              enabledList.forEach(function (b) {
-                if (!items.some(function (i) {
-                  return i.balancer === b.name;
-                })) items.push({ title: b.title, balancer: b.name });
-              });
-              if (Lampa.Component.get && Lampa.Component.get('torbox_main')) items.push({ title: 'TorBox', torbox: true });
-              Lampa.Select.show({
-                title: watch.title(pin),
-                items: items,
-                onBack: function onBack() {
-                  episodes(season);
-                },
-                onSelect: function onSelect(b) {
-                  back();
-                  if (b.torbox) return Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
-                  online_loading = false;
-                  loadOnline(card, b.balancer, pin, b.pick);
-                }
-              });
+          title: b.title,
+          items: list.map(function (e) {
+            return {
+              title: e.title || e.ru_title || e.nameRu || e.en_title || e.orig_title || e.nameOriginal || '',
+              subtitle: [(e.year || e.start_date || '') + '', e.orig_title || e.nameOriginal || e.en_title || ''].filter(Boolean).join(' · '),
+              elem: e
             };
-            var guard = setTimeout(show, 10000);
-            if (!left) return show();
-            // back while loading shows what has come so far
-            Lampa.Loading.start(show);
-            probed.forEach(function (b) {
-              cancels.push(episodeVariants(card, b.name, function (rows) {
-                found[b.name] = rows;
-                if (--left === 0) show();
-              }));
-            });
+          }),
+          onBack: function onBack() {
+            Lampa.Controller.toggle('content');
+          },
+          onSelect: function onSelect(a) {
+            Lampa.Controller.toggle('content');
+            // an episode card is a video, not a title: the source's own screen plays it
+            if (a.elem.episode) return open(b);
+            watch.similarSave(card, b.name, a.elem);
+            ask(b);
           }
         });
       };
-      Lampa.Select.show({
-        title: L('online_mod_by_episodes'),
-        items: watch.seasonItems(card),
-        onBack: back,
-        onSelect: function onSelect(s) {
-          episodes(s.season);
+      this.create = function () {
+        if (!$('#online-mod-variants-css').length) $('head').append('<style id="online-mod-variants-css">' + '.online-mod-variants{padding:1.5em 2em 3em}' + '.online-mod-variants__head{font-size:1.7em;font-weight:600;margin:0 0 .2em}' + '.online-mod-variants__name{opacity:.6;font-size:1.2em;margin:0 0 1.2em}' + '.online-mod-variant{display:flex;align-items:center;padding:.8em 1.2em;margin-bottom:.4em;border-radius:.6em;background:rgba(255,255,255,.07)}' + '.online-mod-variant--voice{margin-left:2.2em;background:rgba(255,255,255,.035)}' + '.online-mod-variant.focus{background:#fff;color:#000}' + '.online-mod-variant__text{flex:1;min-width:0}' + '.online-mod-variant__title{font-size:1.3em}' + '.online-mod-variant--voice .online-mod-variant__title{font-size:1.15em}' + '.online-mod-variant__subtitle{opacity:.6;margin-top:.2em}' + '.online-mod-variant__subtitle:empty{display:none}' + '.online-mod-variant__status{width:1.5em;height:1.5em;flex-shrink:0;margin-left:1em;font-weight:700;font-size:1.2em;text-align:center;line-height:1.5em;box-sizing:border-box}' + '.online-mod-variant__status.is-loading{border:.18em solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:online-mod-spin 1s linear infinite}' + '.online-mod-variant.focus .online-mod-variant__status.is-loading{border-color:rgba(0,0,0,.2);border-top-color:#000}' + '.online-mod-variant__status.is-error{color:#e5484d}' + '.online-mod-variant__status.is-choose{color:#f5a524}' + '@keyframes online-mod-spin{to{transform:rotate(360deg)}}' + '</style>');
+        var head = $('<div><div class="online-mod-variants__head"></div><div class="online-mod-variants__name"></div></div>');
+        head.find('.online-mod-variants__head').text(watch.title(pin));
+        head.find('.online-mod-variants__name').text(object.name || '');
+        scroll.append(head);
+        var enabled = Balancers.filter(function (b) {
+          return !b.disabled;
+        });
+        enabled.forEach(function (b) {
+          var g = groups[b.name] = { head: row(b.title, ''), rows: [], res: null };
+          g.head.on('hover:enter', function () {
+            if (g.res && g.res.status === 'choose') return choose(b);
+            open(b);
+          });
+          scroll.append(g.head);
+        });
+        if (Lampa.Component.get && Lampa.Component.get('torbox_main')) {
+          var torbox = row('TorBox', '');
+          torbox.on('hover:enter', function () {
+            Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
+          });
+          scroll.append(torbox);
+        }
+        var episode = object.episode;
+        if (episode && episode.emit) {
+          var markTitle = function markTitle() {
+            return L(episode.data && episode.data.timeline && episode.data.timeline.percent ? 'episode_mark_unwatched' : 'episode_mark_watched');
+          };
+          var mark = row(markTitle(), '');
+          mark.on('hover:enter', function () {
+            episode.emit('mark');
+            mark.find('.online-mod-variant__title').text(markTitle());
+          });
+          scroll.append(mark);
+        }
+        html.append(scroll.render());
+        enabled.forEach(function (b) {
+          groups[b.name].head.find('.online-mod-variant__status').addClass('is-loading');
+        });
+        // sources that need the user's IP or the FanSerials mirror get them first, as loadOnline does
+        checkMyIp(function () {
+          checkCurrentFanserialsHost(function () {
+            if (alive) enabled.forEach(ask);
+          });
+        });
+        return this.render();
+      };
+      this.start = function () {
+        if (Lampa.Activity.active().activity !== this.activity) return;
+        Lampa.Background.immediately(Lampa.Utils.cardImgBackgroundBlur(card));
+        Lampa.Controller.add('content', {
+          toggle: function toggle() {
+            Lampa.Controller.collectionSet(scroll.render());
+            Lampa.Controller.collectionFocus(last || false, scroll.render());
+          },
+          up: function up() {
+            if (Navigator.canmove('up')) Navigator.move('up');else Lampa.Controller.toggle('head');
+          },
+          down: function down() {
+            Navigator.move('down');
+          },
+          left: function left() {
+            if (Navigator.canmove('left')) Navigator.move('left');else Lampa.Controller.toggle('menu');
+          },
+          back: function back() {
+            Lampa.Activity.backward();
+          }
+        });
+        Lampa.Controller.toggle('content');
+      };
+      this.render = function () {
+        return html;
+      };
+      this.pause = function () {};
+      this.stop = function () {};
+      this.destroy = function () {
+        alive = false;
+        scroll.destroy();
+        html.remove();
+      };
+    }
+
+    // "По сериям": Lampa's own episodes screen (stills, progress, its split of a single season), built the
+    // same way; an episode opens variantsScreen instead of Lampa's watch/mark menu
+    function episodesScreen(object) {
+      var Maker = Lampa.Maker;
+      var card = object.card;
+      var comp = Lampa.Utils.createInstance(Maker.get('Category'), object, {
+        module: Maker.module('Category').toggle(Maker.module('Category').MASK.base, 'Explorer'),
+        items: {
+          mapping: 'list'
         }
       });
+      var chooseSeason = function chooseSeason() {
+        var total = object.seasons_count || Lampa.Utils.countSeasons(card);
+        var select = [];
+        for (var i = total; i > 0; i--) {
+          select.push({
+            title: Lampa.Lang.translate('torrent_serial_season') + ' ' + i,
+            season: i,
+            selected: (object.season || Lampa.Utils.countSeasons(card)) == i
+          });
+        }
+        Lampa.Select.show({
+          title: Lampa.Lang.translate('torrent_serial_season'),
+          items: select,
+          onSelect: function onSelect(a) {
+            Lampa.Controller.toggle('content');
+            Lampa.Activity.replace({ season: a.season });
+          },
+          onBack: function onBack() {
+            Lampa.Controller.toggle('content');
+          }
+        });
+      };
+      comp.use({
+        onCreate: function onCreate() {
+          var self = this;
+          var season = object.season || Lampa.Utils.countSeasons(card);
+          Lampa.Api.seasons(card, [season], function (v) {
+            var data = v[season];
+            if (!data || !data.episodes || !data.episodes.length) return self.empty();
+            var real = Lampa.Utils.countSeasons(card);
+            if (real > 1) {
+              object.seasons_count = real;
+              if (data.episodes_original) data.episodes = data.episodes_original;
+            } else object.seasons_count = data.seasons_count || real;
+            Lampa.Arrays.extend(data, {
+              params: {
+                createInstance: function createInstance(item) {
+                  return new (Maker.get('Season'))(item);
+                },
+                module: Maker.module('Season').only('Line', 'Callback'),
+                emit: {
+                  onEnter: chooseSeason
+                }
+              }
+            });
+            var results = [data];
+            data.episodes.forEach(function (episode) {
+              // the series' title for the timeline key, as Lampa does
+              episode.original_name = card.original_name;
+              episode.params = {
+                createInstance: function createInstance() {
+                  return new (Maker.get('Episode'))(episode);
+                },
+                module: Maker.module('Episode').toggle(Maker.module('Episode').MASK.base, 'Line'),
+                onEnter: function onEnter(item) {
+                  var d = item.data || {};
+                  var p = { season: d.season_number, episode: d.episode_number };
+                  Lampa.Activity.push({ url: '', title: watch.title(p), component: 'online_mod_variants', card: card, pin: p, name: d.name || '', episode: item, page: 1 });
+                }
+              };
+              results.push(episode);
+            });
+            self.build({ results: results });
+            // the voices are looked up while the user browses: this season first
+            checkMyIp(function () {
+              checkCurrentFanserialsHost(function () {
+                Balancers.forEach(function (b) {
+                  if (!b.disabled && episodesScreen.prefetch.indexOf(b.name) >= 0) episodeVariants(card, b.name, { season: season, episode: 0 }, function () {});
+                });
+              });
+            });
+          });
+        },
+        onController: function onController() {
+          Lampa.Background.immediately(Lampa.Utils.cardImgBackgroundBlur(card));
+        }
+      });
+      return comp;
     }
-    episodesMenu.waited = {};
+    // looked up ahead: the sources that answer every season and voice in one go; the others start on the episode's screen
+    episodesScreen.prefetch = ['alloha', 'kodik', 'rezka2', 'turbo'];
 
     function loadOnline(object, balancer, pin, pick) {
       if (online_loading) return;
@@ -20826,6 +21144,8 @@
     function initMain() {
       // нужна заглушка, а то при страте лампы говорит пусто
       Lampa.Component.add('online_mod', component); //то же самое
+      Lampa.Component.add('online_mod_episodes', episodesScreen);
+      Lampa.Component.add('online_mod_variants', variantsScreen);
 
       resetTemplates();
       initModssIntegration();
@@ -20864,7 +21184,7 @@
           if (card && (card.original_name || card.number_of_seasons)) {
             var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
             by.on('hover:enter', function () {
-              episodesMenu(card);
+              Lampa.Activity.push({ url: '', title: Lampa.Lang.translate('online_mod_by_episodes'), component: 'online_mod_episodes', card: card, page: 1 });
             });
             btn.after(by);
           }
