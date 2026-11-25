@@ -492,6 +492,13 @@
     return { id: 'random', source: 'yani', yani_random: true, title: 'Случайное аниме', img: DICE };
   }
 
+  // Lampa's own continue row hides Japanese shows outside its anime category screen.
+  // No url: the row is history, not a pageable yani list.
+  function continueAnime() {
+    var results = Lampa.Favorite && Lampa.Favorite.continues ? Lampa.Favorite.continues('anime') : [];
+    return results.length ? { title: Lampa.Lang.translate('title_continue') + ' · Аниме', results: results } : null;
+  }
+
   var source = {
     title: 'YummyAnime',
     category: function (params, oncomplete, onerror) {
@@ -519,8 +526,13 @@
           }, s.random);
         };
       });
+      // ContentRows only reach tmdb/cub category screens, so our screen adds the row itself.
+      var cont = continueAnime();
+      if (cont) parts.unshift(function (call) {
+        call(cont);
+      });
       function load(ok, err) {
-        Lampa.Api.partNext(parts, SECTIONS.length, ok, err);
+        Lampa.Api.partNext(parts, parts.length, ok, err);
       }
       load(oncomplete, onerror);
       return load;
@@ -644,6 +656,21 @@
 
     Lampa.Menu.addButton(ICON, 'YummyAnime', function () {
       Lampa.Activity.push({ url: '', title: 'YummyAnime', component: 'category', source: 'yani', page: 1 });
+    });
+
+    if (Lampa.ContentRows) Lampa.ContentRows.add({
+      name: 'yani_continue_anime',
+      title: Lampa.Lang.translate('title_continue') + ' · Аниме',
+      // Stock continue_watch is index 1; 2 puts this row right after it.
+      index: 2,
+      screen: ['main'],
+      call: function () {
+        var row = continueAnime();
+        if (!row) return;
+        return function (call) {
+          call(row);
+        };
+      }
     });
 
     wrapFull('tmdb');
