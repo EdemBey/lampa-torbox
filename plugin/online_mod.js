@@ -43,6 +43,7 @@
 //24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
 //25.11.2026 - Skip button on Alloha: the player's own opening/ending marks (bnsi skipTime) via the helper's /skips
 //25.11.2026 - One "watched" across balancers and TorBox: TMDB season/episode key with Timeline.link (TimeCode server sync); unproven numbering keeps its own key
+//25.11.2026 - Setting «Адрес Lampac»: loads its timecode.js (server-side "watched" sync), off when empty
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -20111,6 +20112,23 @@
         });
       }
 
+      {
+        Lampa.SettingsApi.addParam({
+          component: 'online_mod',
+          param: {
+            name: 'online_mod_lampac_server',
+            placeholder: 'http://192.168.0.10:9118',
+            type: 'input',
+            values: '',
+            "default": ''
+          },
+          field: {
+            name: 'Адрес Lampac (синхронизация просмотров)',
+            description: 'Подключает timecode.js с вашего Lampac: «просмотрено» общее на всех устройствах. Пусто — ничего не грузится. Действует после перезапуска Lampa. Lampa в браузере по https не загрузит http-адрес'
+          }
+        });
+      }
+
       Lampa.Settings.listener.follow('open', function (e) {
         if (e.name == 'main') {
           Balancers.forEach(function (s) {
@@ -20120,6 +20138,14 @@
       });
     }
 
+    // Lampac's TimeCode plugin syncs Lampa.Timeline through the user's own Lampac; nothing is loaded without its address
+    function loadTimecode() {
+      var s = ((Lampa.Storage.get('online_mod_lampac_server', '') || '') + '').replace(/^\s+|\s+$/g, '').replace(/\/+$/, '');
+      if (!s || window.lampac_timecode_plugin) return;
+      if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+      Lampa.Utils.putScriptAsync([s + '/timecode.js'], function () {});
+    }
+
     function startPlugin() {
       if (Utils.isDebug3()) return;
       logApp();
@@ -20127,6 +20153,7 @@
       initLang();
       initMain();
       initSettings();
+      loadTimecode();
     }
 
     startPlugin();
