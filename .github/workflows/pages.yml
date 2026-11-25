@@ -26,6 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - run: for f in tools/*.test.mjs server/*.test.mjs; do node "$f" || exit 1; done
       - run: node tools/build-ultra.mjs && node --check ultra.js && cp ultra.js ultra
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
