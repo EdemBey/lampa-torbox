@@ -691,11 +691,18 @@ http.createServer(async (req, res) => {
     if (await handleTorbox(req, res, url)) return;
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
-      // Answer right away: Lampa asks this for every episode of the season before playback
+      // Without real=1: Answer right away: Lampa asks this for every episode of the season before playback
       // starts, so a resolve here would cost a /bnsi per episode. The plugin drops 4K itself
       // where Alloha has no uhd mark; a quality the episode lacks falls back in pickQuality.
       const out = {};
-      for (const label of QUALITIES) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
+      // real=1: the «По сериям» screen asks for one focused voice; the resolve is kept (iframeInfo caches
+      // by episode) and playback of that episode reuses it.
+      let labels = QUALITIES;
+      if (url.searchParams.get('real') === '1') {
+        const chosen = sourceFor(await iframeInfo(src), src);
+        labels = QUALITIES.filter((label) => chosen && chosen.qualities[label]);
+      }
+      for (const label of labels) out[label + 'p'] = `${base}/play.m3u8?q=${label}&url=${encodeURIComponent(src)}`;
       return send(res, 200, JSON.stringify(out), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/audios') {

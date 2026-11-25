@@ -16,7 +16,8 @@ new Function('episodeVariants', 'Lampa', src.slice(from, to))(episodeVariants, L
 const entry = {
   res: { status: 'ok', rows: [
     { season: 1, voice: 'AniLibria', element: { season: '2', episode: 11, quality: '1080p', watch_place: { season: 2, episode: 11 }, media: { big: 'x' } } },
-    { season: 0, voice: 'OVA dub', element: { season: '2', episode: 1, quality: '', watch_info: { src: 'shiki:5', part: {} } } }
+    { season: 0, voice: 'OVA dub', element: { season: '2', episode: 1, quality: '', watch_info: { src: 'shiki:5', part: {} } } },
+    { season: 1, voice: 'Alloha 4K', element: { season: '2', episode: 3, quality: '360p ~ 2160p', quality_base: 'https://x/?a=1', quality_tid: 77, quality_uhd: true } }
   ] },
   labels: ['Сезон 1', 'Сезон 2'], done: { 1: true }, all: false
 };
@@ -27,7 +28,13 @@ new Function('episodeVariants', 'Lampa', src.slice(from, to))(fresh, Lampa);
 const back = fresh.load('kodik:tmdb_1');
 assert.deepStrictEqual(back.res.rows.map((r) => [r.season, r.voice, r.element.season, r.element.episode, r.element.quality, r.element.watch_place, !!(r.element.watch_info && r.element.watch_info.src)]), [
   [1, 'AniLibria', '2', 11, '1080p', { season: 2, episode: 11 }, false],
-  [0, 'OVA dub', '2', 1, '', null, true]
+  [0, 'OVA dub', '2', 1, '', null, true],
+  [1, 'Alloha 4K', '2', 3, '360p ~ 2160p', null, false]
+]);
+assert.deepStrictEqual(back.res.rows.map((r) => [r.element.quality_base, r.element.quality_tid, r.element.quality_uhd]), [
+  [undefined, undefined, undefined],
+  [undefined, undefined, undefined],
+  ['https://x/?a=1', 77, true]
 ]);
 assert.deepStrictEqual([back.res.status, back.labels, back.done['1'], back.all], ['ok', ['Сезон 1', 'Сезон 2'], true, false]);
 // an old answer is not used

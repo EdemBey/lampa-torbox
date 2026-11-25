@@ -3414,6 +3414,17 @@
       return max;
     }
 
+    // the best resolution in the helper's /qualities answer (keys like '1080p'); 4K and 2K only where uhd is marked; 0 = nothing
+    function allohaBest(map, uhd) {
+      var max = 0;
+      if (!map || typeof map !== 'object') return 0;
+      Object.keys(map).forEach(function (k) {
+        var n = parseInt(k, 10);
+        if (n > max && (uhd || (n !== 2160 && n !== 1440))) max = n;
+      });
+      return max;
+    }
+
     // best offered resolution per film id, kept between sessions (the newest 300 titles)
     function rezkaTitleMax(film_id) {
       var all = Lampa.Storage.get('online_mod_rezka2_titles', {});
@@ -15772,6 +15783,10 @@
                   season: s_num,
                   episode: e_num,
                   media: media,
+                  // the «По сериям» screen asks the helper for this voice's real qualities
+                  quality_base: extract.iframe.replace(/&(translation|season|episode|audio)=[^&]*/g, ''),
+                  quality_tid: media.id_translation,
+                  quality_uhd: !!media.uhd,
                   alloha_skips: server + '/skips?url=' + encodeURIComponent(extract.iframe.replace(/&(translation|season|episode|audio)=[^&]*/g, '') + '&translation=' + media.id_translation + '&season=' + s_num + '&episode=' + e_num),
                   // The helper picks the track by label: Alloha renumbers tracks from episode to episode.
                   // A voice without the "Дорожка" row keeps a track picked in the player.
@@ -21327,11 +21342,13 @@
       var s = episodeVariants.all()[key];
       if (!s || typeof s != 'object' || !s.r || Date.now() - (s.t || 0) > 6 * 3600 * 1000) return null;
       var rows = s.r.map(function (r) {
-        return {
-          season: r[0],
-          voice: s.v[r[1]],
-          element: { season: r[2], episode: r[3], quality: s.q[r[4]] || '', watch_place: r[5] ? { season: r[5], episode: r[6] } : null, watch_info: r[7] ? { src: 1 } : null }
-        };
+        var element = { season: r[2], episode: r[3], quality: s.q[r[4]] || '', watch_place: r[5] ? { season: r[5], episode: r[6] } : null, watch_info: r[7] ? { src: 1 } : null };
+        if (r[8] && s.b) {
+          element.quality_base = s.b;
+          element.quality_tid = r[8];
+          element.quality_uhd = !!r[9];
+        }
+        return { season: r[0], voice: s.v[r[1]], element: element };
       });
       return { res: { status: s.s, rows: rows, similars: null, message: '' }, labels: s.l || [], done: s.d || {}, all: !!s.a };
     };
@@ -21346,12 +21363,16 @@
         }
         return i;
       };
+      var base = '';
       var rows = entry.res.rows.map(function (row) {
         var el = row.element || {};
         var w = el.watch_place;
-        return [row.season, index(voices, row.voice), el.season, el.episode, index(quals, el.quality || ''), w ? w.season : 0, w ? w.episode : 0, el.watch_info && el.watch_info.src ? 1 : 0];
+        // shortcut: one shared base per card; keep it per row if a card's Alloha rows ever carry two iframes
+        if (!base && el.quality_base) base = el.quality_base;
+        return [row.season, index(voices, row.voice), el.season, el.episode, index(quals, el.quality || ''), w ? w.season : 0, w ? w.episode : 0, el.watch_info && el.watch_info.src ? 1 : 0, el.quality_base && el.quality_tid ? el.quality_tid : 0, el.quality_uhd ? 1 : 0];
       });
       var one = { t: Date.now(), s: entry.res.status, l: entry.labels, d: entry.done, a: entry.all, v: voices, q: quals, r: rows };
+      if (base) one.b = base;
       var size = JSON.stringify(one).length;
       var all = episodeVariants.all();
       delete all[key];
@@ -21590,9 +21611,65 @@
         if (cls) item.addClass(cls);
         item.on('hover:focus', function (e) {
           last = e.target;
+          clearTimeout(qTimer);
           scroll.update($(e.target), true);
         });
         return item;
+      };
+      var headSub = function headSub(b, found) {
+        // before any HDrezka playback there is no saved result yet: the Premium setting decides
+        var cap = b.name === 'rezka2' ? +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720) : 0;
+        var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), cap);
+        groups[b.name].head.find('.online-mod-variant__subtitle').text([badge, L('online_mod_variants_voices') + ' ' + found.length].filter(Boolean).join(' · '));
+      };
+      var rowSub = function rowSub(el) {
+        return [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · ');
+      };
+      // Alloha does not list a voice's resolution: it is asked from the helper once the remote stays on the voice
+      var qTimer = 0;
+      var qBusy = false;
+      var qNext = null;
+      var qNet = new Lampa.Reguest();
+      var qApply = function qApply(b, r, item, max) {
+        var el = r.element;
+        if (!max || !alive) return;
+        var i = (el.quality || '').indexOf(' / ');
+        el.quality = '360p ~ ' + max + 'p' + (i < 0 ? '' : el.quality.slice(i));
+        item.find('.online-mod-variant__subtitle').text(rowSub(el));
+        var g = groups[b.name];
+        if (g.found && g.found.indexOf(r) >= 0) headSub(b, g.found);
+      };
+      var qRun = function qRun(w) {
+        qBusy = true;
+        var done = function done() {
+          qBusy = false;
+          var n = qNext;
+          qNext = null;
+          if (n && alive) qRun(n);
+        };
+        qNet.clear();
+        qNet.timeout(15000);
+        qNet["native"](w.url, function (res) {
+          var map = res;
+          if (typeof res === 'string') {
+            try { map = JSON.parse(res); } catch (e) { map = null; }
+          }
+          var max = allohaBest(map, w.uhd);
+          variantsScreen.checked[w.url] = max;
+          qApply(w.b, w.r, w.item, max);
+          done();
+        }, done, false, {
+          dataType: 'text'
+        });
+      };
+      var qWatch = function qWatch(b, r, item) {
+        var el = r.element;
+        var server = Utils.helperServer();
+        if (!server || !el.quality_base || !el.quality_tid) return;
+        var url = server + '/qualities?url=' + encodeURIComponent(el.quality_base + '&translation=' + el.quality_tid + (el.season ? '&season=' + el.season + '&episode=' + el.episode : '')) + '&real=1'; // no &audio=: the default track's qualities are shown
+        if (variantsScreen.checked[url] != null) return qApply(b, r, item, variantsScreen.checked[url]);
+        var w = { url: url, b: b, r: r, item: item, uhd: el.quality_uhd };
+        if (qBusy) qNext = w;else qRun(w);
       };
       // new rows join the remote's navigation without moving the focus
       var refresh = function refresh() {
@@ -21631,18 +21708,18 @@
           status.addClass('is-choose').text('!');
           g.head.find('.online-mod-variant__subtitle').text(L('online_mod_variants_choose'));
         } else if (!found.length) status.text('—');
-        if (res.status === 'ok' && found.length) {
-          // before any HDrezka playback there is no saved result yet: the Premium setting decides
-          var cap = b.name === 'rezka2' ? +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720) : 0;
-          var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), cap);
-          g.head.find('.online-mod-variant__subtitle').text([badge, L('online_mod_variants_voices') + ' ' + found.length].filter(Boolean).join(' · '));
-        }
+        g.found = found;
+        if (res.status === 'ok' && found.length) headSub(b, found);
         var after = g.head;
         found.forEach(function (r) {
-          var el = r.element;
-          var item = row(r.voice, [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · '), 'online-mod-variant--voice');
+          var item = row(r.voice, rowSub(r.element), 'online-mod-variant--voice');
           item.on('hover:enter', function () {
             open(b, { season: r.season, voice_name: r.voice });
+          });
+          item.on('hover:focus', function () {
+            qTimer = setTimeout(function () {
+              qWatch(b, r, item);
+            }, 1000);
           });
           after.after(item);
           after = item;
@@ -21811,10 +21888,14 @@
       this.stop = function () {};
       this.destroy = function () {
         alive = false;
+        clearTimeout(qTimer);
+        qNet.clear();
         scroll.destroy();
         html.remove();
       };
     }
+    // real qualities already asked this session, by request URL
+    variantsScreen.checked = {};
 
     // "По сериям": Lampa's own episodes screen (stills, progress, its split of a single season), built the
     // same way; an episode opens variantsScreen instead of Lampa's watch/mark menu
