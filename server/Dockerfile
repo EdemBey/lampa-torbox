@@ -19,7 +19,7 @@ ADD --checksum=sha256:bc9bd2522fe1850dd54c0fff189c8dd606df3f222ab2a905f2dd255123
 RUN tar xzf /tmp/curl-impersonate.tgz -C /usr/local/bin curl-impersonate && rm /tmp/curl-impersonate.tgz
 
 WORKDIR /app
-COPY alloha.mjs alloha-sign.mjs turbo.mjs rezka.mjs entrypoint.sh ./
+COPY alloha.mjs alloha-sign.mjs turbo.mjs rezka.mjs torbox.mjs entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
 ENV PORT=8790

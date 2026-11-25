@@ -10,6 +10,7 @@ import { Readable, pipeline } from 'node:stream';
 import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 import { handleRezka, isRezkaPath } from './rezka.mjs';
+import { handleTorbox } from './torbox.mjs';
 
 const PORT = Number(process.env.PORT || 8790);
 // Alloha drops a session a few minutes in when its requests do not come from a browser, and
@@ -662,6 +663,7 @@ http.createServer(async (req, res) => {
     }
     if (await handleRezka(req, res)) return;
     if (await handleTurbo(req, res, url, base)) return;
+    if (await handleTorbox(req, res, url)) return;
     if (url.pathname === '/qualities') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
       // Answer right away: Lampa asks this for every episode of the season before playback

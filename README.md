@@ -44,7 +44,7 @@ https://edembey.github.io/lampa-torbox/ultra.js
 
 ### TorBox
 
-Торренты через [TorBox](https://torbox.app): поиск по IMDb через Torrentio, плюс MaxVol/Jacred, прямое воспроизведение, выбор серии и продолжение просмотра. Нужен только **TorBox API-ключ** в настройках плагина. Он же используется для Torrentio. Запросы идут через CORS-прокси по умолчанию (сторонний Cloudflare Worker), его можно сменить в настройках.
+Торренты через [TorBox](https://torbox.app): поиск по IMDb через Torrentio, плюс MaxVol/Jacred, прямое воспроизведение, выбор серии и продолжение просмотра. Нужен только **TorBox API-ключ** в настройках плагина. Он же используется для Torrentio. Если задан «Адрес своего сервера» (online_mod), запросы к TorBox идут через него. На Android без своего сервера — напрямую, в браузере — через сторонний CORS-прокси (Cloudflare Worker, меняется в настройках), который видит ключ.
 
 ### YummyAnime
 
@@ -79,7 +79,7 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 ## Сервер
 
-`server/` — помощник для Alloha, Turbo и HDrezka в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo и HDrezka — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает), cookie и пароль в логи не пишет.
+`server/` — помощник для Alloha, Turbo, HDrezka и TorBox в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo, HDrezka и TorBox — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает) и на api.torbox.app; cookie, пароль и ключ TorBox в логи не пишет. Маршрут `/torbox` пересылает запросы любому, кто знает адрес сервера (с любым ключом TorBox), поэтому адрес держите в секрете.
 
 Нужен `server/wireproxy.conf` (в git не хранится): WireGuard-профиль WARP (`wgcf register && wgcf generate`, затем скопировать `wgcf-profile.conf` в `server/wireproxy.conf`) и в конце секция
 

@@ -8,7 +8,7 @@
  *  - Filters/sort persistence, deduped lists, stable sort, cached-only toggle
  *  - Episodes: mkv/mp4/avi filter, natural sort, watched persist, continue panel
  *  - Safe storage parsing, JSON fallbacks, idempotent style injection
- *  - UX/Sec: API key masked; Authorization never forwarded to proxy; validations
+ *  - UX/Sec: API key masked; the TorBox key goes to your own server if set, else straight to TorBox on Android, else via the CORS proxy, which sees it
  *  - Performance: minimal DOM thrash; style injected once; result caps & dedup
  *  - Compatibility: public surface (component id, templates, settings keys)
  * --------------------------------------------------------------------- */
@@ -642,7 +642,7 @@ try {
     };
   })();
 
-  // ───────────────────────────── Networking (via CORS proxy only) ─────────────────────────────
+  // ───────────────────────────── Networking (own server / Android native / CORS proxy) ─────────────────────────────
   const Api = (() => {
     const TB_MAIN = 'https://api.torbox.app/v1/api';
 
@@ -710,12 +710,73 @@ try {
       }
     }
 
-    async function request(url, opt = {}, outerSignal) {
-      requireProxy();
+    // The same «Адрес своего сервера» field online_mod uses for Alloha/Turbo/HDrezka.
+    function helperServer() {
+      try {
+        return (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+      } catch (_) {
+        return '';
+      }
+    }
 
+    function canUseNative() {
+      try {
+        return !!(Lampa.Platform.is('android') && typeof Lampa.Reguest === 'function');
+      } catch (_) {
+        return false;
+      }
+    }
+
+    // Lampa's native network on Android is not bound by CORS. Success gets the body only (HTTP 2xx);
+    // errors get a jqXHR-like object with status/responseText, as online_mod relies on.
+    function nativeRequest(url, fetchOptions, headers, signal, timeoutMs) {
+      return new Promise((resolve, reject) => {
+        const net = new Lampa.Reguest();
+        const onAbort = () => {
+          net.clear();
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          reject(e);
+        };
+        if (signal.aborted) return onAbort();
+        signal.addEventListener('abort', onAbort, { once: true });
+
+        let post = false;
+        if ((fetchOptions.method || 'GET').toUpperCase() === 'POST') {
+          const body = fetchOptions.body;
+          // FormData cannot cross the native bridge; TorBox takes the same fields url-encoded.
+          post = typeof FormData !== 'undefined' && body instanceof FormData ? new URLSearchParams(body).toString() : String(body || '');
+          headers = Object.assign({ 'Content-Type': 'application/x-www-form-urlencoded' }, headers);
+        }
+
+        // Slightly longer than our own timer, so the caller's timeout message wins.
+        net.timeout(timeoutMs + 1000);
+        net['native'](
+          url,
+          (str) => {
+            signal.removeEventListener('abort', onAbort);
+            resolve({ status: 200, text: typeof str === 'string' ? str : JSON.stringify(str) });
+          },
+          (a, c) => {
+            signal.removeEventListener('abort', onAbort);
+            if (a && a.status) resolve({ status: a.status, text: a.responseText || '' });
+            else reject(new Error((net.errorDecode && net.errorDecode(a, c)) || translate('torbox_error_network')));
+          },
+          post,
+          { dataType: 'text', headers }
+        );
+      });
+    }
+
+    async function request(url, opt = {}, outerSignal) {
       const { timeoutMs: optTimeoutMs, is_torbox_api: isTorBoxApiFlag, ...fetchOptions } = opt;
       const isTorBox = isTorBoxApiFlag !== false; // default true (only TorBox gets X-Api-Key)
       if (isTorBox) requireApiKey();
+
+      // TorBox API: own server, then Android native, then the CORS proxy. Everything else: the proxy.
+      const helper = isTorBox && url.startsWith(TB_MAIN + '/') ? helperServer() : '';
+      let mode = helper ? 'helper' : isTorBox && canUseNative() ? 'native' : 'proxy';
+      if (mode === 'proxy') requireProxy();
 
       const controller = new AbortController();
       const timeoutMs = Math.max(1, Number(optTimeoutMs) || CONST.TORBOX_API_TIMEOUT_MS);
@@ -727,13 +788,26 @@ try {
       delete headers.Authorization; // never forward auth headers through proxy
       if (isTorBox) headers['X-Api-Key'] = Config.apiKey;
 
-      // Always go through CORS proxy
-      const proxied = buildProxyUrl(Config.proxyUrl, url);
-
       try {
-        const res = await fetch(proxied, { ...fetchOptions, headers, signal: controller.signal });
-        const status = res.status;
-        const text = await res.text();
+        let status;
+        let text;
+        if (mode === 'helper') {
+          const res = await fetch(`${helper}/torbox/${url.slice(TB_MAIN.length + 1)}`, { ...fetchOptions, headers, signal: controller.signal });
+          status = res.status;
+          text = await res.text();
+          // Old helper image without the /torbox route (alloha.mjs catch-all): retry once the next way.
+          if (status === 404 && text === 'not found') mode = canUseNative() ? 'native' : 'proxy';
+          // Native would follow the permanent-link redirect and download the video.
+          if (mode === 'native') url = url.replace('&redirect=true', '');
+        }
+        if (mode === 'native') {
+          ({ status, text } = await nativeRequest(url, fetchOptions, headers, controller.signal, timeoutMs));
+        } else if (mode === 'proxy') {
+          requireProxy();
+          const res = await fetch(buildProxyUrl(Config.proxyUrl, url), { ...fetchOptions, headers, signal: controller.signal });
+          status = res.status;
+          text = await res.text();
+        }
         const json = parseJsonSafe(text);
         const detail = extractApiDetail(json, text);
         const withDetail = (base) => (detail ? `${base}: ${detail}` : base);
@@ -1197,7 +1271,8 @@ try {
       // TorBox API expects token query parameter alongside X-Api-Key header.
       // Optional permanent-link mode can be enabled; if it fails, we fallback to classic request.
       const base = `${TB_MAIN}/torrents/requestdl?torrent_id=${encodeURIComponent(tid)}&file_id=${encodeURIComponent(fid)}&token=${encodeURIComponent(Config.apiKey)}`;
-      if (!getPreferPermanentLink()) {
+      // The native Android client would follow the redirect and download the video itself.
+      if (!getPreferPermanentLink() || (!helperServer() && canUseNative())) {
         return request(base, { method: 'GET', timeoutMs: CONST.TORBOX_API_TIMEOUT_MS }, signal);
       }
 
@@ -4502,9 +4577,9 @@ try {
       },
       torbox_settings_proxy_name: { ru: 'URL CORS‑прокси', en: 'CORS proxy URL', uk: 'URL CORS-проксі' },
       torbox_settings_proxy_desc: {
-        ru: 'Введите URL прокси, через который будут идти ВСЕ запросы',
-        en: 'Enter the proxy URL that will handle ALL requests',
-        uk: 'Введіть URL проксі, через який підуть УСІ запити',
+        ru: 'В браузере запросы к TorBox идут через этот прокси, и он видит ваш API‑ключ. Если в online_mod задан «Адрес своего сервера», ключ идёт на ваш сервер; на Android без своего сервера — напрямую в TorBox',
+        en: 'In a browser, TorBox requests go through this proxy, and it sees your API key. With «Адрес своего сервера» (own server address) set in online_mod, the key goes to your server; on Android without one, straight to TorBox',
+        uk: 'У браузері запити до TorBox ідуть через цей проксі, і він бачить ваш API-ключ. Якщо в online_mod задано «Адрес своего сервера», ключ іде на ваш сервер; на Android без свого сервера — напряму в TorBox',
       },
       torbox_settings_api_name: { ru: 'API‑ключ', en: 'API key', uk: 'API-ключ' },
       torbox_settings_api_desc: {
