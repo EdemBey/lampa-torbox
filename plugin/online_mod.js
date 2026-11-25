@@ -42,6 +42,7 @@
 //24.11.2026 - Skip button in Lampa's own player: own button and timeline marks, AniSkip matched by the loaded video's length
 //24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
 //25.11.2026 - Skip button on Alloha: the player's own opening/ending marks (bnsi skipTime) via the helper's /skips
+//25.11.2026 - One "watched" across balancers and TorBox: TMDB season/episode key with Timeline.link (TimeCode server sync); unproven numbering keeps its own key
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -379,6 +380,172 @@
       if (have_keys) setDddHeader(first, 'X-DDD-Item-Keys', JSON.stringify(keys));
       if (have_positions) setDddHeader(first, 'X-DDD-Positions', JSON.stringify(positions));
     }
+
+    /**
+     * One "watched" for every source. The canonical episode is the card's TMDB season/episode: the key
+     * Lampa's own card uses, with Timeline.link so the TimeCode server can tell the episode. A source whose
+     * numbering is not proven to match keeps its own key, so a guessed mark is never written.
+     */
+    var watch = {
+      store: 'online_mod_watch_map',
+      links: {},
+      // TMDB season number -> episode count
+      counts: function counts(card) {
+        var out = {};
+        (card && card.seasons || []).forEach(function (s) {
+          if (s && s.season_number > 0 && s.episode_count > 0) out[s.season_number] = s.episode_count;
+        });
+        return out;
+      },
+      // Lampa's own timeline key of a card episode
+      key: function key(card, season, episode) {
+        return [season, season > 10 ? ':' : '', episode, card.original_title].join('');
+      },
+      // anchor [e0, S, E]: source episode e0 is canonical S:E, the rest run on into the next seasons.
+      // The last season keeps the overflow: TMDB lags behind a running season.
+      canon: function canon(anchor, episode, counts) {
+        var s = anchor[1];
+        var e = anchor[2] + (episode - anchor[0]);
+        if (!(e >= 1)) return null;
+        while (counts[s] && counts[s + 1] && e > counts[s]) {
+          e -= counts[s];
+          s++;
+        }
+        return counts[s] ? { season: s, episode: e } : null;
+      },
+      // n episodes are exactly whole TMDB seasons counted from the first
+      whole: function whole(n, counts) {
+        for (var s = 1, sum = 0; counts[s]; s++) {
+          sum += counts[s];
+          if (sum === n) return true;
+        }
+        return false;
+      },
+      // map answers (std, '<balancer>:<season>', 'shiki:<id>', 0) are written by the phase-2 "match episodes" menu
+      // {season, episode} = proven or answered; false = never linked; null = not proven, ask
+      place: function place(map, counts, anime, q) {
+        var own = map[q.balancer + ':' + q.season];
+        var saved = q.src ? map[q.src] : own !== undefined ? own : map['std:' + q.season];
+        if (saved === 0) return false;
+        if (saved) return this.canon(saved, q.episode, counts) || false;
+        if (q.part) return this.stacked(q.part, q.episode, counts);
+        if (q.src) return null;
+        var same = { season: q.season, episode: q.episode };
+        // no TMDB list to check against: today's behaviour
+        if (!counts[1]) return same;
+        if (!counts[q.season]) return anime ? null : same;
+        var before = 0;
+        for (var s = 1; s < q.season; s++) before += counts[s] || 0;
+        var last = !counts[q.season + 1];
+        // numbers run on from the earlier seasons (season 2 starts at 13)
+        if (before && q.min > before) return q.max > counts[q.season] && (last || q.max <= before + counts[q.season]) ? this.canon([1, 1, 1], q.episode, counts) : null;
+        if (q.max > counts[q.season] && !last) return q.season == 1 && this.whole(q.max, counts) ? this.canon([1, 1, 1], q.episode, counts) : null;
+        // anime seasons after the first are split differently too often: one answer per title (map.std)
+        return !anime || q.season == 1 || map.std ? same : null;
+      },
+      // Kodik franchise part, placed by the episodes of the TV parts before it. Proven when the franchise and
+      // TMDB count the same at some end after the part, or (first TMDB season of the part only) at its start.
+      stacked: function stacked(part, episode, counts) {
+        if (part.index < 0 || episode < 1) return false;
+        var from = part.bounds[part.index];
+        var ends = { 0: true };
+        var hi = false;
+        var s, i, sum;
+        for (s = 1, sum = 0; counts[s]; s++) {
+          sum += counts[s];
+          ends[sum] = true;
+        }
+        for (i = part.index + 1; i < part.bounds.length; i++) {
+          if (ends[part.bounds[i]]) hi = true;
+        }
+        if (!hi && !ends[from]) return null;
+        if (part.first > 1 && part.first !== from + 1) return null;
+        var at = this.canon([1, 1, 1], part.first > 1 ? episode : from + episode, counts);
+        var start = this.canon([1, 1, 1], from + 1, counts);
+        if (!at || !start) return false;
+        return hi || at.season === start.season ? at : null;
+      },
+      id: function id(card) {
+        return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
+      },
+      map: function map(card) {
+        return (Lampa.Storage.get(this.store, '{}') || {})[this.id(card)] || {};
+      },
+      // canonical timeline hash of a list element; '' = keep the source's own key
+      hashOf: function hashOf(card, balancer, element, items) {
+        element.watch_place = null;
+        var season = parseInt(element.season);
+        var episode = parseInt(element.episode);
+        // without original_title the key would be shared by every show
+        if (!card || !card.original_title || !season || isNaN(episode)) return '';
+        // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
+        if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength) {
+          this.cached = items;
+          this.cachedCard = card;
+          this.cachedSeason = season;
+          this.cachedLength = items ? items.length : 0;
+          this.cachedNums = (items || []).filter(function (i) {
+            return i && parseInt(i.season) === season && parseInt(i.episode) >= 0;
+          }).map(function (i) {
+            return parseInt(i.episode);
+          });
+          this.cachedMap = this.map(card);
+          this.cachedCounts = this.counts(card);
+        }
+        var nums = this.cachedNums.concat([episode]);
+        var info = element.watch_info || {};
+        var place = this.place(this.cachedMap, this.cachedCounts, animeSkip.isAnime(card, skipOf(element)), {
+          src: info.src || '',
+          part: info.part,
+          balancer: balancer,
+          season: season,
+          episode: episode,
+          min: Math.min.apply(null, nums),
+          max: Math.max.apply(null, nums)
+        });
+        // one file without its list (TorBox) proves no run-on numbering: only its own numbers
+        if (!items && place && (place.season !== season || place.episode !== episode)) place = null;
+        element.watch_pending = place === null;
+        element.watch_place = place || null;
+        return place ? Lampa.Utils.hash(this.key(card, place.season, place.episode)) : '';
+      },
+      // Lampa for Android returns an external player's (DDD) position without the card link, and TimeCode
+      // then cannot tell the episode: put the link back once.
+      install: function install() {
+        if (this.installed || !Lampa.Timeline || !Lampa.Timeline.listener) return;
+        this.installed = true;
+        var links = this.links;
+        Lampa.Timeline.listener.follow('update', function (e) {
+          var data = e && e.data || {};
+          var meta = links[data.hash];
+          var road = data.road;
+          if (!meta || !road || road.card) return;
+          Lampa.Timeline.update({ hash: data.hash, percent: road.percent, time: road.time, duration: road.duration, profile: road.profile, card: meta.card, season: meta.season, episode: meta.episode });
+        });
+      },
+      view: function view(card, balancer, element, legacy, items) {
+        this.install();
+        var hash = this.hashOf(card, balancer, element, items);
+        var place = element.watch_place;
+        var meta = hash && Lampa.Timeline.link ? Lampa.Timeline.link(card, place.season, place.episode) : null;
+        // a card without original_name links as a movie
+        if (meta && meta.season === undefined) meta = null;
+        if (meta) this.links[hash] = meta;
+        var view = Lampa.Timeline.view(hash || legacy, meta || undefined);
+        if (hash && hash !== legacy && !view.percent && !view.time && legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode)))) {
+          var old = Lampa.Timeline.view(legacy);
+          if (old.percent || old.time) {
+            view.percent = old.percent;
+            view.time = old.time;
+            view.duration = old.duration;
+            // a key only this balancer writes is this very episode: move the mark for good
+            Lampa.Timeline.update(view);
+          }
+        }
+        return view;
+      }
+    };
+    window.online_mod_watch = watch;
 
     // Season/episode of a playlist item, and the anime id when the balancer knows it (Kodik, Naruto Based).
     function skipOf(el) {
@@ -2003,7 +2170,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -2451,7 +2618,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -3525,7 +3692,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -5173,7 +5340,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.title, 'kinobase'].join('') : object.movie.original_title + element.quality + 'kinobase');
           element.timeline = view;
@@ -5609,7 +5776,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.title].join('') : object.movie.original_title + 'collaps');
           element.timeline = view;
@@ -6187,7 +6354,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -6917,7 +7084,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -7492,7 +7659,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -8185,7 +8352,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -8935,7 +9102,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -9522,7 +9689,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -10122,7 +10289,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -10806,7 +10973,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -11737,7 +11904,7 @@
         var viewed = Lampa.Storage.cache('online_view', 5000, []);
         items.forEach(function (element) {
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.data_id);
           element.timeline = view;
@@ -13486,7 +13653,8 @@
             var single = seasons.length + 1;
             seasons.push({
               id: single,
-              title: title
+              title: title,
+              single: true
             });
             map.single = single;
             if (part.id === preselect_id) wanted_id = single;
@@ -13976,6 +14144,32 @@
        */
 
 
+      // For watch.stacked: where a merged season sits among the franchise's TV parts
+      function watchPart(season_id) {
+        var bounds = [0];
+        var index = -1;
+        var first = 0;
+        extract.seasons.forEach(function (season) {
+          if (season.single) return;
+          var seen = {};
+          extract.items.forEach(function (c) {
+            var s = c.seasons && c.seasons[season.id];
+            if (s && s.episodes) Object.keys(s.episodes).forEach(function (e) {
+              if (e >= 1) seen[e] = true;
+            });
+          });
+          var keys = Object.keys(seen).map(Number);
+          if (season.id == season_id) {
+            index = bounds.length - 1;
+            first = keys.length ? Math.min.apply(null, keys) : 0;
+          }
+          bounds.push(bounds[bounds.length - 1] + keys.length);
+        });
+        // shortcut: every multi-episode part counts as a TV part, a mismatch only fails the proof; use anime_kind if Kodik rows carry it
+        return { index: index, bounds: bounds, first: first };
+      }
+
+
       function filtred() {
         var filtred = [];
 
@@ -13990,6 +14184,7 @@
           if (translation) {
             var episodes = translation.seasons[season_id] && translation.seasons[season_id].episodes || {};
 
+            var part = kodik_merged ? watchPart(season_id) : null;
             for (var episode_id in episodes) {
               var link = episodes[episode_id];
               filtred.push({
@@ -14002,6 +14197,7 @@
                 episode: parseInt(episode_id),
                 shikimori: translation.shikimori_id || '',
                 kodik_voice: voice_name,
+                watch_info: kodik_merged ? { src: 'shiki:' + translation.shikimori_id, part: part } : translation.shikimori_id ? { src: 'shiki:' + translation.shikimori_id } : null,
                 link: link
               });
             }
@@ -14181,7 +14377,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title].join('') : object.movie.original_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, element.orig_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.orig_title + element.title);
           element.timeline = view;
@@ -14879,7 +15075,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -15358,7 +15554,7 @@
           }
 
           var hash = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title].join('') : object.movie.original_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, object.movie.original_title, filter_items.voice[choice.voice]].join('') : object.movie.original_title + element.title);
           element.timeline = view;
@@ -18841,6 +19037,10 @@
           if (typeof e.episode !== 'undefined') last_episode = Math.max(last_episode, parseInt(e.episode));
         });
         return last_episode;
+      };
+      // Timeline of a list element under the shared canonical key (see watch)
+      this.watchView = function (element, hash, items) {
+        return watch.view(object.movie, balanser, element, hash, items);
       };
       /**
        * Начать навигацию по файлам

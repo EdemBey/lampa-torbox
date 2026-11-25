@@ -2321,8 +2321,13 @@ try {
         cfg.season != null && cfg.episode != null
           ? [cfg.season, cfg.season > 10 ? ':' : '', cfg.episode, origTitle].join('')
           : String(origTitle);
+      // One "watched" with the online sources (online_mod's watch): only an unmistakable SxxEyy goes to the canonical key
+      const strict = (cleanName || '').match(/(?:^|[^a-z0-9])s(\d{1,2})[ ._-]?e(\d{1,4})(?!\d)/i);
+      const shared = window.online_mod_watch;
       if (Lampa.Timeline && typeof Lampa.Timeline.view === 'function') {
-        cfg.timeline = Lampa.Timeline.view(Lampa.Utils.hash(tlKey));
+        cfg.timeline = strict && shared
+          ? shared.view(movie, 'torbox', { season: strict[1], episode: strict[2] }, Lampa.Utils.hash(tlKey), null)
+          : Lampa.Timeline.view(Lampa.Utils.hash(tlKey));
       }
       return cfg;
     };
