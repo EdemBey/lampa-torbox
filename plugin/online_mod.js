@@ -3340,6 +3340,27 @@
       }
       return ids;
     }
+    // HDrezka's "watch all parts" list, oldest first: [{num, title, link ('' for the open page), current, rating}]
+    function rezkaParts(str) {
+      var out = [];
+      var re = /<div class="b-post__partcontent_item( current)?"(?: data-url="([^"]*)")?>\s*<div class="td num">(\d+)<\/div>\s*<div class="td title">(?:<a [^>]*>)?([^<]*)((?:(?!<div class="b-post__partcontent_item)[\s\S])*)/g;
+      var m;
+      while (m = re.exec(str || '')) {
+        var rating = /class="td rating">(?:<i[^>]*>)?([\d.]+)/.exec(m[5]);
+        out.push({
+          num: +m[3],
+          title: m[4].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/^\s+|\s+$/g, ''),
+          link: m[2] || '',
+          current: !!m[1],
+          rating: rating ? rating[1] : ''
+        });
+      }
+      out.sort(function (a, b) {
+        return a.num - b.num;
+      });
+      return out;
+    }
+
     // page link -> its ids, for the session (one page is opened once)
     var rezkaIds = {};
 
@@ -3442,7 +3463,8 @@
 
         object = _object;
         select_title = object.search || object.movie.title;
-        if (this.wait_similars && data && data[0].is_similars) return getPage(data[0].link);
+        page_chosen = !!(this.wait_similars && data && data[0].is_similars);
+        if (page_chosen) return getPage(data[0].link);
         error_message = '';
         // an id check of an older search is dropped
         ids_gen++;
@@ -3619,8 +3641,16 @@
               }
             }
 
-            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) byIds(cards.length ? cards : items, kinopoisk_id, function (hit, matches, body) {
-              if (hit) return body ? gotPage(body) : getPage(hit.link);
+            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) byIds(cards.length ? cards : items, kinopoisk_id, function (hit, matches, body, bodies) {
+              if (hit) return body ? gotPage(body, hit.link) : getPage(hit.link);
+              // several series pages with the card's ids are an anime's parts: the oldest is opened, the rest join it as seasons
+              var first = null;
+              matches.forEach(function (c) {
+                var f = rezkaIds[c.link];
+                if (!f || !f.series) return;
+                if (!first || f.part < first.part) first = { card: c, part: f.part };
+              });
+              if (first) return bodies && bodies[first.card.link] ? gotPage(bodies[first.card.link], first.card.link) : getPage(first.card.link);
               // several pages with the card's ids (an anime's parts): only those are offered
               if (matches.length > 1) {
                 items = matches;
@@ -3700,6 +3730,7 @@
           voice_name: '',
           season_id: ''
         };
+        if (parts) usePart(0);
         component.loading(true);
         getEpisodes(success);
         component.saveChoice(choice);
@@ -3716,6 +3747,8 @@
         choice[a.stype] = b.index;
         if (a.stype == 'voice') choice.voice_name = filter_items.voice[b.index];
         if (a.stype == 'season') choice.season_id = filter_items.season_id[b.index];
+        // a part is its own page: its voices load when it is chosen
+        if (parts && a.stype == 'season') usePart(b.index);
         component.reset();
         component.loading(true);
         getEpisodes(success);
@@ -3729,6 +3762,7 @@
 
       this.destroy = function () {
         extract = null;
+        parts = null;
         network.clear();
         for (var li = 0; li < loaders.length; li++) try { loaders[li].clear(); } catch (e) {}
         loaders = [];
@@ -3758,7 +3792,7 @@
         // search drops the answer
         var next = function next() {
           if (!extract || mine !== ids_gen) return;
-          if (i >= list.length) return call(matches.length === 1 ? matches[0] : null, matches, matches.length === 1 ? bodies[matches[0].link] || '' : '');
+          if (i >= list.length) return call(matches.length === 1 ? matches[0] : null, matches, matches.length === 1 ? bodies[matches[0].link] || '' : '', bodies);
           var card = list[i++];
           if (rezkaIds[card.link]) return check(card, rezkaIds[card.link]);
           var net = new Lampa.Reguest();
@@ -3771,6 +3805,12 @@
           }, function (res) {
             var body = typeof res.body === 'string' ? res.body : '';
             var ids = rezkaPageIds(body);
+            // kept with what the parts choice needs: a series page, the part it is
+            ids.series = /\.initCDNSeriesEvents\(/.test(body);
+            var me = rezkaParts(body).filter(function (p) {
+              return p.current;
+            })[0];
+            ids.part = me ? me.num : 999;
             // a bot check or an error page has no ids: not kept, asked again next time
             if (ids.imdb || ids.kp) rezkaIds[card.link] = ids;
             bodies[card.link] = body;
@@ -3781,12 +3821,116 @@
         };
         next();
       }
+      // «Смотреть все части»: an anime's TV parts (each its own page with one season, the page's own ids) become
+      // seasons 1..N in the parts' order; a film of the franchise has other ids and stays out. A part's page is
+      // its own extract: its voices load when it is chosen.
+      var parts = null;
+      var part_index = 0;
+      var merged_season_id = '';
+      var page_chosen = false;
+
+      function mergeParts(str, link, done) {
+        var mine = ++ids_gen;
+        parts = null;
+        var list = rezkaParts(str);
+        var own = rezkaPageIds(str);
+        // shortcut: a list longer than eight (a big franchise of films) is not merged; raise it if a long anime shows up
+        if (!extract.is_series || extract.season.length !== 1 || list.length < 2 || list.length > 8 || !own.imdb && !own.kp) return done();
+        // the parts of one Kinopoisk entry share its rating; another rating is another title (a film), not opened
+        var cur = list.filter(function (p) {
+          return p.current;
+        })[0];
+        var keep = [];
+        var i = 0;
+        // one page at a time; a part that cannot be read (an error, a bot check) leaves the pages as they are,
+        // a season missing in the middle would shift every number after it
+        var next = function next() {
+          if (!extract || mine !== ids_gen) return;
+          if (i >= list.length) {
+            if (keep.length >= 2) {
+              parts = keep;
+              part_index = 0;
+              keep.forEach(function (p, k) {
+                if (p.current) part_index = k;
+              });
+            }
+            return done();
+          }
+          var p = list[i++];
+          if (p.current) {
+            p.body = str;
+            p.extract = extract;
+            p.link = link || '';
+            keep.push(p);
+            return next();
+          }
+          if (!p.link) return done();
+          // the list's ratings are snapshots of one entry taken at different times: a small drift is the same title
+          if (cur && cur.rating && p.rating && Math.abs(p.rating - cur.rating) > 0.1) return next();
+          var net = new Lampa.Reguest();
+          loaders.push(net);
+          net.timeout(5000);
+          anubisFetch(net, component.proxyLink(component.fixLink(p.link, ref), prox, prox_enc, 'enc2t'), false, {
+            dataType: 'text',
+            withCredentials: logged_in,
+            headers: headers
+          }, function (res) {
+            if (!extract || mine !== ids_gen) return;
+            var body = typeof res.body === 'string' ? res.body : '';
+            var ids = rezkaPageIds(body);
+            // a real page without rating links is another title; anything else (a bot check, an error) stops the merge
+            if (!ids.imdb && !ids.kp) return /b-post__partcontent/.test(body) ? next() : done();
+            ids.series = /\.initCDNSeriesEvents\(/.test(body);
+            ids.part = p.num;
+            rezkaIds[p.link] = ids;
+            // the same title, a series, one season on its page (a second one would be hidden)
+            if ((own.imdb && ids.imdb === own.imdb || own.kp && ids.kp === own.kp) && /\.initCDNSeriesEvents\(/.test(body) && (body.match(/class="b-simple_season__item/g) || []).length <= 1) {
+              p.body = body;
+              keep.push(p);
+            }
+            next();
+          }, function () {
+            if (!extract || mine !== ids_gen) return;
+            done();
+          }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
+        };
+        next();
+      }
+
+      function usePart(k) {
+        var p = parts && parts[k];
+        if (!p) return;
+        part_index = k;
+        if (!p.extract) {
+          extract = {};
+          extractData(p.body);
+          p.extract = extract;
+        }
+        extract = p.extract;
+      }
+
+      // the part a saved choice names ('p' + its number), else the page that was opened
+      function partOfChoice() {
+        // a page picked from the list is opened as picked
+        if (page_chosen) return part_index;
+        var want = /^p(\d+)$/.exec(choice.season_id || '');
+        var k = part_index;
+        if (want) parts.forEach(function (p, i) {
+          if (p.num == want[1]) k = i;
+        });
+        return k;
+      }
+
       // a page already fetched (by byIds) is used as is, not fetched again
-      function gotPage(str) {
+      function gotPage(str, link) {
+        parts = null;
         extractData(str);
 
         if (extract.film_id) {
-          getEpisodes(success);
+          mergeParts(str, link, function () {
+            if (parts) usePart(partOfChoice());
+            getEpisodes(success);
+          });
         } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
       }
       function getPage(url) {
@@ -3798,7 +3942,7 @@
           withCredentials: logged_in,
           headers: headers
         }, function (res) {
-          gotPage(typeof res.body === 'string' ? res.body : '');
+          gotPage(typeof res.body === 'string' ? res.body : '', url);
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
         }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
@@ -3966,6 +4110,8 @@
       function getEpisodes(call) {
         if (!extract.is_series || extract.all_loaded) return call();
         var gen = loaders.gen = (loaders.gen || 0) + 1;
+        // answers for a part left meanwhile (an already loaded part does not bump gen) go nowhere
+        var ex = extract;
         var last_error = '';
         // HDrezka lists seasons per voice, and voices differ in seasons, so every voice is asked once up front.
         var queue = extract.voice.slice();
@@ -3995,12 +4141,12 @@
           running++;
           loader.timeout(10000);
           loader["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (json) {
-            if (!extract || loaders.gen !== gen) return;
+            if (!extract || extract !== ex || loaders.gen !== gen) return;
             running--;
             extractEpisodes(json, voice.id);
             next();
           }, function (a, c) {
-            if (!extract || loaders.gen !== gen) return;
+            if (!extract || extract !== ex || loaders.gen !== gen) return;
             running--;
             last_error = loader.errorDecode(a, c);
             next();
@@ -4080,6 +4226,19 @@
           });
         }
 
+        // merged parts: one season per part, numbered in the parts' order; the page's own season id picks its episodes
+        if (parts) {
+          merged_season_id = filter_items.season_id[0] || '';
+          filter_items.season = parts.map(function (p, k) {
+            return Lampa.Lang.translate('torrent_serial_season') + ' ' + (k + 1) + ' — ' + p.title;
+          });
+          filter_items.season_id = parts.map(function (p) {
+            return 'p' + p.num;
+          });
+          choice.season = part_index;
+          choice.season_id = 'p' + parts[part_index].num;
+        }
+
         if (!filter_items.season[choice.season]) choice.season = 0;
 
         if (choice.season_id) {
@@ -4088,7 +4247,7 @@
         }
 
         if (extract.is_series) {
-          var season_id = filter_items.season_id[choice.season];
+          var season_id = parts ? merged_season_id : filter_items.season_id[choice.season];
           extract.voice.forEach(function (v) {
             var data = extract.voice_data[v.id];
             var nums = [];
@@ -4335,15 +4494,17 @@
         var filtred = [];
 
         if (extract.is_series) {
-          var season_id = filter_items.season_id[choice.season];
+          var season_id = parts ? merged_season_id : filter_items.season_id[choice.season];
           var voice = filter_items.voice[choice.voice];
+          // merged parts are numbered in their order, not by the page's own season id
+          var season_num = parts ? choice.season + 1 : 0;
           extract.episode.forEach(function (episode) {
             if (episode.season_id == season_id) {
               filtred.push({
-                title: component.formatEpisodeTitle(episode.season_id, null, episode.name),
+                title: component.formatEpisodeTitle(season_num || episode.season_id, null, episode.name),
                 quality: '360p ~ 1080p',
                 info: ' / ' + voice,
-                season: parseInt(episode.season_id),
+                season: season_num || parseInt(episode.season_id),
                 episode: parseInt(episode.episode_id),
                 media: episode
               });
@@ -18502,6 +18663,10 @@
       var pick_done = false;
       // «По сериям»: until when the picked voice may still start playing; the source's last choice
       var pick_play = 0;
+      var pick_season_done = false;
+      // the source's redraws so far, and the one the season switch waits for (-1: no switch)
+      var filter_count = 0;
+      var pick_mark = -1;
       var last_choice = null;
       var similar_auto = {};
       var extended;
@@ -19480,6 +19645,7 @@
       this.filter = function (filter_items, choice) {
         last_filter = filter_items;
         last_choice = choice;
+        filter_count++;
         var select = [];
 
         var add = function add(type, title) {
@@ -19838,15 +20004,25 @@
         // a voice picked in «По сериям»: its season and voice are set once, the redraws call start() again
         // before the source answers, last_filter is the screen's own {source} list: wait for its seasons; another source chosen here gets no pick
         if (object.watch_pick && !pick_done && balanser === object.balancer && last_filter && last_filter.season && last_filter.season.length && sources[balanser] && sources[balanser].filter) {
-          pick_done = true;
           pin_tried = true;
           var pick = object.watch_pick;
-          if (last_filter.season && last_filter.season[pick.season] !== undefined) sources[balanser].filter('filter', { stype: 'season' }, { index: pick.season });
-          var pick_voice = last_filter.voice ? last_filter.voice.indexOf(pick.voice_name) : -1;
-          if (pick_voice >= 0) sources[balanser].filter('filter', { stype: 'voice' }, { index: pick_voice });
-          // the redraws above may have focused a row of the list they replaced: find it again in the final one
-          pin_done = false;
-          pick_play = pick_voice >= 0 ? Date.now() + 20000 : 0;
+          if (!pick_season_done) {
+            pick_season_done = true;
+            if (last_filter.season[pick.season] !== undefined && !(last_choice && last_choice.season === pick.season)) {
+              pick_mark = filter_count;
+              sources[balanser].filter('filter', { stype: 'season' }, { index: pick.season });
+            }
+          }
+          // the voice once the list on screen is the picked season's (a source that loads a season redraws later)
+          // a source sets its choice at once but redraws after loading: the voices are the new season's only after that
+          if (!pick_done && (pick_mark < 0 || filter_count > pick_mark)) {
+            pick_done = true;
+            var pick_voice = last_filter.voice ? last_filter.voice.indexOf(pick.voice_name) : -1;
+            if (pick_voice >= 0 && !(last_choice && last_choice.voice === pick_voice)) sources[balanser].filter('filter', { stype: 'voice' }, { index: pick_voice });
+            // the redraws above may have focused a row of the list they replaced: find it again in the final one
+            pin_done = false;
+            pick_play = pick_voice >= 0 ? Date.now() + 20000 : 0;
+          }
         }
 
         if (object.watch_pin && !pin_done) {
@@ -20855,14 +21031,24 @@
           step = null;
           cut = true;
           finish(rows.length ? 'ok' : 'error');
-        }, 15000);
+        // a source that loads per switch gets longer (a part with many voices on a slow proxy)
+        }, slow ? 30000 : 15000);
         try {
           probe.source().filter('filter', { stype: kind }, { index: index });
         } catch (e) {
           if (step === me) return stepDone(false);
         }
-        // the redraw did not come within the call: this source asks the network per switch
-        if (step === me) slow = true;
+        // the redraw did not come within the call: this source asks the network per switch, and gets longer
+        if (step === me) {
+          slow = true;
+          clearTimeout(stepTimer);
+          stepTimer = setTimeout(function () {
+            if (step !== me) return;
+            step = null;
+            cut = true;
+            finish(rows.length ? 'ok' : 'error');
+          }, 30000);
+        }
       };
       var next = function next() {
         if (finished || step) return;

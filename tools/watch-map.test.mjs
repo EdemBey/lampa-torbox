@@ -868,6 +868,10 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   const real = { id: 7, original_name: 'R', original_title: 'R', number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 10 }, { season_number: 2, episode_count: 8 }] };
   assert.deepStrictEqual(watch.tmdbOf(real, 2, 3), { season: 2, number: 3 });
   assert.deepStrictEqual(watch.lampaOf(real, 2, 3), { season: 2, episode: 3 });
+  // a source with as many seasons as YummyAnime's parts proves a part placed between Lampa's season ends
+  assert.deepStrictEqual(watch.agree({ y: [24, 13, 13] }, { 1: 24, 2: 13, 3: 13 }, { season: 2, seasons: 3, min: 1, max: 13, episode: 1 }), { season: 2, episode: 1 });
+  // one part more or less proves nothing
+  assert.strictEqual(watch.agree({ y: [24, 13, 13] }, { 1: 24, 2: 13, 3: 13 }, { season: 2, seasons: 4, min: 1, max: 13, episode: 1 }), null);
   assert.strictEqual(watch.similarKey({ title: 'Y', year: 2021 }), 'Y/2021');
   assert.strictEqual(watch.similarKey(null), '');
   Lampa.Lang = ownLang;
