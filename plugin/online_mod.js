@@ -4049,11 +4049,19 @@
       var prox = Utils.proxy('rezka2');
       var prox_enc = '';
       var returnHeaders = Lampa.Platform.is('android') && Utils.checkAndroidVersion(339);
+
+      // the login and password must not go through a public CORS proxy: in a browser only the bridge, own server or own proxy
+      if (prox && !Lampa.Platform.is('android')) {
+        var own_helper = (Lampa.Storage.get('online_mod_alloha_server', '') + '').replace(/\/+$/, '');
+        var own_proxy = Lampa.Storage.field('online_mod_proxy_other') === true ? Lampa.Storage.field('online_mod_proxy_other_url') + '' : '';
+        if (prox !== window.online_mod_rezka_bridge && !(own_helper && prox === own_helper + '/') && !(own_proxy && prox.indexOf(own_proxy) === 0)) prox = window.online_mod_rezka_bridge || (own_helper ? own_helper + '/' : '');
+      }
+
       var proxy_mirror = Lampa.Storage.field('online_mod_proxy_rezka2_mirror') === true;
       var host = prox && !proxy_mirror ? Utils.rezka2Host() : Utils.rezka2Mirror();
-      if (!prox && !returnHeaders) prox = Utils.proxy('cookie');
 
       if (!prox && !returnHeaders) {
+        Lampa.Noty.show('Вход в HDrezka без Tampermonkey-моста или своего сервера отключён: пароль ушёл бы через чужой прокси (Настройки → online_mod → HDrezka → «Адрес своего сервера»)');
         if (error) error();
         return;
       }
