@@ -493,10 +493,27 @@
   }
 
   // Lampa's own continue row hides Japanese shows outside its anime category screen.
+  // Adds them back: stock new-episode cards stay first, the rest in history order, stock cap 19.
+  function mergeAnime(results) {
+    var fav = Lampa.Favorite;
+    var anime = fav && fav.continues ? fav.continues('anime') : [];
+    var seen = {};
+    results.forEach(function (c) { seen[c.id] = true; });
+    var all = results.concat(anime.filter(function (c) { return !seen[c.id]; }));
+    var order = {};
+    (fav && fav.get ? fav.get({ type: 'history' }) || [] : []).forEach(function (c, i) {
+      if (!(c.id in order)) order[c.id] = i;
+    });
+    var rank = function (c) { return c.id in order ? order[c.id] : 1e9 + all.indexOf(c); };
+    var fresh = all.filter(function (c) { return c.subscribe; });
+    var rest = all.filter(function (c) { return !c.subscribe; }).sort(function (a, b) { return rank(a) - rank(b); });
+    return fresh.concat(rest).slice(0, 19);
+  }
+
   // No url: the row is history, not a pageable yani list.
   function continueAnime() {
-    var results = Lampa.Favorite && Lampa.Favorite.continues ? Lampa.Favorite.continues('anime') : [];
-    return results.length ? { title: Lampa.Lang.translate('title_continue') + ' · Аниме', results: results } : null;
+    var results = mergeAnime([]);
+    return results.length ? { title: Lampa.Lang.translate('title_continue'), results: results } : null;
   }
 
   var source = {
@@ -658,20 +675,35 @@
       Lampa.Activity.push({ url: '', title: 'YummyAnime', component: 'category', source: 'yani', page: 1 });
     });
 
-    if (Lampa.ContentRows) Lampa.ContentRows.add({
-      name: 'yani_continue_anime',
-      title: Lampa.Lang.translate('title_continue') + ' · Аниме',
-      // Stock continue_watch is index 1; 2 puts this row right after it.
-      index: 2,
-      screen: ['main'],
-      call: function () {
-        var row = continueAnime();
-        if (!row) return;
-        return function (call) {
-          call(row);
-        };
-      }
-    });
+    // The stock continue row is private to core; its output is reachable only through ContentRows.call.
+    if (Lampa.ContentRows && Lampa.ContentRows.call && !Lampa.ContentRows.yani_merged) {
+      Lampa.ContentRows.yani_merged = true;
+      var orig = Lampa.ContentRows.call;
+      Lampa.ContentRows.call = function (screen, params, calls) {
+        var before = calls ? calls.slice() : [];
+        var r = orig.apply(this, arguments);
+        if (screen === 'main' && calls) {
+          var title = Lampa.Lang.translate('title_continue');
+          calls.forEach(function (fn, i) {
+            if (typeof fn !== 'function' || before.indexOf(fn) >= 0) return;
+            calls[i] = function (call) {
+              var rest = Array.prototype.slice.call(arguments, 1);
+              return fn.apply(this, [function (data) {
+                if (data && data.title === title && data.results) data.results = mergeAnime(data.results);
+                return call.apply(this, arguments);
+              }].concat(rest));
+            };
+          });
+          // Stock row returns nothing without non-Japanese shows; put ours in its slot (index 1).
+          var fav = Lampa.Favorite;
+          var row = !(params && (params.genres || params.keywords)) && fav && fav.continues && !fav.continues('tv').length && Lampa.Storage.get('content_rows_continue_watch', 'true') && continueAnime();
+          if (row) calls.splice(1, 0, function (call) {
+            call(row);
+          });
+        }
+        return r;
+      };
+    }
 
     wrapFull('tmdb');
     wrapFull('cub');
