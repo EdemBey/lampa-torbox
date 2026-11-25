@@ -19704,7 +19704,8 @@
         }
 
         // a voice picked in «По сериям»: its season and voice are set once, the redraws call start() again
-        if (object.watch_pick && !pick_done && last_filter && sources[balanser] && sources[balanser].filter) {
+        // before the source answers, last_filter is the screen's own {source} list: wait for its seasons; another source chosen here gets no pick
+        if (object.watch_pick && !pick_done && balanser === object.balancer && last_filter && last_filter.season && last_filter.season.length && sources[balanser] && sources[balanser].filter) {
           pick_done = true;
           pin_tried = true;
           var pick = object.watch_pick;
