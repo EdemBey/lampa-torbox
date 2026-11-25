@@ -460,7 +460,7 @@
       },
       // map answers (std, '<balancer>:<season>', 'shiki:<id>', 0) are written by the phase-2 "match episodes" menu
       // {season, episode} = proven or answered; false = never linked; null = not proven, ask
-      place: function place(map, counts, anime, q) {
+      rule: function rule(map, counts, anime, q) {
         var own = map[q.balancer + ':' + q.season];
         var saved = q.src ? map[q.src] : own !== undefined ? own : map['std:' + q.season];
         if (saved === 0) return false;
@@ -501,7 +501,169 @@
         var at = this.canon([1, 1, 1], part.first > 1 ? episode : from + episode, counts);
         var start = this.canon([1, 1, 1], from + 1, counts);
         if (!at || !start) return false;
+        // a part that starts past TMDB's last known episode cannot be placed (it would land in the overflow)
+        if (start.episode > counts[start.season]) return null;
         return hi || at.season === start.season ? at : null;
+      },
+      // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
+      place: function place(map, counts, anime, q, alt) {
+        var r = this.rule(map, counts, anime, q);
+        return r === null && alt && !q.src ? this.agree(alt, counts, q) : r;
+      },
+      // A source's season list proves this season when the balancer has as many seasons, lists exactly this
+      // season's episodes, and the list meets TMDB's seasons at an end (stacked). Every list that fits must
+      // give the same episode, and so must TMDB's own seasons if the balancer fits them too.
+      agree: function agree(alt, counts, q) {
+        var self = this;
+        var out = null;
+        var clash = false;
+        var take = function take(p) {
+          if (!p) return;
+          if (out && (out.season !== p.season || out.episode !== p.episode)) clash = true;
+          out = out || p;
+        };
+        [alt.y, alt.g].forEach(function (parts) {
+          var n = parts && parts.length === q.seasons && parts[q.season - 1];
+          if (!n) return;
+          var bounds = [0];
+          parts.forEach(function (c) {
+            bounds.push(bounds[bounds.length - 1] + c);
+          });
+          var from = bounds[q.season - 1];
+          var run = q.min > 1;
+          if (q.min !== (run ? from + 1 : 1) || q.max !== (run ? from : 0) + n) return;
+          take(self.stacked({ index: q.season - 1, bounds: bounds, first: q.min }, q.episode, counts));
+        });
+        if (out && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season]) take({ season: q.season, episode: q.episode });
+        return out && !clash ? out : null;
+      },
+      // Other sources' season lists per card: {t, k: Kinopoisk id used, y: YummyAnime TV parts | 0, g: TMDB "Seasons" groups | 0}
+      alts: null,
+      waits: {},
+      altOf: function altOf(card) {
+        if (!this.alts) this.alts = Lampa.Storage.get('online_mod_watch_alt', '{}') || {};
+        return card && card.id && this.alts[this.id(card)] || null;
+      },
+      alt: function alt(card, call) {
+        var self = this;
+        var id = card && card.id && card.original_name ? this.id(card) : '';
+        var kp = id && (card.kinopoisk_id || card.kp_id) || 0;
+        var have = id && this.altOf(card);
+        // shortcut: refetched after 12 h (a running season grows), or once the Kinopoisk id turns up
+        if (!id || have && Date.now() - have.t < 43200000 && (have.k || !kp)) return call && call();
+        if (this.waits[id]) return call && this.waits[id].push(call);
+        var waiting = this.waits[id] = call ? [call] : [];
+        var out = { t: Date.now(), k: kp };
+        var left = 2;
+        var settle = function settle(key, parts) {
+          if (key in out) return;
+          // a failed refetch keeps what was known
+          out[key] = parts || have && have[key] || 0;
+          if (--left) return;
+          self.alts[id] = out;
+          var ids = Object.keys(self.alts);
+          // shortcut: keeps the 200 newest cards, like the splits
+          if (ids.length > 200) delete self.alts[ids[0]];
+          Lampa.Storage.set('online_mod_watch_alt', self.alts);
+          delete self.waits[id];
+          waiting.forEach(function (cb) {
+            cb();
+          });
+        };
+        this.yummy(card, function (parts) {
+          settle('y', parts);
+        });
+        this.groups(card, function (parts) {
+          settle('g', parts);
+        });
+      },
+      // TMDB's episode group "Seasons" (type 6): episode counts of its groups when they are whole runs of
+      // TMDB's regular episodes in order; anything else (story arcs, a special inside) is 0
+      groups: function groups(card, call) {
+        var fail = function fail() {
+          call(0);
+        };
+        if (this.id(card).indexOf('tmdb_') !== 0 || !Lampa.TMDB || !Lampa.TMDB.api) return fail();
+        var before = {};
+        var sum = 0;
+        (card.seasons || []).slice().sort(function (a, b) {
+          return a.season_number - b.season_number;
+        }).forEach(function (s) {
+          if (!(s.season_number > 0)) return;
+          before[s.season_number] = sum;
+          sum += s.episode_count || 0;
+        });
+        var get = function get(path, ok) {
+          var net = new Lampa.Reguest();
+          net.timeout(5000);
+          net.silent(Lampa.TMDB.api(path + '?api_key=' + Lampa.TMDB.key()), ok, fail);
+        };
+        get('tv/' + card.id + '/episode_groups', function (json) {
+          var list = (json && json.results || []).filter(function (g) {
+            return g.type == 6;
+          });
+          // shortcut: a title with several such groups gets none; rank them if that turns up
+          if (list.length !== 1) return fail();
+          get('tv/episode_group/' + list[0].id, function (full) {
+            var runs = [];
+            var whole = (full && full.groups || []).every(function (g) {
+              var abs = (g.episodes || []).map(function (e) {
+                return e.season_number > 0 && before[e.season_number] !== undefined ? before[e.season_number] + e.episode_number : 0;
+              }).sort(function (a, b) {
+                return a - b;
+              });
+              var last = abs[abs.length - 1];
+              // specials only: not a season
+              if (!last) return true;
+              runs.push([abs[0], abs.length]);
+              return abs[0] > 0 && last - abs[0] === abs.length - 1 && abs.every(function (v, i) { return !i || v !== abs[i - 1]; });
+            });
+            runs.sort(function (a, b) {
+              return a[0] - b[0];
+            });
+            var next = 1;
+            whole = whole && runs.length > 0 && runs.every(function (r) {
+              var fits = r[0] === next;
+              next += r[1];
+              return fits;
+            });
+            call(whole ? runs.map(function (r) {
+              return r[1];
+            }) : 0);
+          });
+        });
+      },
+      // Episodes of the franchise's TV parts in viewing order, found by the card's Kinopoisk id
+      yummy: function yummy(card, call) {
+        var kp = card.kinopoisk_id || card.kp_id;
+        var fail = function fail() {
+          call(0);
+        };
+        var one = function one(v, ok) {
+          animeSkip.get('/anime/' + (v.anime_url || v.anime_id) + '?need_videos=false', ok, fail);
+        };
+        if (!kp) return fail();
+        animeSkip.get('/anime?limit=1&kp_ids=' + kp, function (list) {
+          if (!list[0]) return fail();
+          one(list[0], function (full) {
+            var tv = (full.viewing_order || []).filter(function (v) {
+              return v.type && v.type.alias == 'tv';
+            });
+            if (!tv.length) tv = [list[0]];
+            var parts = [];
+            var left = tv.length;
+            tv.forEach(function (v, i) {
+              one(v, function (part) {
+                var eps = part.episodes || {};
+                // an announced part (aired: 0) is not a season yet
+                parts[i] = eps.aired === 0 ? 0 : eps.aired || eps.count || 0;
+                if (--left) return;
+                while (parts.length && !parts[parts.length - 1]) parts.pop();
+                call(parts.length && parts.every(Boolean) ? parts : 0);
+              });
+            });
+          });
+        }, fail);
       },
       id: function id(card) {
         return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
@@ -520,7 +682,7 @@
         // Lampa splits a single TMDB season on its card; until that split is known, keep the source's own key
         if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !split) return '';
         // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
-        if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength || seasons !== this.cachedSeasons || this.splitOf(card) !== this.cachedSplitObj) {
+        if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength || seasons !== this.cachedSeasons || this.splitOf(card) !== this.cachedSplitObj || this.altOf(card) !== this.cachedAlt) {
           this.cached = items;
           this.cachedCard = card;
           this.cachedSeason = season;
@@ -534,10 +696,11 @@
           this.cachedCounts = this.counts(card);
           this.cachedSplitObj = this.splitOf(card);
           this.cachedSeasons = seasons;
+          this.cachedAlt = this.altOf(card);
         }
         var nums = this.cachedNums.concat([episode]);
         var info = element.watch_info || {};
-        var place = this.place(this.cachedMap, this.cachedCounts, animeSkip.isAnime(card, skipOf(element)), {
+        var q = {
           src: info.src || '',
           part: info.part,
           balancer: balancer,
@@ -547,7 +710,13 @@
           max: Math.max.apply(null, nums),
           split: !!(split && Object.keys(split).length >= 2),
           seasons: seasons
-        });
+        };
+        var anime = animeSkip.isAnime(card, skipOf(element));
+        var place = this.place(this.cachedMap, this.cachedCounts, anime, q, this.cachedAlt);
+        // what the rules cannot prove another source may: fetched once, used when the list is placed again
+        if (place === null && anime && !q.src && items) this.alt(card);
+        // read by the match menu (phase 2c)
+        element.watch_q = q;
         // one file without its list (TorBox) proves no run-on numbering: only its own numbers
         if (!items && place && (place.season !== season || place.episode !== episode)) place = null;
         element.watch_pending = place === null;
@@ -569,7 +738,7 @@
         });
         if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
           Lampa.Listener.follow('full', function (e) {
-            if (e.type == 'complite' && e.data && e.data.movie) watch.prefetch(e.data.movie, true);
+            if (e.type == 'complite' && e.data && e.data.movie) { watch.prefetch(e.data.movie, true); if (animeSkip.isAnime(e.data.movie)) watch.alt(e.data.movie); }
           });
         }
       },
@@ -19100,6 +19269,7 @@
         return watch.view(object.movie, balanser, element, hash, items, last_filter && last_filter.season ? last_filter.season.length : 0);
       };
       watch.prefetch(object.movie);
+      if (animeSkip.isAnime(object.movie)) watch.alt(object.movie);
       /**
        * Начать навигацию по файлам
        */

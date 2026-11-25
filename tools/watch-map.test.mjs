@@ -34,7 +34,7 @@ const Lampa = {
     }
   },
   Storage: {
-    get: (k, d) => (k === 'fv' ? viewed : (store[k] !== undefined ? store[k] : d)),
+    get: (k, d) => (k === 'fv' ? viewed : (store[k] !== undefined ? store[k] : (d === '{}' ? {} : d))),
     set: (k, v) => { store[k] = v; },
     cache: (k, ttl, def) => (k === 'fv' ? viewed : (store[k] !== undefined ? store[k] : (def || {})))
   },
@@ -68,7 +68,7 @@ const Lampa = {
   Listener: { follow: () => {} }
 };
 
-const animeSkip = { isAnime: (card) => !!card.anime };
+const animeSkip = { isAnime: (card) => !!card.anime, get: () => {} };
 const skipOf = () => null;
 
 const watch = new Function('Lampa', 'animeSkip', 'skipOf', 'window', code + '\nreturn watch;')(Lampa, animeSkip, skipOf, {});
@@ -360,6 +360,125 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.strictEqual(v.card, 'tv_105009');
   assert.strictEqual(viewed['h:29X'].card, 'tv_105009');
   assert.strictEqual(viewed['h:29X'].updated, 111);
+}
+
+// alt sources (2b)
+{
+  const alt = { y: [24, 13, 13, 13] };
+  const qq = { src: '', balancer: 'alloha', season: 2, episode: 9, min: 1, max: 13, seasons: 4 };
+  const w = (extra) => Object.assign({}, qq, extra);
+  assert.deepStrictEqual(watch.place({}, { 1: 63 }, true, qq, alt), { season: 1, episode: 33 });
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, w({ max: 12 }), alt), null);
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, w({ seasons: 5 }), alt), null);
+  assert.strictEqual(watch.place({}, { 1: 60 }, true, qq, alt), null);
+  assert.deepStrictEqual(watch.place({}, { 1: 63 }, true, w({ episode: 33, min: 25, max: 37 }), alt), { season: 1, episode: 33 });
+  assert.strictEqual(watch.place({}, { 1: 63 }, true, qq, { y: [24, 13, 13, 13], g: [26, 13, 12, 12] }), null);
+  assert.strictEqual(watch.place({}, { 1: 12, 2: 12, 3: 24 }, true, { src: '', balancer: 'x', season: 2, episode: 5, min: 1, max: 12, seasons: 3 }, { y: [24, 12, 12] }), null);
+  assert.deepStrictEqual(watch.place({}, { 1: 12, 2: 12 }, true, { src: '', balancer: 'x', season: 2, episode: 5, min: 1, max: 12, seasons: 2 }, { g: [12, 12] }), { season: 2, episode: 5 });
+  assert.strictEqual(watch.place({ 'alloha:2': 0 }, { 1: 63 }, true, qq, alt), false);
+}
+
+// alt: fetched once per card, kept 12 h, handed to place()
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  store['online_mod_watch_split'] = { tmdb_60: { 1: 63 } };
+  watch.splits = null; watch.alts = null; watch.cached = undefined;
+  const own = [watch.yummy, watch.groups];
+  let calls = 0;
+  watch.yummy = (c, call) => { calls++; call([24, 13, 13, 13]); };
+  watch.groups = (c, call) => { call(0); call([1]); };
+  const card = { id: 60, original_name: 'T', original_title: 'T', source: 'tmdb', anime: true, number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 63 }] };
+  const items = [];
+  for (let i = 1; i <= 13; i++) items.push({ season: '2', episode: String(i) });
+  assert.strictEqual(watch.view(card, 'alloha', items[0], 'legacy1', items, 4).hash, 'legacy1');
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(watch.altOf(card).g, 0);
+  const v9 = watch.view(card, 'alloha', items[8], 'legacy9', items, 4);
+  assert.strictEqual(v9.hash, 'h:133T');
+  assert.strictEqual(v9.episode, 33);
+  let done = 0;
+  watch.alt(card, () => { done++; });
+  assert.strictEqual(calls, 1);
+  assert.strictEqual(done, 1);
+  watch.yummy = (c, call) => { calls++; call(0); };
+  watch.altOf(card).t -= 43200001;
+  watch.alt(card);
+  assert.strictEqual(calls, 2);
+  assert.deepStrictEqual(watch.altOf(card).y, [24, 13, 13, 13]);
+  card.kinopoisk_id = 5;
+  watch.alt(card);
+  watch.alt(card);
+  assert.strictEqual(calls, 3);
+  assert.strictEqual(watch.altOf(card).k, 5);
+  watch.yummy = own[0]; watch.groups = own[1];
+}
+
+// alt: TMDB "Seasons" group -> runs of regular episodes
+{
+  for (const k in store) delete store[k];
+  watch.alts = null;
+  const run = (s, a, b) => { const o = []; for (let e = a; e <= b; e++) o.push({ season_number: s, episode_number: e }); return o; };
+  let detail = { groups: [{ episodes: run(1, 1, 24) }, { episodes: run(1, 38, 50) }, { episodes: run(1, 25, 37) }, { episodes: run(0, 1, 24) }, { episodes: run(1, 51, 63) }] };
+  const ownReq = Lampa.Reguest;
+  Lampa.TMDB = { api: (p) => p, key: () => 'K' };
+  Lampa.Reguest = function () {
+    this.timeout = () => {};
+    this.silent = (url, ok) => ok(url.indexOf('episode_groups') > 0 ? { results: [{ id: 'g1', type: 6 }, { id: 'g2', type: 5 }] } : detail);
+  };
+  const ownY = watch.yummy;
+  watch.yummy = (c, call) => call(0);
+  const card = { id: 105009, original_name: 'X', original_title: 'X', seasons: [{ season_number: 0, episode_count: 44 }, { season_number: 1, episode_count: 63 }] };
+  watch.alt(card);
+  assert.deepStrictEqual(watch.altOf(card).g, [24, 13, 13, 13]);
+  detail = { groups: [{ episodes: run(1, 1, 24).concat(run(1, 30, 31)) }, { episodes: run(1, 25, 29) }] };
+  watch.alts = null; delete store['online_mod_watch_alt'];
+  watch.alt(card);
+  assert.strictEqual(watch.altOf(card).g, 0);
+  delete Lampa.TMDB; Lampa.Reguest = ownReq; watch.yummy = ownY;
+}
+
+// alt: YummyAnime TV parts by the Kinopoisk id
+{
+  for (const k in store) delete store[k];
+  watch.alts = null;
+  const ownGet = animeSkip.get, ownG = watch.groups;
+  watch.groups = (c, call) => call(0);
+  const eps = { '/anime/a1?need_videos=false': 24, '/anime/a2?need_videos=false': 13, '/anime/3?need_videos=false': 13, '/anime/a4?need_videos=false': 0 };
+  animeSkip.get = (path, ok, fail) => {
+    if (path === '/anime?limit=1&kp_ids=77') return ok([{ anime_id: 1, anime_url: 'a1' }]);
+    if (!(path in eps)) return fail();
+    ok({ episodes: { count: eps[path] || 12, aired: eps[path] }, viewing_order: [
+      { anime_id: 1, anime_url: 'a1', type: { alias: 'tv' } }, { anime_id: 9, anime_url: 'm', type: { alias: 'movie' } },
+      { anime_id: 2, anime_url: 'a2', type: { alias: 'tv' } }, { anime_id: 3, type: { alias: 'tv' } }, { anime_id: 4, anime_url: 'a4', type: { alias: 'tv' } }] });
+  };
+  const card = { id: 50, original_name: 'A', original_title: 'A', kinopoisk_id: 77, seasons: [{ season_number: 1, episode_count: 50 }] };
+  watch.alt(card);
+  assert.deepStrictEqual(watch.altOf(card).y, [24, 13, 13]);
+  watch.alt({ id: 51, original_name: 'B', original_title: 'B' });
+  assert.strictEqual(watch.altOf({ id: 51 }).y, 0);
+  animeSkip.get = ownGet; watch.groups = ownG;
+}
+
+assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 'x', season: 3, episode: 5, min: 1, max: 13, seasons: 3 }, { y: [24, 13, 13] }), null);
+
+// alt() is not triggered for a non-anime card with an unproven season
+{
+  for (const k in viewed) delete viewed[k];
+  for (const k in store) delete store[k];
+  store['online_mod_watch_map'] = {};
+  watch.splits = null; watch.alts = null; watch.cached = undefined; watch.cachedCard = undefined; watch.cachedSeason = undefined; watch.cachedLength = undefined; watch.cachedSplit = undefined; watch.cachedSeasons = undefined; watch.cachedAlt = undefined;
+  watch.installed = false;
+  let altCalls = 0;
+  const ownY = watch.yummy; const ownG = watch.groups;
+  watch.yummy = (c, call) => { altCalls++; call(0); };
+  watch.groups = (c, call) => { altCalls++; call(0); };
+  const card = { id: 77, original_name: 'N', original_title: 'N', source: 'tmdb', seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
+  const element = { season: '1', episode: '13' };
+  const items = [element];
+  watch.view(card, 'kodik', element, 'legacyN', items, 2);
+  assert.strictEqual(altCalls, 0);
+  watch.yummy = ownY; watch.groups = ownG;
 }
 
 console.log('watch-map OK');
