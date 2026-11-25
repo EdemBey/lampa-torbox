@@ -20391,7 +20391,7 @@
         online_mod_watch_none: { ru: 'Не связывать с карточкой', en: 'Do not link to the card' },
         online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
-        online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
+        online_mod_by_episodes: { ru: 'Выбор плеера', en: 'Choose player' },
         online_mod_resume: { ru: 'Продолжить', en: 'Continue' },
         online_mod_season_short: { ru: 'С', en: 'S' },
         online_mod_episode_short: { ru: 'Е', en: 'E' },
@@ -22096,10 +22096,10 @@
           var render = e.object.activity.render();
           var row = render.find('.full-start-new__buttons, .full-start__buttons').first();
           row.length ? row.prepend(btn) : render.find('.view--torrent').after(btn);
-          // "По сериям" next to it, on series cards only
+          // "Выбор плеера" (episodes screen) next to it, on series cards only
           var card = e.data.movie;
           if (card && (card.original_name || card.number_of_seasons)) {
-            var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
+            var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
             by.on('hover:enter', function () {
               Lampa.Activity.push({ url: '', title: Lampa.Lang.translate('online_mod_by_episodes'), component: 'online_mod_episodes', card: card, page: 1 });
             });
