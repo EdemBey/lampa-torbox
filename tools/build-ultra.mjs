@@ -6,8 +6,10 @@ import fs from 'node:fs';
 const root = new URL('..', import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), 'utf8');
 
-const list = JSON.parse(read('plugin/ultra.json')).plugins;
+// Entries are "file.js" / "https://…" or { src, about }; about is a note for people only.
+const list = JSON.parse(read('plugin/ultra.json')).plugins.map((e) => (typeof e === 'string' ? e : e.src));
 const parts = list.map((name) => {
+  if (!name) throw new Error('plugin entry without src');
   if (/^https?:\/\//.test(name)) {
     return `\n;/* ---- ${name} ---- */\nLampa.Utils.putScriptAsync([${JSON.stringify(name)}], function () {});\n`;
   }
