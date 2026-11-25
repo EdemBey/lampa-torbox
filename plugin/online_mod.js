@@ -21330,9 +21330,12 @@
     // «По сериям» answers kept between sessions (6 h), in the few fields the screen needs: the voice, the quality,
     // the source's own numbers, the place on Lampa's numbering, whether the source numbers by its own releases.
     // Read from Lampa's storage once per session, then kept in memory.
-    episodeVariants.store = 'online_mod_variants';
+    // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
+    episodeVariants.store = 'online_mod_variants_v2';
     episodeVariants.all = function () {
       if (!episodeVariants.mem) {
+        var old = Lampa.Storage.get('online_mod_variants', '{}');
+        if (old && typeof old == 'object' && Object.keys(old).length) Lampa.Storage.set('online_mod_variants', {});
         var all = Lampa.Storage.get(episodeVariants.store, '{}');
         episodeVariants.mem = all && typeof all == 'object' ? all : {};
       }

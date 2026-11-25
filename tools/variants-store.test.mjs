@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf("    episodeVariants.store = 'online_mod_variants';");
+const from = src.indexOf("    episodeVariants.store = 'online_mod_variants_v2';");
 const to = src.indexOf('    episodeVariants.clear = function () {');
 assert(from > 0 && to > from, 'the «По сериям» store not found in plugin/online_mod.js');
 
@@ -38,18 +38,29 @@ assert.deepStrictEqual(back.res.rows.map((r) => [r.element.quality_base, r.eleme
 ]);
 assert.deepStrictEqual([back.res.status, back.labels, back.done['1'], back.all], ['ok', ['Сезон 1', 'Сезон 2'], true, false]);
 // an old answer is not used
-const stored = JSON.parse(disk.online_mod_variants);
+const stored = JSON.parse(disk.online_mod_variants_v2);
 stored['kodik:tmdb_1'].t = Date.now() - 7 * 3600 * 1000;
-disk.online_mod_variants = JSON.stringify(stored);
+disk.online_mod_variants_v2 = JSON.stringify(stored);
 const later = { cache: {} };
 new Function('episodeVariants', 'Lampa', src.slice(from, to))(later, Lampa);
 assert.strictEqual(later.load('kodik:tmdb_1'), null);
 // forget drops it from the memory copy and the storage
 episodeVariants.forget('kodik:tmdb_1');
-assert.strictEqual(JSON.parse(disk.online_mod_variants)['kodik:tmdb_1'], undefined);
+assert.strictEqual(JSON.parse(disk.online_mod_variants_v2)['kodik:tmdb_1'], undefined);
 // an answer too big for a TV's storage is not written
 const big = { res: { status: 'ok', rows: [] }, labels: [], done: {}, all: true };
 for (let i = 0; i < 9000; i++) big.res.rows.push({ season: 0, voice: 'v' + (i % 20), element: { season: 1, episode: i, quality: 'q' } });
 episodeVariants.save('alloha:tmdb_2', big);
-assert.strictEqual(JSON.parse(disk.online_mod_variants)['alloha:tmdb_2'], undefined);
+assert.strictEqual(JSON.parse(disk.online_mod_variants_v2)['alloha:tmdb_2'], undefined);
+// the old store (before the v2 key) is emptied once on the first read
+disk.online_mod_variants = JSON.stringify({ 'kodik:tmdb_1': { r: [] } });
+const old = { cache: {} };
+new Function('episodeVariants', 'Lampa', src.slice(from, to))(old, Lampa);
+old.all();
+assert.strictEqual(disk.online_mod_variants, '{}');
+// a v2 read ignores whatever sits under the old key
+disk.online_mod_variants = JSON.stringify({ 'kodik:tmdb_1': { t: Date.now(), r: [], s: 'ok', q: [], v: [], l: [], d: {} } });
+const v2 = { cache: {} };
+new Function('episodeVariants', 'Lampa', src.slice(from, to))(v2, Lampa);
+assert.strictEqual(v2.load('kodik:tmdb_1'), null);
 console.log('variants-store OK');
