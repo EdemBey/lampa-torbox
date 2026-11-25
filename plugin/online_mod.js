@@ -41,6 +41,7 @@
 //24.11.2026 - Skip button for regular series: TheIntroDB and IntroDB urls for DDD (intro, recap, credits)
 //24.11.2026 - Skip button in Lampa's own player: own button and timeline marks, AniSkip matched by the loaded video's length
 //24.11.2026 - Skip button for anime: AniSkip for the episode and its neighbours, DDD keeps results matching the video length; YummyAnime only for the Kodik upload with the chosen voiceover
+//25.11.2026 - Skip button on Alloha: the player's own opening/ending marks (bnsi skipTime) via the helper's /skips
 //22.11.2026 - Naruto Based: Steel Ball Run ending music replacement, like the site player
 
 (function () {
@@ -388,14 +389,15 @@
         episode: parseInt(el.episode),
         shikimori: el.shikimori || '',
         mal: el.malId || '',
-        voice: el.kodik_voice || ''
+        voice: el.kodik_voice || '',
+        alloha: el.alloha_skips || ''
       };
     }
 
     /**
      * Opening/ending/recap timings for DDD's "Skip" button (X-DDD-Segments). Anime: AniSkip urls for the
      * episode and its neighbours ({aniskip}), DDD keeps the results whose video length matches; Kodik adds
-     * the YummyAnime timings of its own upload ({segments}). Regular TV series: TheIntroDB/IntroDB urls ({url}).
+     * the YummyAnime timings of its own upload ({segments}). Alloha: the helper's /skips url ({url}), only; replaces TheIntroDB. Regular TV series: TheIntroDB/IntroDB urls ({url}).
      */
     var animeSkip = {
       api: 'https://api.yani.tv',
@@ -516,6 +518,19 @@
       // matching Kodik upload; {url} for regular series. Never delays playback by more than 4 s.
       prepare: function prepare(playlist, done) {
         var self = this;
+        var withUrls = playlist.length <= 30 || !isExternalAndroidPlayer();
+        var ready = done;
+        // Alloha: only its own timings (the file that plays); TheIntroDB marks another release's cut
+        done = function () {
+          playlist.forEach(function (item) {
+            var own = withUrls && item && item.anime_skip && item.anime_skip.alloha;
+            if (!own) return;
+            var seg = item.anime_segments || {};
+            seg.url = own;
+            item.anime_segments = seg;
+          });
+          ready();
+        };
         var act = Lampa.Activity.active();
         var card = act && act.movie;
         var items = [];
@@ -529,7 +544,7 @@
             return;
           }
           // shortcut: other external players (MX, VLC) may forward unknown headers to the video server, so long seasons send no series urls; move to one id-based header DDD expands itself if long seasons matter.
-          var url = (playlist.length <= 30 || !isExternalAndroidPlayer()) && self.seriesUrls(card, skip);
+          var url = withUrls && self.seriesUrls(card, skip);
           if (url) item.anime_segments = { url: url };
         });
         if (!items.length) return done();
@@ -14588,6 +14603,7 @@
                   season: s_num,
                   episode: e_num,
                   media: media,
+                  alloha_skips: server + '/skips?url=' + encodeURIComponent(extract.iframe.replace(/&(translation|season|episode|audio)=[^&]*/g, '') + '&translation=' + media.id_translation + '&season=' + s_num + '&episode=' + e_num),
                   // The helper picks the track by label: Alloha renumbers tracks from episode to episode.
                   // A voice without the "Дорожка" row keeps a track picked in the player.
                   audio: filter_items.audio.length ? filter_items.audio[choice.audio] : choice.audio_name || undefined

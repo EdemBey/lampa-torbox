@@ -97,6 +97,17 @@ export function episodeKey(src) {
 // An unknown or missing label falls back to the default track.
 // shortcut: two unnamed tracks of one language ("(English) 10" and "(English) 11") can swap after a
 // renumber; pick by order among same-bare labels if a voice like that shows up.
+// bnsi.skipTime: an intro and a credits slot in seconds ("0-0,1345-1441"), 0-0 when one is missing.
+// Returned in TheIntroDB v4 shape, which DDD and the plugin already read from a url.
+export function skipsOf(skipTime) {
+  const out = { intro: [], credits: [] };
+  String(skipTime || '').split(',').slice(0, 2).forEach((part, i) => {
+    const [a, b] = part.split('-').map(Number);
+    if (a >= 0 && b > a) out[i ? 'credits' : 'intro'].push({ start_ms: a * 1000, end_ms: b * 1000 });
+  });
+  return out;
+}
+
 export const bareLabel = (s) => String(s || '').replace(/\s+\d+$/, '');
 export function sourceFor(info, src) {
   const sources = (info && Array.isArray(info.sources)) ? info.sources : [];

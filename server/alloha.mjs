@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
-import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, sourceFor } from './alloha-sign.mjs';
+import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, skipsOf, sourceFor } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 import { handleRezka, isRezkaPath } from './rezka.mjs';
 import { handleTorbox } from './torbox.mjs';
@@ -154,7 +154,7 @@ async function resolveInfo(src) {
 
   const defaultSource = sources.find((x) => x.default) || sources[0];
   const subtitles = (bnsi.tracks || []).filter((x) => x && x.src && x.label).map((x) => ({ label: x.label, default: !!x['default'], src: x.src }));
-  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, sources, subtitles, audio: defaultSource.label || null, meta: {} };
+  return { src, origin, id, guard: await signGuard(src, origin, id), pnr: bnsi.pnr, pnk: bnsi.pnk, sources, subtitles, audio: defaultSource.label || null, meta: {}, skips: skipsOf(bnsi.skipTime) };
 }
 
 // Episodes resolved for playback, plus the in-flight and recently failed ones.
@@ -701,6 +701,12 @@ http.createServer(async (req, res) => {
       // Same cost as /audios: the plugin asks only for the episode it is about to play.
       const info = await iframeInfo(src);
       return send(res, 200, JSON.stringify(info.subtitles.map((x) => ({ label: x.label, default: x.default }))), 'application/json; charset=utf-8');
+    }
+    if (url.pathname === '/skips') {
+      if (!isAllowedIframe(src)) return send(res, 400, 'bad url');
+      // Players ask it once the episode plays, so it reuses that episode's resolve.
+      const info = await iframeInfo(src);
+      return send(res, 200, JSON.stringify(info.skips), 'application/json; charset=utf-8');
     }
     if (url.pathname === '/sub.vtt') {
       if (!isAllowedIframe(src)) return send(res, 400, 'bad url');

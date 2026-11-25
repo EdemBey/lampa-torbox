@@ -129,6 +129,21 @@ const prepared = function (api, list) {
   assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(61469, 1) });
 }
 
+// d4c) Alloha: only its own /skips url, no TheIntroDB
+{
+  const tv = { id: 5, number_of_seasons: 1, genres: [], original_language: 'en' };
+  const { api } = load({}, tv);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ season: 1, episode: 2, alloha_skips: 'https://h/skips?url=x' }) }];
+  api.animeSkip.prepare(list, function () {});
+  assert.deepStrictEqual(list[0].anime_segments, { url: 'https://h/skips?url=x' });
+}
+{
+  const { api } = load({}, animeCard);
+  const list = [{ url: 'u1', anime_skip: api.skipOf({ episode: 2, malId: 7, alloha_skips: 'https://h/skips?url=x' }) }];
+  api.animeSkip.prepare(list, function () {});
+  assert.deepStrictEqual(list[0].anime_segments, { aniskip: aniskips(7, 2), url: 'https://h/skips?url=x' });
+}
+
 // d5) no MAL id anywhere (entry without remote ids): nothing
 {
   const { api } = load({ '/anime?limit=1&kp_ids=1': [{ anime_id: 5, anime_url: 'x', remote_ids: {} }] }, animeCard);
@@ -249,6 +264,7 @@ const prepared = function (api, list) {
   fixtures[ep3] = { found: true, results: [{ interval: { startTime: 30, endTime: 120 }, skipType: 'op', episodeLength: 1516 }] };
   const tvdb = 'https://api.theintrodb.org/v4/media?tmdb_id=1396&season=1&episode=2';
   fixtures[tvdb] = { intro: [{ start_ms: 314517, end_ms: 331147 }], recap: [{ start_ms: 0, end_ms: 0 }, { start_ms: 10000, end_ms: null }], credits: [{ start_ms: 2848346, end_ms: null }] };
+  fixtures['https://h/skips'] = { intro: [], credits: [{ start_ms: 1345000, end_ms: 1441000 }] };
   let calls = 0;
   const api = new Function('Lampa', code.slice(code.indexOf('    var browserSkip = {'), code.indexOf('    // X-DDD-Segments, indexed')) + '\nreturn browserSkip;')({
     Reguest: function () {
@@ -267,6 +283,7 @@ const prepared = function (api, list) {
   const before = calls;
   assert.deepStrictEqual(await resolved({ url: [tvdb, 'https://api.introdb.app/segments?imdb_id=tt1'] }, 2900), [{ type: 'op', start: 314.517, end: 331.147 }, { type: 'ed', start: 2848.346, end: 2900 }]);
   assert.strictEqual(calls - before, 1);
+  assert.deepStrictEqual(await resolved({ url: 'https://h/skips' }, 1500), [{ type: 'ed', start: 1345, end: 1441 }]);
   // Nothing to resolve
   assert.deepStrictEqual(await resolved(undefined, 100), []);
 }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { borthFor, episodeKey, mapPlaylist, YB, pickQuality, sourceFor } from './alloha-sign.mjs';
+import { borthFor, episodeKey, mapPlaylist, YB, pickQuality, skipsOf, sourceFor } from './alloha-sign.mjs';
 
 test('Borth matches the player byte for byte', () => {
   // Captured from a live player page together with the Borth it sent.
@@ -84,4 +84,12 @@ test('sourceFor picks the audio track by label and falls back to the default', (
   ] };
   assert.equal(sourceFor(both, q('(Russian) MVO (HDRezka) 18+')), both.sources[1]);
   assert.equal(sourceFor(both, q('(Russian) MVO (HDRezka)')), both.sources[0]);
+});
+
+test('skipsOf converts bnsi.skipTime to TheIntroDB v4 shape', () => {
+  assert.deepStrictEqual(skipsOf('0-0,1345-1441'), { intro: [], credits: [{ start_ms: 1345000, end_ms: 1441000 }] });
+  assert.deepStrictEqual(skipsOf('64-153,1338-1377'), { intro: [{ start_ms: 64000, end_ms: 153000 }], credits: [{ start_ms: 1338000, end_ms: 1377000 }] });
+  assert.deepStrictEqual(skipsOf(undefined), { intro: [], credits: [] });
+  assert.deepStrictEqual(skipsOf(false), { intro: [], credits: [] });
+  assert.deepStrictEqual(skipsOf('junk'), { intro: [], credits: [] });
 });
