@@ -3403,6 +3403,35 @@
       return best === 720 && items.length >= offered ? 0 : best;
     }
 
+    // the best resolution a title offers (stubs included), from the labels HDrezka lists for one stream; 0 = none
+    function rezkaOffered(labels) {
+      var max = 0;
+      (labels || []).forEach(function (label) {
+        var text = String(label).replace(/<[^>]*>/g, '');
+        var q = /4K/i.test(text) ? 2160 : /2K/i.test(text) ? 1440 : parseInt(text, 10) || 0;
+        if (q > max) max = q;
+      });
+      return max;
+    }
+
+    // best offered resolution per film id, kept between sessions (the newest 300 titles)
+    function rezkaTitleMax(film_id) {
+      var all = Lampa.Storage.get('online_mod_rezka2_titles', {});
+      return all && +all['t' + film_id] || 0;
+    }
+
+    // keys carry a letter: numeric keys would iterate by value, not by age
+    function rezkaTitleSave(film_id, best) {
+      if (!film_id || !(best > 0) || rezkaTitleMax(film_id) === best) return;
+      var all = Lampa.Storage.get('online_mod_rezka2_titles', {});
+      if (!all || typeof all !== 'object') all = {};
+      delete all['t' + film_id];
+      all['t' + film_id] = best;
+      var keys = Object.keys(all);
+      while (keys.length > 300) delete all[keys.shift()];
+      Lampa.Storage.set('online_mod_rezka2_titles', all);
+    }
+
     function rezka2(component, _object, config) {
       var network = new Lampa.Reguest();
       var loaders = [];
@@ -3805,6 +3834,20 @@
         network.clear();
         for (var li = 0; li < loaders.length; li++) try { loaders[li].clear(); } catch (e) {}
         loaders = [];
+      };
+
+      // The episode list names no qualities: one stream request (not played) teaches the title's best (see getStream)
+      this.qualityProbe = function (done) {
+        if (!extract || !extract.is_series || rezkaTitleMax(extract.film_id) || !extract.episode || !extract.episode.length) return done();
+        var over = false;
+        var end = function end() {
+          if (over) return;
+          over = true;
+          clearTimeout(timer);
+          done();
+        };
+        var timer = setTimeout(end, 8000);
+        getStream({ media: extract.episode[0] }, end, end);
       };
 
       // Several titles found: HDrezka's pages carry IMDb/Kinopoisk ids in their rating links (/help/<base64 of the
@@ -4355,7 +4398,9 @@
 
             if (items && items.length) {
               // a title without premium tiers leaves the account's value alone
-              var best = rezkaBest(items, component.parsePlaylist(video).length);
+              var offered = component.parsePlaylist(video);
+              var best = rezkaBest(items, offered.length);
+              rezkaTitleSave(extract.film_id, rezkaOffered(offered.map(function (p) { return p.label; })));
               if (best && best !== +Lampa.Storage.get('online_mod_rezka2_best', 0)) Lampa.Storage.set('online_mod_rezka2_best', best);
               file = items[0].file;
               quality = {};
@@ -4540,11 +4585,14 @@
           var voice = filter_items.voice[choice.voice];
           // merged parts are numbered in their order, not by the page's own season id
           var season_num = parts ? choice.season + 1 : 0;
+          // a free account is offered 4K too, but those tiers are Premium placeholders: cap like the «По сериям» badge
+          var max = Math.min(rezkaTitleMax(extract.film_id), +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720));
+          var range = max ? '360p ~ ' + (max >= 2160 ? '2160p' : max + 'p') : '360p ~ 1080p';
           extract.episode.forEach(function (episode) {
             if (episode.season_id == season_id) {
               filtred.push({
                 title: component.formatEpisodeTitle(season_num || episode.season_id, null, episode.name),
-                quality: '360p ~ 1080p',
+                quality: range,
                 info: ' / ' + voice,
                 season: season_num || parseInt(episode.season_id),
                 episode: parseInt(episode.episode_id),
@@ -21249,7 +21297,12 @@
           seasons.splice(wanted, 1);
           seasons.unshift(wanted);
         }
-        setTimeout(next, 0);
+        // HDrezka's rows get the title's real qualities once one stream was asked
+        var source = probe.source();
+        if (!source || !source.qualityProbe) return setTimeout(next, 0);
+        source.qualityProbe(function () {
+          if (!finished) setTimeout(next, 0);
+        });
       };
       try {
         probe.find();
