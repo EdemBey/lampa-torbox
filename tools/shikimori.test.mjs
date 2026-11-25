@@ -44,6 +44,8 @@ function load(fixtures) {
   assert.strictEqual(api.isAnime({ original_language: 'ja', genre_ids: [18] }), false);
   assert.strictEqual(api.isAnime({ original_language: 'en', genres: [{ id: 16 }] }), false);
   assert.strictEqual(api.isAnime({ yani_shikimori: [5] }), true);
+  assert.strictEqual(api.isAnime({ source: 'yani' }), true);
+  assert.strictEqual(api.isAnime({ source: 'yani', yani_random: true, id: 'random' }), false);
   assert.strictEqual(api.isAnime(undefined), false);
 }
 
@@ -75,6 +77,17 @@ function load(fixtures) {
   fixtures[API + '/52991'] = { score: '9.25' };
   const { api, called } = load(fixtures);
   const card = { id: 3, yani_shikimori: [52991] };
+  const score = await new Promise(function (resolve) { api.get(card, resolve); });
+  assert.strictEqual(score, 9.25);
+  assert.deepStrictEqual(called, [API + '/52991']);
+}
+
+// d2) yani catalog card: mal id, no name search
+{
+  const fixtures = {};
+  fixtures[API + '/52991'] = { score: '9.25' };
+  const { api, called } = load(fixtures);
+  const card = { id: 99, source: 'yani', name: 'X', mal: 52991 };
   const score = await new Promise(function (resolve) { api.get(card, resolve); });
   assert.strictEqual(score, 9.25);
   assert.deepStrictEqual(called, [API + '/52991']);

@@ -16,7 +16,8 @@
 
   function isAnime(d) {
     if (!d) return false;
-    if (d.yani_shikimori && d.yani_shikimori.length) return true;
+    // A yani card without mal is still anime, so it gets the same name search as TMDB anime; the dice card is not a title.
+    if ((d.source === 'yani' && !d.yani_random) || (d.yani_shikimori && d.yani_shikimori.length)) return true;
     var ids = d.genre_ids || (d.genres || []).map(function (g) { return g.id; });
     return d.original_language === 'ja' && ids.indexOf(16) !== -1;
   }
@@ -46,9 +47,14 @@
     next();
   }
 
+  // YummyAnime catalog cards carry the MAL id in `mal`; Shikimori ids equal MAL ids.
+  function sidOf(d) {
+    return d.yani_shikimori && d.yani_shikimori[0] || d.mal;
+  }
+
   // done(score, ok): ok=false means a network error, so the miss is not cached.
   function lookup(d, done, urgent) {
-    var sid = d.yani_shikimori && d.yani_shikimori[0];
+    var sid = sidOf(d);
     if (sid) {
       return request(API + '/' + sid, function (a) {
         done(a ? parseFloat(a.score) || 0 : 0, !!a);
@@ -74,7 +80,7 @@
 
   function get(d, cb, urgent) {
     var key = (d.source || 'tmdb') + '_' + (d.name ? 'tv' : 'movie') + '_' + d.id;
-    var sid = d.yani_shikimori && d.yani_shikimori[0];
+    var sid = sidOf(d);
     var wkey = key + (sid ? '_id' : ''); // an id lookup must not join a queued name search
     var hit = Lampa.Storage.cache('shikimori_rating', 1000, {})[key];
     // A score found by name search must not shadow the exact Shikimori id once it is known.
