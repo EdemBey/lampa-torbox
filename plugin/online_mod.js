@@ -562,7 +562,8 @@
           sum += counts[s];
           ends[sum] = true;
         }
-        var confirmed = alt.g && alt.y && alt.g.join() === alt.y.join();
+        // a running last season legitimately differs (aired vs planned): every element but the last must match
+        var confirmed = alt.g && alt.y && alt.g.length > 1 && alt.g.length === alt.y.length && alt.g.slice(0, -1).join() === alt.y.slice(0, -1).join();
         // the two sources count this balancer's seasons differently: nothing is proven
         if (alt.g && alt.y && !confirmed && alt.g.length === q.seasons && alt.y.length === q.seasons) return null;
         [alt.y, alt.g].forEach(function (parts) {
@@ -21437,6 +21438,9 @@
         stage = 'play';
         var row = watch.pinRow(pin, rows);
         if (!row) return fail();
+        var rowEntry = rows.filter(function (r) { return r.item === row; })[0];
+        // its place is not proven: the source's own screen asks, a guess would write a wrong watched mark
+        if (rowEntry && rowEntry.element && rowEntry.element.watch_pending) return fail();
         over = true;
         clearTimeout(timer);
         var started = false;
