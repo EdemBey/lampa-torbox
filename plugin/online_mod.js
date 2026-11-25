@@ -399,7 +399,9 @@
       // Single-TMDB-season cards: episode counts of Lampa's own air-date split (what its episode list shows)
       splits: null,
       splitOf: function splitOf(card) {
-        if (!this.splits) this.splits = Lampa.Storage.get('online_mod_watch_split', '{}') || {};
+        // a stored value that is not an object (corrupted) is started over
+        if (!this.splits) this.splits = Lampa.Storage.get('online_mod_watch_split', '{}');
+        if (!this.splits || typeof this.splits != 'object') this.splits = {};
         // TMDB may later split the show into real seasons: then Lampa shows those, not its air-date split
         return card && Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && this.splits[this.id(card)] || null;
       },
@@ -566,7 +568,8 @@
       alts: null,
       waits: {},
       altOf: function altOf(card) {
-        if (!this.alts) this.alts = Lampa.Storage.get('online_mod_watch_alt', '{}') || {};
+        if (!this.alts) this.alts = Lampa.Storage.get('online_mod_watch_alt', '{}');
+        if (!this.alts || typeof this.alts != 'object') this.alts = {};
         return card && card.id && this.alts[this.id(card)] || null;
       },
       alt: function alt(card, call) {

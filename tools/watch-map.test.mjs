@@ -861,6 +861,18 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   Lampa.Api = ownApi; Lampa.Utils.splitEpisodesIntoSeasons = ownSplit;
 }
 
+// a corrupted cache in localStorage is started over, not written into
+{
+  for (const k in store) delete store[k];
+  store['online_mod_watch_split'] = 'garbage';
+  store['online_mod_watch_alt'] = 'garbage';
+  watch.splits = null; watch.alts = null;
+  assert.strictEqual(watch.splitOf({ id: 1, original_title: 'Z', number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 5 }] }), null);
+  assert.deepStrictEqual(watch.splits, {});
+  assert.strictEqual(watch.altOf({ id: 1 }), null);
+  assert.deepStrictEqual(watch.alts, {});
+}
+
 // the menu offers the reset only for a title that has answers
 {
   for (const k in store) delete store[k];
