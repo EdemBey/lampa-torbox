@@ -735,6 +735,8 @@
         all[id] = cur;
         Lampa.Storage.set(this.store, all);
         this.cached = null;
+        // «По сериям» rows carry the places of the old answers
+        if (typeof episodeVariants != 'undefined') episodeVariants.cache = {};
         this.sync();
       },
       title: function title(p) {
@@ -887,6 +889,22 @@
           if (!w && !raw && el.season == pin.season && el.episode == pin.episode) raw = rows[i].item;
         }
         return raw;
+      },
+      // "По сериям": per voice, the row of the pinned episode (rows: {season, voice, element}, in the source's order)
+      pinVariants: function pinVariants(pin, rows) {
+        var by = {};
+        var order = [];
+        (rows || []).forEach(function (r) {
+          if (!by[r.voice]) {
+            by[r.voice] = [];
+            order.push(r.voice);
+          }
+          by[r.voice].push({ item: r, element: r.element });
+        });
+        var self = this;
+        return order.map(function (v) {
+          return self.pinRow(pin, by[v]);
+        }).filter(Boolean);
       },
       // the balancer season whose label carries the pinned season's number, -1 if none
       pinSeason: function pinSeason(pin, labels) {
@@ -15413,6 +15431,8 @@
 
       // A standalone voice file can carry several audio tracks; the helper lists them once per voice.
       function probeAudios() {
+        // the «По сериям» probe walks every voice: no track request per voice
+        if (component.watch_probe) return;
         if (!extract || !extract.pl || extract.pl.type !== 'serial') return;
         if (!filter_items || !filter_items.voice_info || !filter_items.voice_info[choice.voice]) return;
         var v_id = filter_items.voice_info[choice.voice].id;
@@ -18357,6 +18377,11 @@
         return this.proxyStream(url, name);
       };
 
+      // the source this screen runs (the «По сериям» probe drives it without the screen)
+      this.source = function () {
+        return sources[balanser];
+      };
+
       this.checkMyIp = function (onComplite) {
         Utils.checkMyIp(network, onComplite);
       };
@@ -18365,6 +18390,7 @@
       // "По сериям": the pinned episode is focused once; the balancer's season is switched at most once to find it
       var pin_done = false;
       var pin_tried = false;
+      var pick_done = false;
       var extended;
       var selected_id;
       var filter_translate = {
@@ -19677,6 +19703,18 @@
           if (object.movie.number_of_seasons && last_views.length) last = last_views.eq(0)[0];else last = scroll.render().find('.selector').eq(0)[0];
         }
 
+        // a voice picked in «По сериям»: its season and voice are set once, the redraws call start() again
+        if (object.watch_pick && !pick_done && last_filter && sources[balanser] && sources[balanser].filter) {
+          pick_done = true;
+          pin_tried = true;
+          var pick = object.watch_pick;
+          if (last_filter.season && last_filter.season[pick.season] !== undefined) sources[balanser].filter('filter', { stype: 'season' }, { index: pick.season });
+          var pick_voice = last_filter.voice ? last_filter.voice.indexOf(pick.voice_name) : -1;
+          if (pick_voice >= 0) sources[balanser].filter('filter', { stype: 'voice' }, { index: pick_voice });
+          // the redraws above may have focused a row of the list they replaced: find it again in the final one
+          pin_done = false;
+        }
+
         if (object.watch_pin && !pin_done) {
           var pinned = watch.pinRow(object.watch_pin, contextmenu_all);
           if (pinned) {
@@ -19842,6 +19880,7 @@
         online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_by_episodes: { ru: 'По сериям', en: 'By episode' },
+        online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
         online_mod_wait: { ru: 'Загружаю сезоны, нажмите ещё раз через секунду', en: 'Loading the seasons, press again in a second' },
         online_mod_original: { ru: 'Оригинал', en: 'Original' },
         online_mod_rezka_premium_only: { ru: 'Перевод доступен только с HDrezka Premium', en: 'This voiceover needs HDrezka Premium' },
@@ -20572,6 +20611,92 @@
       Lampa.Filter = ModssFilter;
     }
 
+    // "По сериям": a source run without its screen. Every season and voice is listed once per card, each row
+    // placed on Lampa's numbering by the rules the list itself uses. done(rows) gets [] when nothing is known.
+    function episodeVariants(card, balancer, done) {
+      var key = balancer + ':' + watch.id(card);
+      if (episodeVariants.cache[key]) {
+        done(episodeVariants.cache[key]);
+        return function () {};
+      }
+      var rows = [];
+      var labels = null;
+      var batch = [];
+      var walking = false;
+      var finished = false;
+      var noop = function noop() {};
+      var probe;
+      var finish = function finish(walked) {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        // only a finished walk is kept: an error or a timeout is tried again next time
+        if (walked === true) episodeVariants.cache[key] = rows;
+        try {
+          probe.destroy();
+        } catch (e) {}
+        done(rows);
+      };
+      var timer = setTimeout(finish, 9000);
+      // the probe's component would take over the screen's refresh hook
+      var refresh = watch.refresh;
+      try {
+        probe = new component({ movie: card, balancer: balancer, search: card.title, search_one: card.title, search_two: card.original_title, page: 1 });
+        watch.refresh = refresh;
+      } catch (e) {
+        watch.refresh = refresh;
+        finish();
+        return function () {};
+      }
+      probe.activity = { loader: noop, toggle: noop };
+      probe.watch_probe = true;
+      ['loading', 'reset', 'append', 'contextmenu', 'saveChoice', 'extendChoice', 'closeFilter', 'updateQualityFilter'].forEach(function (m) {
+        probe[m] = noop;
+      });
+      // not found is kept; an error, or several titles only the user chooses between, is tried again
+      probe.emptyForQuery = function () {
+        finish(true);
+      };
+      probe.empty = probe.similars = function () {
+        finish();
+      };
+      probe.filter = function (items) {
+        if (items && items.season) labels = items;
+      };
+      probe.watchView = function (element, hash, items) {
+        watch.hashOf(card, balancer, element, items, labels && labels.season ? labels.season.length : 0);
+        batch.push(element);
+        return Lampa.Timeline.view(hash);
+      };
+      probe.start = function () {
+        if (walking || finished) return;
+        walking = true;
+        var source = probe.source();
+        if (!source || !source.filter || !labels || !labels.season || !labels.season.length) return finish();
+        try {
+          for (var s = 0; s < labels.season.length; s++) {
+            source.filter('filter', { stype: 'season' }, { index: s });
+            var voices = (labels.voice || []).slice();
+            for (var v = 0; v < voices.length; v++) {
+              batch = [];
+              source.filter('filter', { stype: 'voice' }, { index: v });
+              for (var i = 0; i < batch.length; i++) rows.push({ season: s, voice: voices[v], element: batch[i] });
+            }
+          }
+        } catch (e) {
+          return finish();
+        }
+        // shortcut: every season × voice is redrawn once per card (fast for Alloha/Kodik, all in one answer); limit to the pinned season if weak TVs stall
+        finish(true);
+      };
+      probe.find();
+      return function () {
+        finish();
+      };
+    }
+    episodeVariants.cache = {};
+    episodeVariants.sources = ['alloha', 'kodik'];
+
     // "По сериям": season → episode → source; an online source opens on that episode, TorBox on the card
     function episodesMenu(card, enabled) {
       var L = Lampa.Lang.translate;
@@ -20596,24 +20721,65 @@
           },
           onSelect: function onSelect(e) {
             var pin = { season: e.season, episode: e.episode };
-            var items = Balancers.filter(function (b) {
+            var enabledList = Balancers.filter(function (b) {
               return !b.disabled;
-            }).map(function (b) {
-              return { title: b.title, balancer: b.name };
             });
-            if (Lampa.Component.get && Lampa.Component.get('torbox_main')) items.push({ title: 'TorBox', torbox: true });
-            Lampa.Select.show({
-              title: watch.title(pin),
-              items: items,
-              onBack: function onBack() {
-                episodes(season);
-              },
-              onSelect: function onSelect(b) {
-                back();
-                if (b.torbox) return Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
-                online_loading = false;
-                loadOnline(card, b.balancer, pin);
-              }
+            var probed = enabledList.filter(function (b) {
+              return episodeVariants.sources.indexOf(b.name) >= 0;
+            });
+            var found = {};
+            var cancels = [];
+            var left = probed.length;
+            var shown = false;
+            var show = function show() {
+              if (shown) return;
+              shown = true;
+              clearTimeout(guard);
+              cancels.forEach(function (c) {
+                c();
+              });
+              Lampa.Loading.stop();
+              var items = [];
+              probed.forEach(function (b) {
+                watch.pinVariants(pin, found[b.name]).forEach(function (r) {
+                  var el = r.element;
+                  items.push({
+                    title: b.title + ' · ' + r.voice,
+                    subtitle: [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · '),
+                    balancer: b.name,
+                    pick: { season: r.season, voice_name: r.voice }
+                  });
+                });
+              });
+              enabledList.forEach(function (b) {
+                if (!items.some(function (i) {
+                  return i.balancer === b.name;
+                })) items.push({ title: b.title, balancer: b.name });
+              });
+              if (Lampa.Component.get && Lampa.Component.get('torbox_main')) items.push({ title: 'TorBox', torbox: true });
+              Lampa.Select.show({
+                title: watch.title(pin),
+                items: items,
+                onBack: function onBack() {
+                  episodes(season);
+                },
+                onSelect: function onSelect(b) {
+                  back();
+                  if (b.torbox) return Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
+                  online_loading = false;
+                  loadOnline(card, b.balancer, pin, b.pick);
+                }
+              });
+            };
+            var guard = setTimeout(show, 10000);
+            if (!left) return show();
+            // back while loading shows what has come so far
+            Lampa.Loading.start(show);
+            probed.forEach(function (b) {
+              cancels.push(episodeVariants(card, b.name, function (rows) {
+                found[b.name] = rows;
+                if (--left === 0) show();
+              }));
             });
           }
         });
@@ -20629,7 +20795,7 @@
     }
     episodesMenu.waited = {};
 
-    function loadOnline(object, balancer, pin) {
+    function loadOnline(object, balancer, pin, pick) {
       if (online_loading) return;
       online_loading = true;
       Utils.setMyIp('');
@@ -20648,6 +20814,7 @@
             movie: object,
             balancer: balancer || undefined,
             watch_pin: pin || undefined,
+            watch_pick: pick || undefined,
             modssSources: balancer ? modssSourcesSnapshot.slice() : undefined,
             page: 1
           });

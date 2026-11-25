@@ -845,6 +845,16 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.strictEqual(watch.pinSeason({ season: 2, episode: 9 }, ['Сезон 1', 'Сезон 2']), 1);
   assert.strictEqual(watch.pinSeason({ season: 5, episode: 1 }, ['Сезон 1', 'Сезон 2']), -1);
   assert.strictEqual(watch.pinSeason({ season: 2, episode: 1 }, null), -1);
+  // per voice the proven row wins; a voice without the episode gives no row
+  const vrows = [
+    { season: 0, voice: 'A', element: { season: '1', episode: 9 } },
+    { season: 1, voice: 'A', element: { season: '2', episode: 9, watch_place: { season: 2, episode: 9 } } },
+    { season: 1, voice: 'B', element: { season: '2', episode: 9 } },
+    { season: 1, voice: 'C', element: { season: '2', episode: 3, watch_place: { season: 2, episode: 3 } } }
+  ];
+  const picked = watch.pinVariants({ season: 2, episode: 9 }, vrows);
+  assert.deepStrictEqual(picked.map((r) => [r.voice, r.season]), [['A', 1], ['B', 1]]);
+  assert.deepStrictEqual(watch.pinVariants({ season: 2, episode: 9 }, null), []);
   Lampa.Lang = ownLang;
 }
 
