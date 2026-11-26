@@ -3747,6 +3747,44 @@
       });
       return out;
     }
+    // the card's IMDb/Kinopoisk ids: its own, TMDB's external_ids (a cub card has no imdb_id of its own), or the one a source passed
+    function rezkaCardIds(movie, kinopoisk_id) {
+      movie = movie || {};
+      var ext = movie.external_ids || {};
+      return {
+        imdb: movie.imdb_id || ext.imdb_id || (/^tt\d+$/.test(kinopoisk_id + '') ? kinopoisk_id + '' : ''),
+        kp: +kinopoisk_id ? kinopoisk_id + '' : +movie.kinopoisk_id ? movie.kinopoisk_id + '' : +ext.kinopoisk_id ? ext.kinopoisk_id + '' : ''
+      };
+    }
+    // the search items whose year is within one of the card's, the nearest first
+    function rezkaNear(items, year) {
+      if (!year) return [];
+      return items.map(function (c, i) {
+        return { c: c, i: i, d: c.year ? Math.abs(c.year - year) : 9 };
+      }).filter(function (o) {
+        return o.d <= 1;
+      }).sort(function (a, b) {
+        return a.d - b.d || a.i - b.i;
+      }).map(function (o) {
+        return o.c;
+      });
+    }
+    // the pages are asked one at a time: ids(card, got) answers got(page ids or null); done(matches) once all are asked
+    // (silent if alive() says the screen is gone)
+    function rezkaIdMatches(list, imdb, kp, ids, alive, done) {
+      var matches = [];
+      var i = 0;
+      var next = function next() {
+        if (!alive()) return;
+        if (i >= list.length) return done(matches);
+        var card = list[i++];
+        ids(card, function (got) {
+          if (got && (imdb && got.imdb === imdb || kp && got.kp === kp)) matches.push(card);
+          next();
+        });
+      };
+      next();
+    }
 
     // page link -> its ids, for the session (one page is opened once)
     var rezkaIds = {};
@@ -3918,11 +3956,14 @@
         var url = embed + 'engine/ajax/search.php';
         var more_url = embed + 'search/?do=search&subaction=search';
 
-        var query_more = function query_more(query, page, data, callback) {
+        var query_more = function query_more(query, page, data, callback, fail) {
           var url = more_url + '&q=' + encodeURIComponent(query) + '&page=' + encodeURIComponent(page);
+          // an answer after the screen was closed or a newer search began is dropped
+          var gen = ids_gen;
           network.clear();
           network.timeout(10000);
           network["native"](component.proxyLink(url, prox, prox_enc, prox_enc, 'enc2t'), function (str) {
+            if (!extract || gen !== ids_gen) return;
             str = (str || '').replace(/[\r\n]/g, '');
             checkErrorForm(str);
             var links = str.match(/<div class="b-content__inline_item-link">\s*<a [^>]*>[^<]*<\/a>\s*<div>[^<]*<\/div>\s*<\/div>/g);
@@ -3955,6 +3996,8 @@
 
             if (callback) callback(data, have_more);
           }, function (a, c) {
+            if (!extract || gen !== ids_gen) return;
+            if (fail) return fail();
             component.empty(network.errorDecode(a, c));
           }, false, {
             dataType: 'text',
@@ -4076,7 +4119,8 @@
               }
             }
 
-            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) byIds(cards.length ? cards : items, kinopoisk_id, function (hit, matches, body, bodies) {
+            var next_page = 1;
+            var settle = function settle(hit, matches, body, bodies) {
               if (hit) return body ? gotPage(body, hit.link) : getPage(hit.link);
               // several series pages with the card's ids are an anime's parts: the oldest is opened, the rest join it as seasons
               var first = null;
@@ -4100,13 +4144,35 @@
                 component.similars(items, search_more, {
                   items: [],
                   query: query,
-                  page: 1
+                  page: next_page
                 });
               } else {
                 component.similars(items);
               }
 
               component.loading(false);
+            };
+
+            if (cards.length == 1 && is_sure) getPage(cards[0].link);else if (items.length) byIds(cards.length ? cards : items, kinopoisk_id, function (hit, matches, body, bodies) {
+              var card_ids = rezkaCardIds(object.movie, kinopoisk_id);
+              if (hit || matches.length || !have_more || !search_year || object.clarification || !card_ids.imdb && !card_ids.kp) return settle(hit, matches, body, bodies);
+              // the live search shows five matches and the title may be further: the full search's first page is asked,
+              // its titles of the card's year are checked by their ids, and without a single match it is the list
+              query_more(query, 1, [], function (full, more) {
+                var found = function found(hit, matches, body, bodies) {
+                  if (!hit && !matches.length && full.length) {
+                    items = full;
+                    have_more = more;
+                    next_page = 2;
+                  }
+                  settle(hit, matches, body, bodies);
+                };
+                // pages known from before cost no request: the id match itself is among them
+                var near = rezkaNear(full, search_year);
+                if (near.length) byIds(near, kinopoisk_id, found, 6);else found(null, [], '', {});
+              }, function () {
+                settle(hit, matches, body, bodies);
+              });
             });else component.emptyForQuery(select_title);
           } else if (error_message) component.empty(error_message);else component.emptyForQuery(select_title);
         };
@@ -4221,29 +4287,19 @@
       // URL-encoded address>/), so up to five candidates are opened and the one with the card's id is taken.
       // call(hit, matches, body): the one match and its page, or null; several matches narrow the list the user picks from.
       var ids_gen = 0;
-      function byIds(cards, kinopoisk_id, call) {
+      function byIds(cards, kinopoisk_id, call, max) {
         var mine = ++ids_gen;
         // a clarified search is the user's own query: the card's ids do not apply
-        var imdb = object.clarification ? '' : object.movie.imdb_id || (/^tt\d+$/.test(kinopoisk_id + '') ? kinopoisk_id + '' : '');
-        var kp = object.clarification ? '' : +kinopoisk_id ? kinopoisk_id + '' : +object.movie.kinopoisk_id ? object.movie.kinopoisk_id + '' : '';
+        var card_ids = object.clarification ? { imdb: '', kp: '' } : rezkaCardIds(object.movie, kinopoisk_id);
         var list = cards.filter(function (c) {
           return c && c.link;
-        }).slice(0, 5);
-        if (!imdb && !kp || !list.length) return call(null, [], '');
-        var matches = [];
+        }).slice(0, max || 5);
+        if (!card_ids.imdb && !card_ids.kp || !list.length) return call(null, [], '');
         var bodies = {};
-        var i = 0;
-        var check = function check(card, ids) {
-          if (ids && (imdb && ids.imdb === imdb || kp && ids.kp === kp)) matches.push(card);
-          next();
-        };
         // one page at a time: the first one passes HDrezka's bot check for the rest; a closed screen or a newer
         // search drops the answer
-        var next = function next() {
-          if (!extract || mine !== ids_gen) return;
-          if (i >= list.length) return call(matches.length === 1 ? matches[0] : null, matches, matches.length === 1 ? bodies[matches[0].link] || '' : '', bodies);
-          var card = list[i++];
-          if (rezkaIds[card.link]) return check(card, rezkaIds[card.link]);
+        rezkaIdMatches(list, card_ids.imdb, card_ids.kp, function (card, check) {
+          if (rezkaIds[card.link]) return check(rezkaIds[card.link]);
           var net = new Lampa.Reguest();
           loaders.push(net);
           net.timeout(5000);
@@ -4263,12 +4319,15 @@
             // a bot check or an error page has no ids: not kept, asked again next time
             if (ids.imdb || ids.kp) rezkaIds[card.link] = ids;
             bodies[card.link] = body;
-            check(card, ids);
+            check(ids);
           }, function () {
-            check(card, null);
+            check(null);
           }, !prox && Lampa.Platform.is('android') && Utils.checkAndroidVersion(339));
-        };
-        next();
+        }, function () {
+          return extract && mine === ids_gen;
+        }, function (matches) {
+          call(matches.length === 1 ? matches[0] : null, matches, matches.length === 1 ? bodies[matches[0].link] || '' : '', bodies);
+        });
       }
       // «Смотреть все части»: an anime's TV parts (each its own page with one season, the page's own ids) become
       // seasons 1..N in the parts' order; a film of the franchise has other ids and stays out. A part's page is
@@ -21690,6 +21749,8 @@
         return i < 0 || !!entry.done[i];
       };
       var hit = episodeVariants.cache[key] || (episodeVariants.cache[key] = episodeVariants.load(key));
+      // a list to pick from kept for the session is dropped once a title was settled (here or on the source's screen)
+      if (hit && hit.res.status === 'choose' && (watch.similarOf(card, balancer, 'src') || watch.similarOf(card, balancer, 'find'))) hit = null;
       if (!hit) delete episodeVariants.cache[key];
       if (hit && covers(hit, pin)) return done(hit.res, true);
       if (episodeVariants.pending[key]) return episodeVariants.pending[key].push({ pin: pin, done: done });
@@ -21719,7 +21780,7 @@
         clearTimeout(timer);
         clearTimeout(stepTimer);
         var res = { status: status, rows: rows, similars: extra && extra.similars || null, message: extra && extra.message || '' };
-        var entry = { res: res, labels: labels && labels.season ? labels.season.slice() : [], done: walked, all: status === 'none' || status === 'ok' && !cut };
+        var entry = { res: res, labels: labels && labels.season ? labels.season.slice() : [], done: walked, all: status === 'none' || status === 'choose' || status === 'ok' && !cut };
         // a list placed before Lampa split a single TMDB season keeps TMDB's numbers, an anime's before the other
         // sources' season lists came (watch.alt) is not placed yet: neither is kept
         // a list with a row still waiting for arm's answer (a Kodik part YummyAnime does not list) is not kept either
@@ -21732,7 +21793,8 @@
           try {
             episodeVariants.save(key, entry);
           } catch (e) {}
-        }
+        // the list to pick from is kept for the session only (not stored): reopening does not search again
+        } else if (status === 'choose') episodeVariants.cache[key] = entry;
         delete episodeVariants.pending[key];
         try {
           probe.destroy();
@@ -21745,6 +21807,7 @@
       // what was walked by then stands
       var timer = setTimeout(function () {
         cut = true;
+        if (!rows.length && held) return finish('choose', { similars: held });
         finish(rows.length ? 'ok' : 'error');
       }, 60000);
       var stepDone = function stepDone(ok) {
@@ -21832,25 +21895,37 @@
       probe.emptyForQuery = function () {
         if (step) return stepDone(false);
         if (seasons) return;
+        // a «Show more» page that answers nothing leaves the list already held
+        if (held) return finish('choose', { similars: held });
         finish('none');
       };
       probe.empty = function (message) {
         if (step) return stepDone(false);
         if (seasons) return;
+        if (held) return finish('choose', { similars: held });
         finish('error', { message: typeof message == 'string' ? message : '' });
       };
       // several titles: the user settles it once (watch.similarSave), the next probe goes straight to it
       var replays = 0;
-      probe.similars = function (items) {
+      // the source's «Show more» is followed (one page) so the list to pick from is not cut to the live search's five
+      var more = 0;
+      var held = null;
+      probe.similars = function (items, search_more, more_params) {
         if (step) return stepDone(false);
         if (seasons) return;
         items = items || [];
+        var seen = {};
+        held = (held || []).concat(items).filter(function (e) {
+          return e.link && seen[e.link] ? false : (seen[e.link] = true);
+        });
         var level = items[0] && items[0].is_similars ? 'src' : 'find';
         var saved = watch.similarKey(watch.similarOf(card, balancer, level));
         var pick = null;
         for (var i = 0; i < items.length && saved && !pick; i++) if (watch.similarKey(items[i]) === saved) pick = items[i];
         // the title settled before: on to it, as a click in the source's list does (a list that keeps coming back stops)
         if (pick && replays++ < 3) {
+          held = null;
+          more = 0;
           obj.search = pick.title || pick.ru_title || pick.nameRu || pick.en_title || pick.orig_title || obj.search;
           obj.search_date = pick.year || pick.start_date || '';
           try {
@@ -21860,7 +21935,12 @@
           }
           return;
         }
-        finish('choose', { similars: items });
+        if (search_more && more++ < 1) {
+          try {
+            return search_more(more_params);
+          } catch (e) {}
+        }
+        finish('choose', { similars: held });
       };
       probe.filter = function (items) {
         if (items && items.season) labels = items;
@@ -22030,6 +22110,7 @@
         fallback();
       };
       // shortcut: two passes over seasons (with the voice, then without) can hit this 30 s timer on long series; raise it if they time out
+      // shortcut: HDrezka's second id round and the «Show more» pages can also use up these 30 s; the fallback to the source's screen then answers
       var timer = setTimeout(fail, 30000);
       // the probe's component would take over the screen's refresh hook
       var hook = watch.refresh;
@@ -22066,13 +22147,21 @@
         fail();
       };
       // several titles: the one settled before (watch.similarSave) is taken, as in episodeVariants
-      probe.similars = function (items) {
+      var more = 0;
+      probe.similars = function (items, search_more, more_params) {
         items = items || [];
         var level = items[0] && items[0].is_similars ? 'src' : 'find';
         var saved = watch.similarKey(watch.similarOf(card, balancer, level));
         var hit = null;
         for (var i = 0; i < items.length && saved && !hit; i++) if (watch.similarKey(items[i]) === saved) hit = items[i];
+        // the title picked from «Show more» is on a later page of the list (three pages at most)
+        if (!hit && saved && search_more && more++ < 3) {
+          try {
+            return search_more(more_params);
+          } catch (e) {}
+        }
         if (!hit || replays++ >= 3) return fail();
+        more = 0;
         obj.search = hit.title || hit.ru_title || hit.nameRu || hit.en_title || hit.orig_title || obj.search;
         obj.search_date = hit.year || hit.start_date || '';
         try {
