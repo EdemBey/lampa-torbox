@@ -185,7 +185,8 @@ try {
       Store.set('torbox_debug', v ? '1' : '0');
     },
     get proxyUrl() {
-      return Store.get('torbox_proxy_url', '') || DEFAULT_PROXY_URL;
+      // Stored '' means the user turned the proxy off; only a never-set key gets the default.
+      return Store.get('torbox_proxy_url', DEFAULT_PROXY_URL);
     },
     set proxyUrl(v) {
       const normalized = String(v || '')
@@ -652,8 +653,8 @@ try {
   const Api = (() => {
     const TB_MAIN = 'https://api.torbox.app/v1/api';
 
-    function requireProxy() {
-      if (!Config.proxyUrl || !String(Config.proxyUrl).trim()) {
+    function requireProxy(base) {
+      if (!base || !String(base).trim()) {
         const err = { type: 'validation', message: translate('torbox_error_cors_missing') };
         throw err;
       }
@@ -776,13 +777,15 @@ try {
 
     async function request(url, opt = {}, outerSignal) {
       const { timeoutMs: optTimeoutMs, is_torbox_api: isTorBoxApiFlag, ...fetchOptions } = opt;
-      const isTorBox = isTorBoxApiFlag !== false; // default true (only TorBox gets X-Api-Key)
+      const isTorBox = isTorBoxApiFlag !== false; // default true (only TorBox gets the API key)
       if (isTorBox) requireApiKey();
 
       // TorBox API: own server, then Android native, then the CORS proxy. Everything else: the proxy.
       const helper = isTorBox && url.startsWith(TB_MAIN + '/') ? helperServer() : '';
       let mode = helper ? 'helper' : isTorBox && canUseNative() ? 'native' : 'proxy';
-      if (mode === 'proxy') requireProxy();
+      // An empty field turns the proxy off for TorBox only; public parsers carry no key and still need one in a browser.
+      const proxyBase = isTorBox ? Config.proxyUrl : Config.proxyUrl || DEFAULT_PROXY_URL;
+      if (mode === 'proxy') requireProxy(proxyBase);
 
       const controller = new AbortController();
       const timeoutMs = Math.max(1, Number(optTimeoutMs) || CONST.TORBOX_API_TIMEOUT_MS);
@@ -792,13 +795,15 @@ try {
 
       const headers = Object.assign({}, fetchOptions.headers || {});
       delete headers.Authorization; // never forward auth headers through proxy
-      if (isTorBox) headers['X-Api-Key'] = Config.apiKey;
+      // TorBox takes Authorization: Bearer; only the CORS worker takes X-Api-Key (and converts it).
+      const authFor = (m) =>
+        !isTorBox ? headers : m === 'proxy' ? { ...headers, 'X-Api-Key': Config.apiKey } : { ...headers, Authorization: `Bearer ${Config.apiKey}` };
 
       try {
         let status;
         let text;
         if (mode === 'helper') {
-          const res = await fetch(`${helper}/torbox/${url.slice(TB_MAIN.length + 1)}`, { ...fetchOptions, headers, signal: controller.signal });
+          const res = await fetch(`${helper}/torbox/${url.slice(TB_MAIN.length + 1)}`, { ...fetchOptions, headers: authFor('helper'), signal: controller.signal });
           status = res.status;
           text = await res.text();
           // Old helper image without the /torbox route (alloha.mjs catch-all): retry once the next way.
@@ -807,10 +812,10 @@ try {
           if (mode === 'native') url = url.replace('&redirect=true', '');
         }
         if (mode === 'native') {
-          ({ status, text } = await nativeRequest(url, fetchOptions, headers, controller.signal, timeoutMs));
+          ({ status, text } = await nativeRequest(url, fetchOptions, authFor('native'), controller.signal, timeoutMs));
         } else if (mode === 'proxy') {
-          requireProxy();
-          const res = await fetch(buildProxyUrl(Config.proxyUrl, url), { ...fetchOptions, headers, signal: controller.signal });
+          requireProxy(proxyBase);
+          const res = await fetch(buildProxyUrl(proxyBase, url), { ...fetchOptions, headers: authFor('proxy'), signal: controller.signal });
           status = res.status;
           text = await res.text();
         }
@@ -1274,7 +1279,7 @@ try {
     }
 
     async function requestDl(tid, fid, signal) {
-      // TorBox API expects token query parameter alongside X-Api-Key header.
+      // TorBox API expects token query parameter alongside the auth header.
       // Optional permanent-link mode can be enabled; if it fails, we fallback to classic request.
       const base = `${TB_MAIN}/torrents/requestdl?torrent_id=${encodeURIComponent(tid)}&file_id=${encodeURIComponent(fid)}&token=${encodeURIComponent(Config.apiKey)}`;
       // The native Android client would follow the redirect and download the video itself.
