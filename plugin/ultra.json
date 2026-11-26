@@ -17,6 +17,7 @@
     { "src": "https://hub.alcopa.cc/dl/opensubs_menu/v1.2.9/plugin.js", "about": "Субтитры OpenSubtitles в плеере (v1.2.9); hub.alcopa.cc, с их сайта" },
     { "src": "https://mylampa1.github.io/buttons.js", "about": "Редактор кнопок в карточке: порядок, скрытие, вид, папки; mylampa1, с его сайта" },
     { "src": "buttons_fix.js", "about": "Постер не прыгает, когда кнопки buttons.js уходят во второй ряд; наш, локально" },
-    { "src": "https://tvigl.github.io/plugins/cache.js", "about": "Кнопка в шапке: чистит кеш Lampa и перезагружает; tvigl, с его сайта" }
+    { "src": "https://tvigl.github.io/plugins/cache.js", "about": "Кнопка в шапке: чистит кеш Lampa и перезагружает; tvigl, с его сайта" },
+    { "src": "theme.js", "about": "Редизайн интерфейса: быстрый фон, фон у карточек из истории, описание на весь экран; наш, локально" }
   ]
 }
