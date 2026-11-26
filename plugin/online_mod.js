@@ -21586,12 +21586,13 @@
         }
         if (stage === 'season') {
           stage = 'voice';
-          var v = (labels.voice || []).indexOf(pick.voice_name);
-          if (v < 0 && labels.voice && labels.voice.length) return fail();
+          // no voice known (Lampa's own timeline): the source keeps the voice it restored for this title
+          var v = pick.voice_name == null ? -1 : (labels.voice || []).indexOf(pick.voice_name);
+          if (v < 0 && pick.voice_name != null && labels.voice && labels.voice.length) return fail();
           if (v >= 0 && choice && choice.voice !== v) return next('voice', v);
         }
         if (stage !== 'voice') return;
-        if (labels.voice && labels.voice.length && choice && labels.voice[choice.voice] !== pick.voice_name) {
+        if (pick.voice_name != null && labels.voice && labels.voice.length && choice && labels.voice[choice.voice] !== pick.voice_name) {
           if (voiceRetried) return fail();
           var idx = (labels.voice || []).indexOf(pick.voice_name);
           if (idx < 0) return fail();
@@ -21615,7 +21616,7 @@
           }
           started = true;
           // the player really started: only then is it what the user last played
-          watch.remember(card, balancer, pick.voice_name, pick.season, rowEntry && rowEntry.element);
+          watch.remember(card, balancer, pick.voice_name != null ? pick.voice_name : labels && labels.voice && choice ? labels.voice[choice.voice] : '', choice ? choice.season : pick.season, rowEntry && rowEntry.element);
         };
         onDestroy = function onDestroy() {
           if (listener) {
@@ -22136,9 +22137,9 @@
               var rec = all && typeof all == 'object' ? all[watch.id(card)] : null;
               if (!rec || !rec.p || !rec.b) rec = null;
               var seen = watch.lastSeen(card);
-              // an episode Lampa saw played after our record (not from our list) wins; it has no source, so it opens the list on it
+              // an episode Lampa saw played after our record (not from our list) wins; it has no source: the one this title last used plays it in its restored voice, else its screen opens
               if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
-                return { rec: null, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: 0 }, watch.counts(card), seen.percent) };
+                return { rec: null, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: seen.season - 1 }, watch.counts(card), seen.percent) };
               }
               if (!rec) return null;
               var tl = Lampa.Timeline.view(Lampa.Utils.hash(watch.key(card, rec.p.season, rec.p.episode)));
@@ -22157,20 +22158,24 @@
               });
               go.on('hover:enter', function () {
                 var r = resume();
-                if (!r || !r.rec) {
+                if (!r) {
                   online_loading = false;
-                  return loadOnline(card, undefined, r && r.target.pin);
+                  return loadOnline(card);
                 }
+                // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
+                var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
+                var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
+                var pick = r.rec ? r.pick : { season: r.target.s };
                 Utils.setMyIp('');
                 checkMyIp(function () {
                   checkCurrentFanserialsHost(function () {
                     var screen = function screen() {
                       online_loading = false;
-                      loadOnline(card, r.rec.b, r.target.pin, r.pick);
+                      loadOnline(card, b, r.target.pin, r.rec ? r.pick : undefined);
                     };
-                    playVariant(card, r.rec.b, r.target.pin, r.pick, function () {
+                    playVariant(card, b, r.target.pin, pick, function () {
                       // the next season's index was a guess: try the season it was left in, then the source's screen
-                      if (r.target.s !== r.rec.s) playVariant(card, r.rec.b, r.target.pin, { season: r.rec.s, voice_name: r.rec.v }, screen);else screen();
+                      if (r.rec && r.target.s !== r.rec.s) playVariant(card, b, r.target.pin, { season: r.rec.s, voice_name: r.rec.v }, screen);else screen();
                     });
                   });
                 });
