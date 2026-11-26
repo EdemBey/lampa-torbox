@@ -5,7 +5,7 @@
   window.buttons_fix_plugin_ready = true;
 
   // buttons stay in one row and scroll horizontally.
-  $('head').append('<style>.full-start-new__left{align-self:flex-start}.full-start-new__buttons,.full-start__buttons{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:1em 1em 2.2em;margin-left:-1em;margin-right:-1em;margin-bottom:-2.2em;position:relative}.full-start-new__buttons{margin-top:.2em}.full-start__buttons{margin-top:-1em}.full-start-new__buttons::-webkit-scrollbar,.full-start__buttons::-webkit-scrollbar{display:none}.full-start-new__buttons>*,.full-start__buttons>*{flex-shrink:0}</style>');
+  $('head').append('<style>.full-start-new__left{align-self:flex-start !important}.full-start-new__buttons,.full-start__buttons{display:flex !important;flex-wrap:nowrap !important;overflow-x:auto !important;overflow-y:hidden !important;scrollbar-width:none !important;padding:1em 1em 2.2em !important;margin-left:-1em !important;margin-right:-1em !important;margin-bottom:-2.2em !important;position:relative !important}.full-start-new__buttons{margin-top:.2em !important}.full-start__buttons{margin-top:-1em !important}.full-start-new__buttons::-webkit-scrollbar,.full-start__buttons::-webkit-scrollbar{display:none !important}.full-start-new__buttons>*,.full-start__buttons>*{flex-shrink:0 !important}</style>');
 
   function reveal(row, el) {
     var l = el.offsetLeft, r = l + el.offsetWidth;
