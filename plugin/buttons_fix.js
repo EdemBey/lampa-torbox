@@ -4,10 +4,16 @@
   if (window.buttons_fix_plugin_ready) return;
   window.buttons_fix_plugin_ready = true;
 
-  // buttons.js wraps the button row on focus; Lampa bottom-aligns the poster, so it would jump.
-  $('head').append('<style>.full-start-new__left{align-self:flex-start}</style>');
+  // buttons stay in one row and scroll horizontally.
+  $('head').append('<style>.full-start-new__left{align-self:flex-start}.full-start-new__buttons,.full-start__buttons{display:flex;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding:1em 1em 2.2em;margin-left:-1em;margin-right:-1em;margin-bottom:-2.2em;position:relative}.full-start-new__buttons{margin-top:.2em}.full-start__buttons{margin-top:-1em}.full-start-new__buttons::-webkit-scrollbar,.full-start__buttons::-webkit-scrollbar{display:none}.full-start-new__buttons>*,.full-start__buttons>*{flex-shrink:0}</style>');
 
-  // Labels show on focus and the rows re-wrap, so left/right walk the buttons in order, across rows.
+  function reveal(row, el) {
+    var l = el.offsetLeft, r = l + el.offsetWidth;
+    if (l - 16 < row.scrollLeft) row.scrollLeft = l - 16;
+    else if (r + 16 > row.scrollLeft + row.clientWidth) row.scrollLeft = r - row.clientWidth + 16;
+  }
+
+  // Buttons stay in one row and scroll horizontally, so left/right walks them in order.
   function step(html, d) {
     var row = $(html).find('.full-start-new__buttons, .full-start__buttons').first();
     var all = row.find('.selector').filter(function () {
@@ -16,8 +22,13 @@
     var i = all.index(all.filter('.focus'));
     if (i < 0 || i + d < 0 || i + d >= all.length) return false;
     Lampa.Controller.collectionFocus(all[i + d], html);
+    reveal(row[0], all[i + d]);
     return true;
   }
+
+  $(document).on('hover:focus', '.full-start-new__buttons .selector, .full-start__buttons .selector', function () {
+    reveal($(this).closest('.full-start-new__buttons, .full-start__buttons')[0], this);
+  });
 
   var add = Lampa.Controller.add;
   Lampa.Controller.add = function (name, ctrl) {
