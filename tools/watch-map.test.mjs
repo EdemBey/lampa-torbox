@@ -163,7 +163,11 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const el = { season: 1, watch_place: { season: 1, episode: 4 } };
   const card = (id) => ({ id: id, original_title: 't' + id });
   watch.remember(card(1), 'kodik', 'Voice', 2, { season: 1 });
-  assert.strictEqual(store.online_mod_resume, undefined);
+  // no proven place: the source and voice are still kept, without p
+  assert.deepStrictEqual(Object.keys(store.online_mod_resume), ['tmdb_1']);
+  assert.strictEqual(store.online_mod_resume.tmdb_1.b, 'kodik');
+  assert.strictEqual(store.online_mod_resume.tmdb_1.v, 'Voice');
+  assert.strictEqual(store.online_mod_resume.tmdb_1.p, undefined);
   watch.remember(card(1), 'kodik', 'Voice', 2, el);
   assert.deepStrictEqual(Object.keys(store.online_mod_resume), ['tmdb_1']);
   assert.deepStrictEqual(store.online_mod_resume.tmdb_1.p, { season: 1, episode: 4 });
@@ -172,6 +176,16 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   watch.remember(card(1), 'alloha', 'V2', 0, el);
   assert.deepStrictEqual(Object.keys(store.online_mod_resume), ['tmdb_2', 'tmdb_1']);
   assert.strictEqual(store.online_mod_resume.tmdb_1.b, 'alloha');
+  // unproven place, same source: the old place stays, the voice moves; another source: the old place goes
+  const t0 = store.online_mod_resume.tmdb_1.t;
+  watch.remember(card(1), 'alloha', 'V3', 0, { season: 1 });
+  assert.strictEqual(store.online_mod_resume.tmdb_1.t, t0);
+  assert.deepStrictEqual(store.online_mod_resume.tmdb_1.p, { season: 1, episode: 4 });
+  assert.strictEqual(store.online_mod_resume.tmdb_1.v, 'V3');
+  watch.remember(card(1), 'turbo', 'V4', 1, { season: 1 });
+  assert.strictEqual(store.online_mod_resume.tmdb_1.b, 'turbo');
+  assert.strictEqual(store.online_mod_resume.tmdb_1.p, undefined);
+  watch.remember(card(1), 'alloha', 'V2', 0, el);
   for (let i = 3; i <= 101; i++) watch.remember(card(i), 'kodik', '', 0, el);
   const keys = Object.keys(store.online_mod_resume);
   assert.strictEqual(keys.length, 100);

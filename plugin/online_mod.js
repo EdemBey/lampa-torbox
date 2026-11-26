@@ -983,12 +983,21 @@
       // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
       remember: function remember(card, balancer, voice_name, season_index, element) {
         this.diag('remember', { b: balancer, v: voice_name, s: season_index, place: element && element.watch_place, pend: element && element.watch_pending, es: element && element.season, ee: element && element.episode });
-        if (!card || !element || !element.season || !element.watch_place) return;
+        if (!card || !balancer || !element || !element.season) return;
         var all = Lampa.Storage.get('online_mod_resume', '{}');
         if (!all || typeof all != 'object') all = {};
         var id = this.id(card);
+        var old = all[id];
         delete all[id];
-        all[id] = { b: balancer, v: voice_name || '', s: season_index || 0, p: { season: element.watch_place.season, episode: element.watch_place.episode }, t: Date.now() };
+        // the place is not proven: the title's source and voice are still its own; the old place stays only for the same source
+        var place = element && element.season && element.watch_place;
+        var rec = { b: balancer, v: voice_name || '', s: season_index || 0, t: Date.now() };
+        if (place) rec.p = { season: place.season, episode: place.episode };else if (old && old.p && old.b === balancer) {
+          rec.p = old.p;
+          rec.s = old.s;
+          rec.t = old.t;
+        }
+        all[id] = rec;
         var keys = Object.keys(all);
         while (keys.length > 100) delete all[keys.shift()];
         Lampa.Storage.set('online_mod_resume', all);
@@ -21609,6 +21618,17 @@
           }
         }, 0);
       };
+      var want = pick.voice_name;
+      var scanNext = function scanNext() {
+        if (!labels.season || !choice) return false;
+        scanned[choice.season] = true;
+        for (var si = 0; si < labels.season.length && scanned[si]; si++);
+        if (si >= labels.season.length) return false;
+        stage = 'season';
+        scanned[si] = true;
+        next('season', si);
+        return true;
+      };
       // each redraw of the source moves one step: the season, the voice, then the episode's row
       probe.start = function () {
         if (over || !labels) return;
@@ -21620,30 +21640,28 @@
         if (stage === 'season') {
           stage = 'voice';
           // no voice known (Lampa's own timeline): the source keeps the voice it restored for this title
-          var v = pick.voice_name == null ? -1 : (labels.voice || []).indexOf(pick.voice_name);
-          if (v < 0 && pick.voice_name != null && labels.voice && labels.voice.length) return fail();
+          var v = want == null ? -1 : (labels.voice || []).indexOf(want);
+          if (v < 0 && want != null && labels.voice && labels.voice.length) {
+            if (!pick.scan) return fail();
+            // scan: the voice is not in this season: try the others, then play without it as {scan: true} does
+            if (scanNext()) return;
+            want = null;
+            scanned = {};
+          }
           if (v >= 0 && choice && choice.voice !== v) return next('voice', v);
         }
         if (stage !== 'voice') return;
-        if (pick.voice_name != null && labels.voice && labels.voice.length && choice && labels.voice[choice.voice] !== pick.voice_name) {
+        if (want != null && labels.voice && labels.voice.length && choice && labels.voice[choice.voice] !== want) {
           if (voiceRetried) return fail();
-          var idx = (labels.voice || []).indexOf(pick.voice_name);
+          var idx = (labels.voice || []).indexOf(want);
           if (idx < 0) return fail();
           voiceRetried = true;
           return next('voice', idx);
         }
         stage = 'play';
         var row = watch.pinRow(pin, rows);
-        if (!row && pick.scan && labels.season && choice) {
-          // only Lampa's timeline knows the episode: look for it in the source's other seasons, one redraw each
-          scanned[choice.season] = true;
-          for (var si = 0; si < labels.season.length && scanned[si]; si++);
-          if (si < labels.season.length) {
-            stage = 'season';
-            scanned[si] = true;
-            return next('season', si);
-          }
-        }
+        // only Lampa's timeline knows the episode: look for it in the source's other seasons, one redraw each
+        if (!row && pick.scan && scanNext()) return;
         if (!row) return fail();
         var rowEntry = rows.filter(function (r) { return r.item === row; })[0];
         // its place is not proven: the source's own screen asks, a guess would write a wrong watched mark
@@ -21662,7 +21680,7 @@
           }
           started = true;
           // the player really started: only then is it what the user last played
-          watch.remember(card, balancer, pick.voice_name != null ? pick.voice_name : labels && labels.voice && choice ? labels.voice[choice.voice] : '', choice ? choice.season : pick.season, rowEntry && rowEntry.element);
+          watch.remember(card, balancer, want != null ? want : labels && labels.voice && choice ? labels.voice[choice.voice] : '', choice ? choice.season : pick.season, rowEntry && rowEntry.element);
         };
         onDestroy = function onDestroy() {
           if (listener) {
@@ -22519,19 +22537,23 @@
             var resume = function resume() {
               var all = Lampa.Storage.get('online_mod_resume', '{}');
               var rec = all && typeof all == 'object' ? all[watch.id(card)] : null;
-              if (!rec || !rec.p || !rec.b) rec = null;
+              if (!rec || !rec.b) rec = null;
+              // src: the title's own source and voice, even when no episode place was proven (rec.p)
+              var src = rec;
+              if (rec && !rec.p) rec = null;
               var seen = watch.lastSeen(card);
-              // an episode Lampa saw played after our record (not from our list) wins; it has no source: the one this title last used plays it in its restored voice, else its screen opens
+              // an episode Lampa saw played after our record (not from our list) wins; it has no source of its own: the title's source plays it in its restored voice, else its screen opens
               if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
-                return { rec: null, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: seen.season - 1 }, watch.counts(card), seen.percent) };
+                return { rec: null, src: src, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: seen.season - 1 }, watch.counts(card), seen.percent) };
               }
-              if (!rec) return null;
+              if (!rec) return src ? { rec: null, src: src } : null;
               var tl = Lampa.Timeline.view(Lampa.Utils.hash(watch.key(card, rec.p.season, rec.p.episode)));
               var target = watch.resumeTarget(rec, watch.counts(card), tl && tl.percent || (seen && seen.season == rec.p.season && seen.episode == rec.p.episode ? seen.percent : undefined));
               return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
             };
             var label = function label(r) {
               if (!r) return Lampa.Lang.translate('online_mod_start');
+              if (!r.target) return Lampa.Lang.translate('online_mod_resume');
               return Lampa.Lang.translate('online_mod_resume') + ' · ' + Lampa.Lang.translate('online_mod_season_short') + r.target.pin.season + ' ' + Lampa.Lang.translate('online_mod_episode_short') + r.target.pin.episode;
             };
             // button-order plugins key buttons by span text; the visible label changes per episode, so it is drawn from data-label
@@ -22557,8 +22579,10 @@
               }
               // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
               var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
-              var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
-              var pick = r.rec ? r.pick : { scan: true };
+              var b = r.rec ? r.rec.b : r.src && r.src.b || last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
+              // a source is known but no episode: its screen opens
+              if (!r.target) return loadOnline(card, b);
+              var pick = r.rec ? r.pick : r.src && r.src.v ? { scan: true, voice_name: r.src.v } : { scan: true };
               watch.diag('enter', { r: r, b: b, lastb: last[card.id] || '', glob: Lampa.Storage.get('online_mod_balanser', '') + '', save: Lampa.Storage.field('online_mod_save_last_balanser') });
               Utils.setMyIp('');
               checkMyIp(function () {
