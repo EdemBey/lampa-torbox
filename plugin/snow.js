@@ -952,6 +952,10 @@ function resetAccumulationHard(reason) {
     flushPiles(true);
   }
 
+  function clippedBy(r, sr, fade) {
+    return r.top < sr.top + fade || r.top > sr.bottom;
+  }
+
   function buildSurfaces() {
     surfaces = [];
     if (cfg_tizen || !cfg_settle) return;
@@ -959,6 +963,8 @@ function resetAccumulationHard(reason) {
     var els = getCardElements();
     var max = isAndroid() ? 40 : 55; // ограничиваем, чтобы не жрать CPU
     var added = 0;
+    var scrollEls = [];
+    var scrollRects = [];
 
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
@@ -982,6 +988,19 @@ function resetAccumulationHard(reason) {
 
       var y = r.top + 2;
       if (y < 0 || y > H) continue;
+
+      // rows scrolled up under the billboard keep an on-screen rect but are clipped by the vertical scroll
+      // no closest => no billboard either, so there are no hidden rows to skip
+      var sc = el.closest ? el.closest('.scroll:not(.scroll--horizontal)') : null;
+      if (sc) {
+        var si = scrollEls.indexOf(sc);
+        if (si < 0) {
+          si = scrollEls.length;
+          scrollEls.push(sc);
+          scrollRects.push(sc.getBoundingClientRect());
+        }
+        if (clippedBy(r, scrollRects[si], 0)) continue;
+      }
 
       // немного сужаем, чтобы не липло на всю ширину "блоков"
       var x1 = r.left + 10;
