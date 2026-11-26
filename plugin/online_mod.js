@@ -20427,6 +20427,7 @@
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_by_episodes: { ru: 'Выбор плеера', en: 'Choose player' },
         online_mod_resume: { ru: 'Продолжить', en: 'Continue' },
+        online_mod_start: { ru: 'Начать просмотр', en: 'Start watching' },
         online_mod_season_short: { ru: 'С', en: 'S' },
         online_mod_episode_short: { ru: 'Е', en: 'E' },
         online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
@@ -22530,42 +22531,40 @@
               return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
             };
             var label = function label(r) {
+              if (!r) return Lampa.Lang.translate('online_mod_start');
               return Lampa.Lang.translate('online_mod_resume') + ' · ' + Lampa.Lang.translate('online_mod_season_short') + r.target.pin.season + ' ' + Lampa.Lang.translate('online_mod_episode_short') + r.target.pin.episode;
             };
-            var first = resume();
-            if (first) {
-              var go = $('<div class="full-start__button selector view--online_mod_resume"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>' + label(first) + '</span></div>');
-              go.on('hover:focus', function () {
-                var r = resume();
-                if (r) go.find('span').text(label(r));
-              });
-              go.on('hover:enter', function () {
-                var r = resume();
-                if (!r) {
-                  online_loading = false;
-                  return loadOnline(card);
-                }
-                // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
-                var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
-                var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
-                var pick = r.rec ? r.pick : { scan: true };
-                watch.diag('enter', { r: r, b: b, lastb: last[card.id] || '', glob: Lampa.Storage.get('online_mod_balanser', '') + '', save: Lampa.Storage.field('online_mod_save_last_balanser') });
-                Utils.setMyIp('');
-                checkMyIp(function () {
-                  checkCurrentFanserialsHost(function () {
-                    var screen = function screen() {
-                      online_loading = false;
-                      loadOnline(card, b, r.target.pin, r.rec ? r.pick : undefined);
-                    };
-                    playVariant(card, b, r.target.pin, pick, function () {
-                      // the next season's index was a guess: try the season it was left in, then the source's screen
-                      if (r.rec && r.target.s !== r.rec.s) playVariant(card, b, r.target.pin, { season: r.rec.s, voice_name: r.rec.v }, screen);else screen();
-                    });
+            var go = $('<div class="full-start__button selector view--online_mod_resume"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>' + label(resume()) + '</span></div>');
+            go.on('hover:focus', function () {
+              go.find('span').text(label(resume()));
+            });
+            go.on('hover:enter', function () {
+              var r = resume();
+              if (!r) {
+                // first real season: counts skips specials and empty seasons
+                var p = { season: +Object.keys(watch.counts(card))[0] || 1, episode: 1 };
+                return Lampa.Activity.push({ url: '', title: watch.title(p), component: 'online_mod_variants', card: card, pin: p, name: '', page: 1 });
+              }
+              // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
+              var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
+              var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
+              var pick = r.rec ? r.pick : { scan: true };
+              watch.diag('enter', { r: r, b: b, lastb: last[card.id] || '', glob: Lampa.Storage.get('online_mod_balanser', '') + '', save: Lampa.Storage.field('online_mod_save_last_balanser') });
+              Utils.setMyIp('');
+              checkMyIp(function () {
+                checkCurrentFanserialsHost(function () {
+                  var screen = function screen() {
+                    online_loading = false;
+                    loadOnline(card, b, r.target.pin, r.rec ? r.pick : undefined);
+                  };
+                  playVariant(card, b, r.target.pin, pick, function () {
+                    // the next season's index was a guess: try the season it was left in, then the source's screen
+                    if (r.rec && r.target.s !== r.rec.s) playVariant(card, b, r.target.pin, { season: r.rec.s, voice_name: r.rec.v }, screen);else screen();
                   });
                 });
               });
-              by.after(go);
-            }
+            });
+            by.after(go);
           }
         }
       });

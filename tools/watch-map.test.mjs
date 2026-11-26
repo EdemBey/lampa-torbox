@@ -415,6 +415,9 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   watch.splits = null;
   const c = { id: 777, original_name: 'K', original_title: 'K', number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 10 }] };
   assert.deepStrictEqual(watch.counts(c), { 1: 10 });
+  // «Начать просмотр» opens the first key: specials are skipped
+  const sp = { id: 778, original_name: 'S', original_title: 'S', number_of_seasons: 1, seasons: [{ season_number: 0, episode_count: 5 }, { season_number: 3, episode_count: 8 }] };
+  assert.strictEqual(Object.keys(watch.counts(sp))[0], '3');
 }
 
 // end-to-end
