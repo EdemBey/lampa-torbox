@@ -222,6 +222,7 @@
       '.lampa-bb__text{font-size:1.05em;line-height:1.5;color:rgba(255,255,255,.85);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;max-width:42em}' +
       B + '.activity--active .activity__body>div>.scroll{margin-top:' + Math.max(0, Math.round(rows - actTop)) + 'px !important;height:' + h + 'px !important;' +
       '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) 36px,#000 56px,#000 ' + (h - 24) + 'px,rgba(0,0,0,0) ' + h + 'px) !important}' +
+      'body.search--open .lampa-bb,body.search--open .lampa-bb-shade,body.settings--open .lampa-bb,body.settings--open .lampa-bb-shade,body.selectbox--open .lampa-bb,body.selectbox--open .lampa-bb-shade{display:none !important}' +
       B + '.activity--active .items-line .card{font-size:' + (H > 700 ? '.68em' : '.6em') + '}' +
       B + '.activity--active .items-line .card .card__title{-webkit-line-clamp:2 !important;overflow:hidden !important}';
   }
@@ -291,6 +292,11 @@
     return p.join(' · ');
   }
 
+  // TMDB/Lampa texts can arrive HTML-escaped; they go in via textContent, so decode the common entities (&amp; last, no double decoding)
+  function bbText(s) {
+    return String(s == null ? '' : s).replace(/&nbsp;/g, '\u00a0').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&');
+  }
+
   function bbArr(v) { return Object.prototype.toString.call(v) === '[object Array]' ? v : []; }
 
   function bbMeta(d) {
@@ -305,11 +311,11 @@
     var d = bbMerge(card);
     var tv = !!(d.name || d.first_air_date || d.number_of_seasons || d.media_type === 'tv');
     bbQ('.lampa-bb__chip', bb.root).textContent = Lampa.Lang.translate(tv ? 'menu_tv' : 'menu_movies');
-    bbQ('.lampa-bb__title', bb.root).textContent = d.title || d.name || '';
-    bbQ('.lampa-bb__meta', bb.root).textContent = bbMeta(d);
+    bbQ('.lampa-bb__title', bb.root).textContent = bbText(d.title || d.name);
+    bbQ('.lampa-bb__meta', bb.root).textContent = bbText(bbMeta(d));
     // innerHTML is safe here: bbRatings builds the markup only from constants and toFixed() numbers
     bbQ('.lampa-bb__rate', bb.root).innerHTML = bbRatings(d, tv);
-    bbQ('.lampa-bb__text', bb.root).textContent = d.overview || bbFallback(d);
+    bbQ('.lampa-bb__text', bb.root).textContent = bbText(d.overview || bbFallback(d));
   }
 
   // fixBackdrops cached the details after the billboard drew the card
@@ -317,9 +323,15 @@
     if (bb.root && bb.on && bb.last === d) bbRender(d);
   }
 
+  // Lampa marks its overlays with these body classes; the CSS hides the billboard under them
+  function bbOverlay() {
+    var c = document.body.classList;
+    return c.contains('search--open') || c.contains('settings--open') || c.contains('selectbox--open');
+  }
+
   function bbOnFocus(e) {
     var el = e.target;
-    if (!el || !el.closest || !bbSync()) return;
+    if (!el || !el.closest || !bbSync() || el.closest('.search') || bbOverlay()) return;
     var card = el.closest('.items-line .card'), d = card && card.card_data;
     if (!d || d === bb.last) return;
     bb.last = d;

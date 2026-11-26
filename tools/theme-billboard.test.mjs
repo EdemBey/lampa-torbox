@@ -10,7 +10,7 @@ assert(from > 0 && to > from, 'billboard helpers not found in plugin/theme.js');
 let store = {};
 const Lampa = { Storage: { get: (k, d) => (k in store ? store[k] : d) } };
 const bb = { genres: { 28: 'Action', 18: 'Drama' }, kp: {}, sh: {}, cacheAt: 0 };
-const { bbRatings, bbFallback, bbMeta, bbCaches } = new Function('Lampa', 'bb', src.slice(from, to) + '\nreturn { bbRatings, bbFallback, bbMeta, bbCaches };')(Lampa, bb);
+const { bbRatings, bbFallback, bbMeta, bbCaches, bbText } = new Function('Lampa', 'bb', src.slice(from, to) + '\nreturn { bbRatings, bbFallback, bbMeta, bbCaches, bbText };')(Lampa, bb);
 
 const count = (html) => (html.match(/lampa-bb__r"/g) || []).length;
 
@@ -79,6 +79,17 @@ assert.strictEqual(bbMeta({ first_air_date: 2016, genres: [{ name: 'Crime' }, nu
 assert.strictEqual(bbMeta({ release_date: '2020-01-01', genres: 'Action' }), '2020');
 assert.strictEqual(bbMeta({ genres: { name: 'x' }, genre_ids: 'nope' }), '');
 assert.strictEqual(bbMeta({ release_date: '2020-01-01', genres: [{ name: '<img src=x onerror=alert(1)>' }] }), '2020' + dot + '<img src=x onerror=alert(1)>');
+
+// escaped entities are decoded once (&amp; last), nothing else is touched
+assert.strictEqual(bbText('Cooperman &amp; McBride'), 'Cooperman & McBride');
+assert.strictEqual(bbText('&quot;ghost&quot; &#39;a&#39; &#039;b&#039;'), `"ghost" 'a' 'b'`);
+assert.strictEqual(bbText('1 &lt; 2 &gt; 0'), '1 < 2 > 0');
+assert.strictEqual(bbText('a&nbsp;b'), 'a\u00a0b');
+assert.strictEqual(bbText('&amp;lt;b&amp;gt;'), '&lt;b&gt;', 'no double decoding');
+assert.strictEqual(bbText('plain: AT&T 100%'), 'plain: AT&T 100%');
+assert.strictEqual(bbText(undefined), '');
+assert.strictEqual(bbText(null), '');
+assert.strictEqual(bbText(2016), '2016');
 
 // fixBackdrops writes only backdrop_path into Lampa's card; the other details go to the cache and are merged at render time
 fixBackdrops();
