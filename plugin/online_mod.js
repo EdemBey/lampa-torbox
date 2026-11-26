@@ -21507,6 +21507,7 @@
       var cancelled = false;
       var onDestroy = null;
       var voiceRetried = false;
+      var scanned = {};
       var probe;
       var obj = { movie: card, balancer: balancer, search: card.title, search_one: card.title, search_two: card.original_title, page: 1 };
       var stop = function stop() {
@@ -21610,6 +21611,16 @@
         }
         stage = 'play';
         var row = watch.pinRow(pin, rows);
+        if (!row && pick.scan && labels.season && choice) {
+          // only Lampa's timeline knows the episode: look for it in the source's other seasons, one redraw each
+          scanned[choice.season] = true;
+          for (var si = 0; si < labels.season.length && scanned[si]; si++);
+          if (si < labels.season.length) {
+            stage = 'season';
+            scanned[si] = true;
+            return next('season', si);
+          }
+        }
         if (!row) return fail();
         var rowEntry = rows.filter(function (r) { return r.item === row; })[0];
         // its place is not proven: the source's own screen asks, a guess would write a wrong watched mark
@@ -22177,7 +22188,7 @@
                 // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
                 var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
                 var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
-                var pick = r.rec ? r.pick : { season: r.target.s };
+                var pick = r.rec ? r.pick : { scan: true };
                 watch.diag('enter', { r: r, b: b, lastb: last[card.id] || '', glob: Lampa.Storage.get('online_mod_balanser', '') + '', save: Lampa.Storage.field('online_mod_save_last_balanser') });
                 Utils.setMyIp('');
                 checkMyIp(function () {
