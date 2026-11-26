@@ -952,7 +952,9 @@
         // shortcut: temporary TV diagnostics for «Продолжить», remove once the cause is known
         var why = !card ? 'no card' : !element ? 'no element' : !element.season ? 'no season' : !element.watch_place ? 'no place' : '';
         try {
-          Lampa.Noty.show('resume: ' + (why ? why + ' | b=' + balancer + ' pending=' + !!(element && element.watch_pending) + ' q=' + (element && element.watch_q ? JSON.stringify(element.watch_q) : 'none') + ' ot=' + !!(card && card.original_title) + ' cs=' + (card && Lampa.Utils.countSeasons ? Lampa.Utils.countSeasons(card) : '-') + ' alt=' + !!(card && watch.altOf(card)) : 'saved S' + element.watch_place.season + 'E' + element.watch_place.episode));
+          var diag = 'resume: ' + (why ? why + ' | b=' + balancer + ' pending=' + !!(element && element.watch_pending) + ' q=' + (element && element.watch_q ? JSON.stringify(element.watch_q) : 'none') + ' ot=' + !!(card && card.original_title) + ' cs=' + (card && Lampa.Utils.countSeasons ? Lampa.Utils.countSeasons(card) : '-') + ' alt=' + !!(card && watch.altOf(card)) : 'saved S' + element.watch_place.season + 'E' + element.watch_place.episode);
+          Lampa.Storage.set('online_mod_resume_diag', new Date().toTimeString().slice(0, 8) + ' ' + diag);
+          Lampa.Noty.show(diag);
         } catch (e) {}
         if (why) return;
         var all = Lampa.Storage.get('online_mod_resume', '{}');
@@ -22104,6 +22106,14 @@
           // "Выбор плеера" (episodes screen) next to it, on series cards only
           var card = e.data.movie;
           if (card && (card.original_name || card.number_of_seasons)) {
+            // shortcut: temporary TV diagnostics — DDD covers the toast, so the last one is shown when a series card opens
+            try {
+              var diag = Lampa.Storage.get('online_mod_resume_diag', '');
+              if (diag) {
+                Lampa.Noty.show(diag);
+                Lampa.Storage.set('online_mod_resume_diag', '');
+              }
+            } catch (err) {}
             var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
             by.on('hover:enter', function () {
               Lampa.Activity.push({ url: '', title: Lampa.Lang.translate('online_mod_by_episodes'), component: 'online_mod_episodes', card: card, page: 1 });
