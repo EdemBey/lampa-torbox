@@ -117,27 +117,53 @@
     $('.modal').last().addClass('lampa-descr-modal');
   }
 
-  // History cards are stored without backdrop_path, so Lampa falls back to a blurred poster; fetch it from TMDB on focus.
+  // Copies into card only the fields it lacks; r is a TMDB details response.
+  function fillCard(card, r) {
+    ['backdrop_path', 'overview', 'vote_average', 'release_date', 'first_air_date', 'number_of_seasons', 'number_of_episodes', 'runtime'].forEach(function (k) {
+      if (!card[k] && r[k]) card[k] = r[k];
+    });
+    if (!card.runtime && r.episode_run_time && r.episode_run_time[0]) card.runtime = r.episode_run_time[0];
+    if (!(card.genres && card.genres.length) && r.genres && r.genres.length) card.genres = r.genres;
+    return card;
+  }
+
+  // TMDB details of history cards, keyed media+id. They live here, not in Lampa's card objects: those get saved back to storage.
+  var details = {};
+
+  // a copy of the card with the cached details filled in
+  function bbMerge(card) {
+    var d = {}, k;
+    for (k in card) if (Object.prototype.hasOwnProperty.call(card, k)) d[k] = card[k];
+    return fillCard(d, details[(card.name ? 'tv' : 'movie') + card.id] || {});
+  }
+
+  // Lampa stores history cards trimmed (no backdrop, overview, genres, sometimes no rating): fetch the details from TMDB on focus.
+  // Only backdrop_path is written into the card (Lampa reads it for the background); the rest is merged at billboard render time.
   function fixBackdrops() {
-    var cache = {}, pending = {};
+    var pending = {};
     document.addEventListener('hover:focus', function (e) {
       var el = e.target, card = el && el.classList && el.classList.contains('card') && el.card_data;
-      if (!card || !isOn() || card.backdrop_path || !/^\d+$/.test(String(card.id))) return;
+      if (!card || !isOn() || (card.backdrop_path && (card.overview || !bbEnabled())) || !/^\d+$/.test(String(card.id))) return;
       if (card.source !== 'tmdb' && card.source !== 'cub') return;
       if (!window.Lampa || !Lampa.Reguest || !Lampa.TMDB || !Lampa.Utils) return;
       var media = card.name ? 'tv' : 'movie', key = media + card.id;
-      if (cache[key]) { card.backdrop_path = cache[key]; return; }
-      if (key in cache || pending[key]) return;
+      if (key in details) {
+        if (!card.backdrop_path && details[key].backdrop_path) card.backdrop_path = details[key].backdrop_path;
+        return;
+      }
+      if (pending[key]) return;
       pending[key] = true;
       new Lampa.Reguest().silent(Lampa.TMDB.api(media + '/' + card.id + '?language=' + Lampa.Storage.get('language', 'ru') + '&api_key=' + Lampa.TMDB.key()), function (r) {
         delete pending[key];
-        cache[key] = (r && r.backdrop_path) || '';
-        if (!cache[key]) return;
-        card.backdrop_path = cache[key];
-        if (el.classList.contains('focus') && Lampa.Background) Lampa.Background.change(Lampa.Utils.cardImgBackgroundBlur(card));
+        details[key] = fillCard({}, r || {});
+        var noBg = !card.backdrop_path;
+        if (noBg && details[key].backdrop_path) card.backdrop_path = details[key].backdrop_path;
+        if (!el.classList.contains('focus')) return;
+        if (noBg && card.backdrop_path && Lampa.Background) Lampa.Background.change(Lampa.Utils.cardImgBackgroundBlur(card));
+        bbRefresh(card);
       }, function () {
         delete pending[key];
-        cache[key] = '';
+        details[key] = {};
       });
     }, true);
   }
@@ -149,7 +175,7 @@
     ru: 'Боевик|Приключения|Мультфильм|Комедия|Криминал|Документальный|Драма|Семейный|Фэнтези|История|Ужасы|Музыка|Детектив|Мелодрама|Фантастика|ТВ фильм|Триллер|Военный|Вестерн|Боевик и приключения|Детский|Новости|Реалити|НФ и фэнтези|Мыльная опера|Ток-шоу|Война и политика',
     en: 'Action|Adventure|Animation|Comedy|Crime|Documentary|Drama|Family|Fantasy|History|Horror|Music|Mystery|Romance|Sci-Fi|TV Movie|Thriller|War|Western|Action & Adventure|Kids|News|Reality|Sci-Fi & Fantasy|Soap|Talk|War & Politics'
   };
-  var bb = { root: null, shade: null, style: null, timer: 0, last: null, on: false, genres: {}, kp: {}, sh: {}, cacheAt: 0 };
+  var bb = { root: null, shade: null, style: null, timer: 0, last: null, on: false, genres: {}, kp: {}, sh: {}, cacheAt: 0, rt1: 0, rt2: 0 };
 
   function bbQ(s, c) { return (c || document).querySelector(s); }
 
@@ -168,6 +194,12 @@
     var t = bbQ('.activity--active .items-line__title');
     var left = t ? Math.round(t.getBoundingClientRect().left) : 112;
     if (left < 90 || left > 300) left = 112;
+    // the rows area ends right after one (shrunk) row, so the next row's title never peeks in at any window height
+    // rows differ by a few px (caption lines): take the shortest, so a taller row loses only its last blank pixels to the fade
+    var lines = bb.on ? document.querySelectorAll('.activity--active .items-line') : [], m = 0, h = H - rows - 34;
+    for (var i = 0; i < lines.length && i < 8; i++) if (lines[i].offsetHeight && (!m || lines[i].offsetHeight < m)) m = lines[i].offsetHeight;
+    if (m) h = Math.min(h, m + 41);
+    h = Math.max(80, h);
     var B = 'body.lampa-theme--billboard ';
     bb.style.textContent =
       '.lampa-bb,.lampa-bb-shade{display:none}' +
@@ -188,8 +220,8 @@
       '.lampa-bb__rate{font-size:.9em;font-weight:600;color:rgba(255,255,255,.9);margin-bottom:.8em;min-height:1.3em}' +
       '.lampa-bb__r{margin-right:1.3em}.lampa-bb__r i{font-style:normal;font-weight:800;margin-right:.15em}' +
       '.lampa-bb__text{font-size:1.05em;line-height:1.5;color:rgba(255,255,255,.85);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;max-width:42em}' +
-      B + '.activity--active .activity__body>div>.scroll{margin-top:' + Math.max(0, Math.round(rows - actTop)) + 'px !important;height:' + (H - rows - 34) + 'px !important;' +
-      '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) 36px,#000 56px,#000 93%,rgba(0,0,0,0) 100%) !important}' +
+      B + '.activity--active .activity__body>div>.scroll{margin-top:' + Math.max(0, Math.round(rows - actTop)) + 'px !important;height:' + h + 'px !important;' +
+      '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) 36px,#000 56px,#000 ' + (h - 24) + 'px,rgba(0,0,0,0) ' + h + 'px) !important}' +
       B + '.activity--active .items-line .card{font-size:' + (H > 700 ? '.68em' : '.6em') + '}' +
       B + '.activity--active .items-line .card .card__title{-webkit-line-clamp:2 !important;overflow:hidden !important}';
   }
@@ -205,8 +237,9 @@
     if (on !== bb.on) {
       bb.on = on;
       bb.last = null;
-      if (on) { bbCaches(true); bbBuild(); }
+      if (on) bbCaches(true);
       document.body.classList.toggle('lampa-theme--billboard', on);
+      if (on) bbBuild();
       // the rows change height with the class, but Lampa has already scrolled for the old height (stale offset, e.g. back from a card page): make it realign the focused row
       try { Lampa.Activity.active().activity.resize(); } catch (e) {}
       var c = on && bbQ('.activity--active .items-line .card.focus');
@@ -249,10 +282,9 @@
     return out.join('');
   }
 
-  // history cards are stored without an overview
+  // shown only when TMDB has no overview either
   function bbFallback(d) {
-    var o = d.original_title || d.original_name, p = [];
-    if (o && o !== (d.title || d.name)) p.push(o);
+    var p = [];
     if (d.number_of_seasons) p.push('S' + d.number_of_seasons + (d.number_of_episodes ? ' · ' + d.number_of_episodes + ' ep.' : ''));
     else if (d.runtime) p.push(d.runtime + ' min');
     if (d.status) p.push(d.status);
@@ -269,7 +301,8 @@
     return meta.join(' \u00a0·\u00a0 ');
   }
 
-  function bbRender(d) {
+  function bbRender(card) {
+    var d = bbMerge(card);
     var tv = !!(d.name || d.first_air_date || d.number_of_seasons || d.media_type === 'tv');
     bbQ('.lampa-bb__chip', bb.root).textContent = Lampa.Lang.translate(tv ? 'menu_tv' : 'menu_movies');
     bbQ('.lampa-bb__title', bb.root).textContent = d.title || d.name || '';
@@ -277,6 +310,11 @@
     // innerHTML is safe here: bbRatings builds the markup only from constants and toFixed() numbers
     bbQ('.lampa-bb__rate', bb.root).innerHTML = bbRatings(d, tv);
     bbQ('.lampa-bb__text', bb.root).textContent = d.overview || bbFallback(d);
+  }
+
+  // fixBackdrops cached the details after the billboard drew the card
+  function bbRefresh(d) {
+    if (bb.root && bb.on && bb.last === d) bbRender(d);
   }
 
   function bbOnFocus(e) {
@@ -290,6 +328,19 @@
       bb.root.classList.add('lampa-bb--out');
       setTimeout(function () { bbRender(d); bb.root.classList.remove('lampa-bb--out'); }, 160);
     }, 120);
+  }
+
+  function bbRebuild() {
+    if (!bb.on) return;
+    bbBuild();
+    try { Lampa.Activity.active().activity.resize(); } catch (e) {}
+  }
+
+  function bbResize() {
+    clearTimeout(bb.rt1);
+    clearTimeout(bb.rt2);
+    bb.rt1 = setTimeout(bbRebuild, 100);
+    bb.rt2 = setTimeout(bbRebuild, 600);
   }
 
   function bbInit() {
@@ -307,7 +358,10 @@
     document.body.appendChild(bb.shade);
     document.body.appendChild(bb.root);
     document.addEventListener('hover:focus', bbOnFocus, true);
-    window.addEventListener('resize', function () { if (bb.on) bbBuild(); });
+    // resize_end comes after Lampa has rescaled the font; the window event is a fallback. One timer pair serves both, and a second
+    // rebuild follows because the rows keep settling after the rescale.
+    if (Lampa.Listener) Lampa.Listener.follow('resize_end', bbResize);
+    window.addEventListener('resize', bbResize);
   }
 
   function ready() {
