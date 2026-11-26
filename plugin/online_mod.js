@@ -16603,6 +16603,8 @@
           }
           if (!res || !res.url) return error();
           var base = res.url.slice(0, res.url.lastIndexOf('/') + 1);
+          // The voice is an audio track of one file, picked by the name suffix (hls-v1-a3.m3u8); derived links keep it.
+          var track = (res.url.match(/(-v\d+-a\d+)\.m3u8(?:$|\?)/) || [])[1] || '';
           var map = {};
           var auto = '';
           if (pickIsAuto) auto = res.url;
@@ -16611,9 +16613,9 @@
             var n = parseInt(p.label, 10);
             if (isNaN(n)) return;
             if (p.label === pick.label) map[p.label] = res.url;
-            else map[p.label] = base + n + '.mp4:hls:manifest.m3u8';
+            else map[p.label] = base + n + '.mp4:hls:manifest' + track + '.m3u8';
           });
-          if (!pickIsAuto && hasAutoPart) auto = base + 'hls.m3u8';
+          if (!pickIsAuto && hasAutoPart) auto = base + 'hls' + track + '.m3u8';
           var labels = Object.keys(map).sort(function (a, b) {
             return parseInt(b, 10) - parseInt(a, 10);
           });
