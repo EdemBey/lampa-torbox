@@ -68,6 +68,7 @@ const animeSkip = { isAnime: (card) => !!card.anime, get: () => {} };
 const skipOf = () => null;
 
 const watch = new Function('Lampa', 'animeSkip', 'skipOf', 'window', code + '\nreturn watch;')(Lampa, animeSkip, skipOf, {});
+const { qualityBadge, similarTitles, urlParam } = new Function('Lampa', 'watch', slice(src, 'watch-misc') + '\nreturn { qualityBadge, similarTitles, urlParam };')(Lampa, watch);
 
 // canon
 {
@@ -389,7 +390,7 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const urls = [];
   let forgot = [];
   const own = Lampa.Reguest;
-  globalThis.episodeVariants = { forgetCard: (id) => forgot.push(id) };
+  watch.onPlaces = (id) => forgot.push(id);
   Lampa.Reguest = function () {
     this.timeout = () => {};
     this.silent = (url, ok, err) => {
@@ -427,7 +428,7 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.strictEqual(watch.armOf(6).s, 5);
   assert.strictEqual(watch.armOf(1000), null);
   Lampa.Reguest = own;
-  delete globalThis.episodeVariants;
+  watch.onPlaces = null;
   watch.arms = null;
 }
 
@@ -1132,30 +1133,30 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   const picked = watch.pinVariants({ season: 2, episode: 9 }, vrows);
   assert.deepStrictEqual(picked.map((r) => [r.voice, r.season]), [['A', 1], ['B', 1]]);
   assert.deepStrictEqual(watch.pinVariants({ season: 2, episode: 9 }, null), []);
-  assert.strictEqual(watch.qualityBadge(['360p ~ 1080p / WEBRip'], 0), 'FHD');
-  assert.strictEqual(watch.qualityBadge(['360p ~ 2160p', '720p'], 0), '4K');
-  assert.strictEqual(watch.qualityBadge(['WEB-DLRip 720p'], 0), 'HD');
-  assert.strictEqual(watch.qualityBadge(['480p'], 0), 'SD');
-  assert.strictEqual(watch.qualityBadge(['360p ~ 1080p'], 720), 'HD');
-  assert.strictEqual(watch.qualityBadge(['360p ~ 1080p'], 1080), 'FHD');
-  assert.strictEqual(watch.qualityBadge(['', undefined], 0), '');
-  assert.strictEqual(watch.qualityBadge(['4K'], 0), '4K');
-  assert.strictEqual(watch.qualityBadge(['1080p Ultra'], 720), 'HD');
-  assert.strictEqual(watch.qualityBadge(['1080p Ultra', '2160p'], 2160), '4K');
-  assert.strictEqual(watch.qualityBadge(['HDTVRip 720p'], 0), 'HD');
-  assert.strictEqual(watch.qualityBadge(['1080p60'], 0), 'FHD');
+  assert.strictEqual(qualityBadge(['360p ~ 1080p / WEBRip'], 0), 'FHD');
+  assert.strictEqual(qualityBadge(['360p ~ 2160p', '720p'], 0), '4K');
+  assert.strictEqual(qualityBadge(['WEB-DLRip 720p'], 0), 'HD');
+  assert.strictEqual(qualityBadge(['480p'], 0), 'SD');
+  assert.strictEqual(qualityBadge(['360p ~ 1080p'], 720), 'HD');
+  assert.strictEqual(qualityBadge(['360p ~ 1080p'], 1080), 'FHD');
+  assert.strictEqual(qualityBadge(['', undefined], 0), '');
+  assert.strictEqual(qualityBadge(['4K'], 0), '4K');
+  assert.strictEqual(qualityBadge(['1080p Ultra'], 720), 'HD');
+  assert.strictEqual(qualityBadge(['1080p Ultra', '2160p'], 2160), '4K');
+  assert.strictEqual(qualityBadge(['HDTVRip 720p'], 0), 'HD');
+  assert.strictEqual(qualityBadge(['1080p60'], 0), 'FHD');
   // a settled similar title is kept per card and source, its key prefers the id
-  watch.similarSave(card, 'rezka2', { id: 7, title: 'X', year: 2020, f: () => 1 });
-  assert.deepStrictEqual(watch.similarOf(card, 'rezka2', 'find'), { id: 7, title: 'X', year: 2020 });
-  assert.strictEqual(watch.similarOf(card, 'rezka2', 'src'), null);
-  watch.similarSave(card, 'rezka2', { id: 8, is_similars: true });
-  assert.deepStrictEqual(watch.similarOf(card, 'rezka2', 'src'), { id: 8, is_similars: true });
+  similarTitles.save(card, 'rezka2', { id: 7, title: 'X', year: 2020, f: () => 1 });
+  assert.deepStrictEqual(similarTitles.of(card, 'rezka2', 'find'), { id: 7, title: 'X', year: 2020 });
+  assert.strictEqual(similarTitles.of(card, 'rezka2', 'src'), null);
+  similarTitles.save(card, 'rezka2', { id: 8, is_similars: true });
+  assert.deepStrictEqual(similarTitles.of(card, 'rezka2', 'src'), { id: 8, is_similars: true });
   // an episode card is not kept
-  watch.similarSave(card, 'narutobased', { id: 9, episode: {} });
-  assert.strictEqual(watch.similarOf(card, 'narutobased', 'find'), null);
-  watch.similarClear(card, 'rezka2');
-  assert.strictEqual(watch.similarOf(card, 'rezka2', 'find'), null);
-  assert.strictEqual(watch.similarOf(card, 'rezka2', 'src'), null);
+  similarTitles.save(card, 'narutobased', { id: 9, episode: {} });
+  assert.strictEqual(similarTitles.of(card, 'narutobased', 'find'), null);
+  similarTitles.clear(card, 'rezka2');
+  assert.strictEqual(similarTitles.of(card, 'rezka2', 'find'), null);
+  assert.strictEqual(similarTitles.of(card, 'rezka2', 'src'), null);
   // Lampa's split season and episode as TMDB's single season, and back (splits 24/13/13/13)
   assert.deepStrictEqual(watch.tmdbOf(card, 2, 11), { season: 1, number: 35 });
   assert.deepStrictEqual(watch.tmdbOf(card, 1, 5), { season: 1, number: 5 });
@@ -1180,8 +1181,8 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   // a part that is not TV is never linked; YummyAnime's parts not known yet: pending
   assert.strictEqual(watch.stacked({ index: -1, bounds: [0], first: 0 }, 1, { 1: 24, 2: 13 }), false);
   assert.strictEqual(watch.stacked({ index: -2, bounds: [0], first: 0 }, 1, { 1: 24, 2: 13 }), null);
-  assert.strictEqual(watch.similarKey({ title: 'Y', year: 2021 }), 'Y/2021');
-  assert.strictEqual(watch.similarKey(null), '');
+  assert.strictEqual(similarTitles.key({ title: 'Y', year: 2021 }), 'Y/2021');
+  assert.strictEqual(similarTitles.key(null), '');
   Lampa.Lang = ownLang;
 }
 
@@ -1528,11 +1529,11 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
 // plugin URL parameters (ultra?lampac=…&alloha=…), also when Lampa appends its own query after them
 {
   const src = 'https://edembey.github.io/lampa-torbox/ultra?lampac=192.168.1.50:9118&alloha=x.trycloudflare.com?email=a&logged=true';
-  assert.strictEqual(watch.param(src, 'lampac'), '192.168.1.50:9118');
-  assert.strictEqual(watch.param(src, 'alloha'), 'x.trycloudflare.com');
-  assert.strictEqual(watch.param('https://h/ultra?email=a&lampac=http%3A%2F%2F10.0.0.2%3A9118', 'lampac'), 'http://10.0.0.2:9118');
-  assert.strictEqual(watch.param('https://h/ultra?email=a', 'lampac'), '');
-  assert.strictEqual(watch.param('', 'lampac'), '');
+  assert.strictEqual(urlParam(src, 'lampac'), '192.168.1.50:9118');
+  assert.strictEqual(urlParam(src, 'alloha'), 'x.trycloudflare.com');
+  assert.strictEqual(urlParam('https://h/ultra?email=a&lampac=http%3A%2F%2F10.0.0.2%3A9118', 'lampac'), 'http://10.0.0.2:9118');
+  assert.strictEqual(urlParam('https://h/ultra?email=a', 'lampac'), '');
+  assert.strictEqual(urlParam('', 'lampac'), '');
 }
 
 // the menu offers the reset only for a title that has answers

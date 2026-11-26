@@ -394,73 +394,11 @@
      * numbering is not proven to match keeps its own key, so a guessed mark is never written.
      */
     // @module watch
-    var watch = {
-      store: 'online_mod_watch_map',
-      links: {},
-      asks: [],
-      // Single-TMDB-season cards: episode counts of Lampa's own air-date split (what its episode list shows)
-      splits: null,
-      splitOf: function splitOf(card) {
-        // a stored value that is not an object (corrupted) is started over
-        if (!this.splits) this.splits = Lampa.Storage.get('online_mod_watch_split', '{}');
-        if (!this.splits || typeof this.splits != 'object') this.splits = {};
-        // TMDB may later split the show into real seasons: then Lampa shows those, not its air-date split
-        return card && Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && this.splits[this.id(card)] || null;
-      },
-      prefetch: function prefetch(card, force) {
-        var self = this;
-        if (!card || !card.id || !card.original_name || !Lampa.Api || !Lampa.Api.seasons || !Lampa.Utils.splitEpisodesIntoSeasons) return;
-        // splitOf() also loads the cache the callback writes into, so it runs even when forced
-        var known = this.splitOf(card);
-        if (Lampa.Utils.countSeasons(card) !== 1 || !force && known) return;
-        Lampa.Api.seasons(card, [1], function (v) {
-          var s = v && v[1];
-          var eps = s && (s.episodes_original || s.episodes);
-          if (!eps || !eps.length) return;
-          var parts = Lampa.Utils.splitEpisodesIntoSeasons(eps);
-          var out = {};
-          Object.keys(parts).forEach(function (k) {
-            out[k] = parts[k].length;
-          });
-          self.splits[self.id(card)] = out;
-          var keys = Object.keys(self.splits);
-          // shortcut: keeps the 200 newest cards; an evicted card is fetched again when opened
-          if (keys.length > 200) delete self.splits[keys[0]];
-          Lampa.Storage.set('online_mod_watch_split', self.splits);
-        });
-      },
-      // TMDB season number -> episode count
-      counts: function counts(card) {
-        var split = this.splitOf(card);
-        if (split && Object.keys(split).length >= 2) {
-          var out = {};
-          Object.keys(split).forEach(function (k) {
-            out[+k] = split[k];
-          });
-          return out;
-        }
-        var out2 = {};
-        (card && card.seasons || []).forEach(function (s) {
-          if (s && s.season_number > 0 && s.episode_count > 0) out2[s.season_number] = s.episode_count;
-        });
-        return out2;
-      },
-      // Lampa's episode as TMDB numbers it: a single TMDB season Lampa splits by air date is counted back
-      tmdbOf: function tmdbOf(card, season, episode) {
-        var split = this.splitOf(card);
-        if (!split || Object.keys(split).length < 2) return { season: season, number: episode };
-        var n = episode;
-        for (var s = 1; s < season; s++) n += split[s] || 0;
-        return { season: 1, number: n };
-      },
-      // and back: TMDB's numbers as Lampa's episode (the last part keeps the overflow of a running season)
-      lampaOf: function lampaOf(card, season, number) {
-        var split = this.splitOf(card);
-        if (!split || Object.keys(split).length < 2 || season != 1) return { season: season, episode: number };
-        var last = Object.keys(split).length;
-        var n = number;
-        for (var s = 1; s < last && n > (split[s] || 0); s++) n -= split[s] || 0;
-        return { season: s, episode: n };
+    // @module watch-index
+    // TMDB's seasons as numbers: the card's key, a count from an anchor, run-on numbering, the Absolute group. Pure.
+    var watchIndex = {
+      id: function id(card) {
+        return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
       },
       // Lampa's own timeline key of a card episode
       key: function key(card, season, episode) {
@@ -478,6 +416,26 @@
         }
         return counts[s] ? { season: s, episode: e } : null;
       },
+      // The n-th episode of the show, counted on from the first through the seasons: its season and its number there
+      // counted from 1. Every proof but the Absolute group's ends here; place() then turns it into TMDB's number.
+      at: function at(n, counts) {
+        return this.canon([1, 1, 1], n, counts);
+      },
+      // the episodes of the seasons before this one
+      before: function before(counts, season) {
+        var sum = 0;
+        for (var s = 1; s < season; s++) sum += counts[s] || 0;
+        return sum;
+      },
+      // {n: true} for every n at which a season ends when the seasons are counted on from the first; 0 is one
+      ends: function ends(counts) {
+        var out = { 0: true };
+        for (var s = 1, sum = 0; counts[s]; s++) {
+          sum += counts[s];
+          out[sum] = true;
+        }
+        return out;
+      },
       // n episodes are exactly whole TMDB seasons counted from the first
       whole: function whole(n, counts) {
         for (var s = 1, sum = 0; counts[s]; s++) {
@@ -486,40 +444,51 @@
         }
         return false;
       },
-      // map answers (std, '<balancer>:<season>', 'shiki:<id>', 0) are written by the phase-2 "match episodes" menu
-      // {season, episode} = proven or answered; false = never linked; null = not proven, ask
-      rule: function rule(map, counts, anime, q, alt) {
-        var own = map[q.balancer + ':' + q.season];
-        // a merged Kodik franchise answers per part (one shikimori entry can hold several of its seasons)
-        var saved = q.src ? map[q.part ? q.src + ':' + q.season : q.src] : own !== undefined ? own : map['std:' + q.season];
-        if (saved === 0) return false;
-        if (saved) return this.canon(saved, q.episode, counts) || false;
-        // the title's season list picked in the match menu
-        var listed = this.byParts(map.parts, counts, q);
-        if (listed) return listed;
-        // -2: YummyAnime's parts are not known yet, they may prove the part (asked again by view)
-        if (q.part) return q.part.index === -1 && q.part.all ? this.armed(q.part, q, counts) : this.stacked(q.part, q.episode, counts);
-        // numbered absolutely (One Piece): a single list (Filmix numbers it season -1) that goes beyond TMDB's first two
-        // seasons (or counts from 1 up to a whole run of them), or seasons that are chunks of one count (chain): TMDB's
-        // Absolute group places it, with TMDB's own episode numbers (place() leaves those as they are)
-        var one = q.seasons === 1 && (q.season === 1 || q.season < 0) && (q.max > counts[1] + (counts[2] || 0) || q.min === 1 && q.max > counts[1] && this.whole(q.max, counts));
-        if (alt && alt.a && !q.split && (one || this.chain(q.span, q.seasons)) && (!q.src || alt.ys && q.src === 'shiki:' + alt.ys[0])) return this.absolute(alt.a, q.episode, counts);
-        if (q.src) return null;
-        var same = { season: q.season, episode: q.episode };
-        // no TMDB list to check against: today's behaviour
-        if (!counts[1]) return same;
-        if (!counts[q.season]) return anime ? null : same;
-        var before = 0;
-        for (var s = 1; s < q.season; s++) before += counts[s] || 0;
-        var last = !counts[q.season + 1];
-        // numbers run on from the earlier seasons (season 2 starts at 13)
-        if (before && q.min > before) return q.max > counts[q.season] && (last || q.max <= before + counts[q.season]) ? this.canon([1, 1, 1], q.episode, counts) : null;
-        if (q.max > counts[q.season] && !last) return q.season == 1 && this.whole(q.max, counts) ? this.canon([1, 1, 1], q.episode, counts) : null;
-        // anime seasons after the first are split differently too often: one answer per title (map.std)
-        // Lampa's own split of a single TMDB season: a season that lists exactly its episodes is that season
-        // std was answered for balancers that have TMDB's number of seasons
-        var alike = !q.seasons || q.seasons === Object.keys(counts).length;
-        return !anime || q.season == 1 || map.std && alike || q.split && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season] ? same : null;
+      // the lowest episode_number TMDB gives a season (the Absolute runs alt.a); 0 when unknown
+      firstOf: function firstOf(runs, season) {
+        var first = 0;
+        (runs || []).forEach(function (r) {
+          if (r[1] === season && (!first || r[2] < first)) first = r[2];
+        });
+        return first;
+      },
+      // TMDB numbers a season on from the earlier ones (One Piece S22 = 1089..1155) when its first number is above the
+      // season's own episode count. shortcut: a run-on season starting at or below its own count is not seen, upgrade when such a show turns up
+      runOn: function runOn(runs, season, counts) {
+        var first = this.firstOf(runs, season);
+        return first > (counts && counts[season] || Infinity) ? first : 0;
+      },
+      // Every rule but the absolute one counts a season's episodes from 1 (answers and canon() store that form), TMDB
+      // may number them on from the earlier seasons: the last step turns the former into the latter, the key Lampa's
+      // timeline uses. A number already at or above the season's first is TMDB's own; past the end of a season that is
+      // not the last one it is not known where the number belongs, so it stays.
+      tmdb: function tmdb(alt, r, counts) {
+        var first = r && alt && alt.a ? this.runOn(alt.a, r.season, counts) : 0;
+        return first && r.episode < first && (r.episode <= counts[r.season] || !counts[r.season + 1]) ? { season: r.season, episode: r.episode + first - 1 } : r;
+      },
+      // the source's absolute episode n as TMDB numbers it: false below 1, null when TMDB has seasons after the
+      // group's last one (the group is stale, n is unknown); otherwise a past-the-end n runs on in the last season (TMDB lags)
+      absolute: function absolute(a, n, counts) {
+        if (!a || !a.length || !(n >= 1)) return false;
+        for (var i = 0; i < a.length; i++) {
+          if (n >= a[i][0] && n < a[i][0] + a[i][3]) return { season: a[i][1], episode: a[i][2] + (n - a[i][0]) };
+        }
+        var r = a[a.length - 1];
+        if (counts && counts[r[1] + 1]) return null;
+        return { season: r[1], episode: r[2] + (n - r[0]) };
+      }
+    };
+    // @end watch-index
+    // @module watch-proofs
+    // What proves a source's numbering: franchise parts against TMDB's season ends, arm's season, chained seasons, the other sources' lists. Pure but for armOf().
+    var watchProofs = {
+      // a list of part sizes as the count before each part and after the last: [12, 13] -> [0, 12, 25]
+      bounds: function bounds(parts) {
+        var out = [0];
+        parts.forEach(function (c) {
+          out.push(out[out.length - 1] + c);
+        });
+        return out;
       },
       // Kodik franchise part, placed by the episodes of the TV parts before it. Proven when the franchise and
       // TMDB count the same at some end after the part, or (first TMDB season of the part only) at its start.
@@ -527,24 +496,78 @@
         if (part.index === -2) return null;
         if (part.index < 0 || episode < 1) return false;
         var from = part.bounds[part.index];
-        var ends = { 0: true };
+        var ends = this.ends(counts);
         var hi = false;
-        var s, i, sum;
-        for (s = 1, sum = 0; counts[s]; s++) {
-          sum += counts[s];
-          ends[sum] = true;
-        }
-        for (i = part.index + 1; i < part.bounds.length; i++) {
+        for (var i = part.index + 1; i < part.bounds.length; i++) {
           if (ends[part.bounds[i]]) hi = true;
         }
         if (!hi && !ends[from]) return null;
         if (part.first > 1 && part.first !== from + 1) return null;
-        var at = this.canon([1, 1, 1], part.first > 1 ? episode : from + episode, counts);
-        var start = this.canon([1, 1, 1], from + 1, counts);
+        var at = this.at(part.first > 1 ? episode : from + episode, counts);
+        var start = this.at(from + 1, counts);
         if (!at || !start) return false;
         // a part that starts past TMDB's last known episode cannot be placed (it would land in the overflow)
         if (start.episode > counts[start.season]) return null;
         return hi || at.season === start.season ? at : null;
+      },
+      // A Kodik part YummyAnime does not list: arm says which TMDB season it belongs to, and the parts of that
+      // season are laid end to end. Proven when they fill the season (or, for the last, running one, do not exceed it).
+      // null: arm not answered yet
+      armed: function armed(part, q, counts) {
+        var self = this;
+        var me = part.all[part.at];
+        // shortcut: a Lampa-split season, run-on numbering and an entry with several seasons are not placed here
+        if (!me || q.split || !(q.tmdb > 0) || q.episode < 1 || me.first > 1 || part.all.some(function (c, i) {
+          return i !== part.at && c.shiki === me.shiki;
+        })) return false;
+        var mine = this.armOf(me.shiki);
+        if (!mine) return null;
+        if (mine.d !== +q.tmdb || !(mine.s >= 1)) return false;
+        var before = 0;
+        var sum = 0;
+        var wait = false;
+        var lost = false;
+        part.all.forEach(function (c, i) {
+          var a = self.armOf(c.shiki);
+          if (!a) wait = true;
+          // an earlier part arm failed on may sit in this season: the offset is unknown
+          // shortcut: a part arm has no mapping for (u) is skipped; if it sits in this season the offsets shift, accepted
+          if (a && a.e && !a.u && i < part.at) lost = true;
+          if (!a || a.d !== mine.d || a.s !== mine.s) return;
+          if (i < part.at) before += c.n;
+          sum += c.n;
+        });
+        if (wait) return null;
+        if (lost) return false;
+        var total = counts[mine.s];
+        // shortcut: order inside a season is Kodik's (YummyAnime's) part order, not checked against aired_at
+        // a short last season (running) is only known to start at its first part
+        if (!total || sum > total || sum < total && (counts[mine.s + 1] || before) || q.episode > me.n) return false;
+        return { season: mine.s, episode: before + q.episode };
+      },
+      // a source's own seasons (span: [min, max] of each, from its whole list) are consecutive chunks of one absolute
+      // numbering: the first starts at 1, each next starts where the one before ended (a missing number is tolerated)
+      chain: function chain(span, seasons) {
+        if (!span || !(seasons > 1) || span.length !== seasons) return false;
+        return span.every(function (s, i) {
+          return !!s && s[1] >= s[0] && (i ? s[0] > span[i - 1][0] && Math.abs(s[0] - span[i - 1][1] - 1) <= 1 : s[0] === 1);
+        });
+      },
+      // [min, max] of the episode numbers of each season id over the lists of several voices ({season_id, episode_id}); null for a season nobody has
+      spanOf: function spanOf(ids, lists) {
+        var by = {};
+        (lists || []).forEach(function (list) {
+          (Array.isArray(list) ? list : []).forEach(function (e) {
+            var n = parseInt(e && e.episode_id);
+            if (!(n >= 0)) return;
+            var r = by[e.season_id] || (by[e.season_id] = [n, n]);
+            r[0] = Math.min(r[0], n);
+            r[1] = Math.max(r[1], n);
+          });
+        });
+        return (ids || []).map(function (id) {
+          return by[id] || null;
+        });
       },
       // Where a merged Kodik season sits among the franchise's TV parts: {index, bounds, first} for stacked().
       // Which parts are TV is told by YummyAnime's TV parts (tv = alt.ys); without them an ONA or a special
@@ -603,6 +626,227 @@
         });
         return parts;
       },
+      // A season list (the answer map.parts, or a source's for the menu) applied to this season: the balancer
+      // must have as many seasons and the listed numbers must fit (the last season may run on: still airing)
+      byParts: function byParts(parts, counts, q) {
+        if (!parts || q.src || parts.length !== q.seasons || !parts[q.season - 1]) return null;
+        var from = this.bounds(parts)[q.season - 1];
+        var n = parts[q.season - 1];
+        var run = q.season > 1 && q.min > from;
+        var top = q.season < parts.length ? (run ? from : 0) + n : Infinity;
+        // run-on numbers that would also fit a season counted from 1 are not told apart
+        if (q.max > top || run && q.max <= n) return null;
+        return this.at(run ? q.episode : from + q.episode, counts);
+      },
+      // A source's season list proves this season when the balancer has as many seasons, lists exactly this
+      // season's episodes, and the list meets TMDB's seasons at an end (stacked). Every list that fits must
+      // give the same episode, and so must TMDB's own seasons if the balancer fits them too.
+      agree: function agree(alt, counts, q) {
+        var self = this;
+        var out = null;
+        var clash = false;
+        var take = function take(p) {
+          if (!p) return;
+          if (out && (out.season !== p.season || out.episode !== p.episode)) clash = true;
+          out = out || p;
+        };
+        var ends = this.ends(counts);
+        // a running last season legitimately differs (aired vs planned): every element but the last must match
+        var confirmed = alt.g && alt.y && alt.g.length > 1 && alt.g.length === alt.y.length && alt.g.slice(0, -1).join() === alt.y.slice(0, -1).join();
+        // the two sources count this balancer's seasons differently: nothing is proven
+        if (alt.g && alt.y && !confirmed && alt.g.length === q.seasons && alt.y.length === q.seasons) return null;
+        [alt.y, alt.g].forEach(function (parts) {
+          var n = parts && parts.length === q.seasons && parts[q.season - 1];
+          if (!n) return;
+          var bounds = self.bounds(parts);
+          var from = bounds[q.season - 1];
+          var run = q.min > 1;
+          if (q.min !== (run ? from + 1 : 1) || q.max !== (run ? from : 0) + n) return;
+          // YummyAnime's viewing order is a watch order: a season counted from 1 needs TMDB's group to confirm it,
+          // or must sit exactly between two of Lampa's season ends (run-on numbers do not depend on the order)
+          if (parts === alt.y && !run && !confirmed && !(ends[from] && ends[from + n])) return;
+          take(self.stacked({ index: q.season - 1, bounds: bounds, first: q.min }, q.episode, counts));
+        });
+        if (out && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season]) take({ season: q.season, episode: q.episode });
+        return out && !clash ? out : null;
+      },
+      // A Kodik entry (one shikimori id each) is the franchise's TV part with that id in YummyAnime's viewing
+      // order: proven when it lists exactly that part and the parts meet Lampa's seasons (stacked); TMDB's
+      // "Seasons" group, when known, must count the same parts
+      kodik: function kodik(alt, counts, q) {
+        var m = /^shiki:(\d+)$/.exec(q.src || '');
+        var k = m && alt.ys ? alt.ys.indexOf(m[1]) : -1;
+        // an entry's own seasons other than 1 are not told apart here
+        if (k < 0 || q.part || q.season != 1 || !alt.y || q.min !== 1 || q.max !== alt.y[k]) return null;
+        if (alt.g && alt.g.join() !== alt.y.join()) return null;
+        var bounds = this.bounds(alt.y);
+        // YummyAnime's viewing order is a watch order: without TMDB's group to confirm it, the part must sit
+        // exactly between two of Lampa's season ends
+        var ends = this.ends(counts);
+        if (!alt.g && !(ends[bounds[k]] && ends[bounds[k + 1]])) return null;
+        var r = this.stacked({ index: k, bounds: bounds, first: 1 }, q.episode, counts);
+        // only the user settles "never link"
+        return r === false ? null : r;
+      }
+    };
+    // @end watch-proofs
+    // @module watch-rules
+    // The order of the decisions: {season, episode} = proven or answered; false = never linked; null = not proven. Pure.
+    var watchRules = {
+      // where the match menu keeps the answer for this row: per balancer season, or per the source's own entry
+      // (a merged Kodik franchise answers per part: one shikimori entry can hold several of its seasons)
+      answerKey: function answerKey(q) {
+        return q.src ? (q.part ? q.src + ':' + q.season : q.src) : q.balancer + ':' + q.season;
+      },
+      // map answers (std, '<balancer>:<season>', 'shiki:<id>', 0) are written by the phase-2 "match episodes" menu
+      // {season, episode} = proven or answered; false = never linked; null = not proven, ask
+      // The decisions in their order. Each answers for the rows that are its case ({season, episode} counted from 1,
+      // false or null as above) and returns undefined for the rest; q.by names the one that answered.
+      order: ['answer', 'listed', 'part', 'group', 'release', 'season'],
+      rule: function rule(map, counts, anime, q, alt) {
+        for (var i = 0; i < this.order.length; i++) {
+          var r = this.decide[this.order[i]].call(this, map, counts, anime, q, alt);
+          if (r !== undefined) {
+            q.by = this.order[i];
+            return r;
+          }
+        }
+      },
+      decide: {
+        // the user's answer for this row: never link, or an anchor
+        answer: function (map, counts, anime, q) {
+          var own = map[this.answerKey(q)];
+          var saved = q.src || own !== undefined ? own : map['std:' + q.season];
+          if (saved === 0) return false;
+          if (saved) return this.canon(saved, q.episode, counts) || false;
+        },
+        // the title's season list picked in the match menu
+        listed: function (map, counts, anime, q) {
+          return this.byParts(map.parts, counts, q) || undefined;
+        },
+        // a part of a franchise (Kodik merged, Naruto Based): by arm's season, or by the TV parts before it
+        // -2: YummyAnime's parts are not known yet, they may prove the part (asked again by view)
+        part: function (map, counts, anime, q) {
+          if (q.part) return q.part.index === -1 && q.part.all ? this.armed(q.part, q, counts) : this.stacked(q.part, q.episode, counts);
+        },
+        // numbered absolutely (One Piece): a single list (Filmix numbers it season -1) that goes beyond TMDB's first two
+        // seasons (or counts from 1 up to a whole run of them), or seasons that are chunks of one count (chain): TMDB's
+        // Absolute group places it, with TMDB's own episode numbers (place() leaves those as they are)
+        group: function (map, counts, anime, q, alt) {
+          var one = q.seasons === 1 && (q.season === 1 || q.season < 0) && (q.max > counts[1] + (counts[2] || 0) || q.min === 1 && q.max > counts[1] && this.whole(q.max, counts));
+          if (alt && alt.a && !q.split && (one || this.chain(q.span, q.seasons)) && (!q.src || alt.ys && q.src === 'shiki:' + alt.ys[0])) return this.absolute(alt.a, q.episode, counts);
+        },
+        // a source numbering by its own releases is never guessed
+        release: function (map, counts, anime, q) {
+          if (q.src) return null;
+        },
+        // the source's own season and episode against TMDB's seasons
+        season: function (map, counts, anime, q) {
+          var same = { season: q.season, episode: q.episode };
+          // no TMDB list to check against: today's behaviour
+          if (!counts[1]) return same;
+          if (!counts[q.season]) return anime ? null : same;
+          var before = this.before(counts, q.season);
+          var last = !counts[q.season + 1];
+          // numbers run on from the earlier seasons (season 2 starts at 13)
+          if (before && q.min > before) return q.max > counts[q.season] && (last || q.max <= before + counts[q.season]) ? this.at(q.episode, counts) : null;
+          if (q.max > counts[q.season] && !last) return q.season == 1 && this.whole(q.max, counts) ? this.at(q.episode, counts) : null;
+          // anime seasons after the first are split differently too often: one answer per title (map.std)
+          // Lampa's own split of a single TMDB season: a season that lists exactly its episodes is that season
+          // std was answered for balancers that have TMDB's number of seasons
+          var alike = !q.seasons || q.seasons === Object.keys(counts).length;
+          return !anime || q.season == 1 || map.std && alike || q.split && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season] ? same : null;
+        }
+      },
+      // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
+      place: function place(map, counts, anime, q, alt) {
+        var r = this.rule(map, counts, anime, q, alt);
+        if (r === null && alt) {
+          r = q.src ? this.kodik(alt, counts, q) : this.agree(alt, counts, q);
+          if (r) q.by = q.src ? 'entry' : 'agree';
+        }
+        // the one conversion: a number counted from 1 becomes the number TMDB gives the episode
+        return this.tmdb(alt, r, counts);
+      }
+    };
+    // @end watch-rules
+    // @module watch-stores
+    // What is fetched and kept: Lampa's split of a single season, the other sources' lists (alt), arm's answers, the user's answers and their copy on Lampac.
+    var watchStores = {
+      // places may have moved: of one card (its id), or of every card. «По сериям» sets the listener to drop its rows
+      onPlaces: null,
+      changed: function changed(id) {
+        if (this.onPlaces) this.onPlaces(id);
+      },
+      // Single-TMDB-season cards: episode counts of Lampa's own air-date split (what its episode list shows)
+      splits: null,
+      splitOf: function splitOf(card) {
+        // a stored value that is not an object (corrupted) is started over
+        if (!this.splits) this.splits = Lampa.Storage.get('online_mod_watch_split', '{}');
+        if (!this.splits || typeof this.splits != 'object') this.splits = {};
+        // TMDB may later split the show into real seasons: then Lampa shows those, not its air-date split
+        return card && Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && this.splits[this.id(card)] || null;
+      },
+      // Lampa shows the card's single TMDB season as several of its own
+      isSplit: function isSplit(card) {
+        var split = this.splitOf(card);
+        return !!(split && Object.keys(split).length >= 2);
+      },
+      prefetch: function prefetch(card, force) {
+        var self = this;
+        if (!card || !card.id || !card.original_name || !Lampa.Api || !Lampa.Api.seasons || !Lampa.Utils.splitEpisodesIntoSeasons) return;
+        // splitOf() also loads the cache the callback writes into, so it runs even when forced
+        var known = this.splitOf(card);
+        if (Lampa.Utils.countSeasons(card) !== 1 || !force && known) return;
+        Lampa.Api.seasons(card, [1], function (v) {
+          var s = v && v[1];
+          var eps = s && (s.episodes_original || s.episodes);
+          if (!eps || !eps.length) return;
+          var parts = Lampa.Utils.splitEpisodesIntoSeasons(eps);
+          var out = {};
+          Object.keys(parts).forEach(function (k) {
+            out[k] = parts[k].length;
+          });
+          self.splits[self.id(card)] = out;
+          var keys = Object.keys(self.splits);
+          // shortcut: keeps the 200 newest cards; an evicted card is fetched again when opened
+          if (keys.length > 200) delete self.splits[keys[0]];
+          Lampa.Storage.set('online_mod_watch_split', self.splits);
+        });
+      },
+      // TMDB season number -> episode count
+      counts: function counts(card) {
+        var split = this.splitOf(card);
+        if (this.isSplit(card)) {
+          var out = {};
+          Object.keys(split).forEach(function (k) {
+            out[+k] = split[k];
+          });
+          return out;
+        }
+        var out2 = {};
+        (card && card.seasons || []).forEach(function (s) {
+          if (s && s.season_number > 0 && s.episode_count > 0) out2[s.season_number] = s.episode_count;
+        });
+        return out2;
+      },
+      // Lampa's episode as TMDB numbers it: a single TMDB season Lampa splits by air date is counted back
+      tmdbOf: function tmdbOf(card, season, episode) {
+        var split = this.splitOf(card);
+        if (!this.isSplit(card)) return { season: season, number: episode };
+        var n = episode;
+        for (var s = 1; s < season; s++) n += split[s] || 0;
+        return { season: 1, number: n };
+      },
+      // and back: TMDB's numbers as Lampa's episode (the last part keeps the overflow of a running season)
+      lampaOf: function lampaOf(card, season, number) {
+        var split = this.splitOf(card);
+        if (!this.isSplit(card) || season != 1) return { season: season, episode: number };
+        var last = Object.keys(split).length;
+        var n = number;
+        for (var s = 1; s < last && n > (split[s] || 0); s++) n -= split[s] || 0;
+        return { season: s, episode: n };
+      },
       // MAL id -> TMDB show and season (arm.haglund.dev), per Kodik part: lookups made by arm()
       arms: null,
       armWait: {},
@@ -639,7 +883,7 @@
             });
             Lampa.Storage.set('online_mod_watch_arm', self.arms);
             // «По сериям» rows of this card were placed without these answers
-            if (placed && typeof episodeVariants != 'undefined') episodeVariants.forgetCard(self.id(card));
+            if (placed) self.changed(self.id(card));
           };
           var net = new Lampa.Reguest();
           net.timeout(5000);
@@ -651,139 +895,6 @@
             done({ t: Date.now(), e: 1, d: 0, s: 0 });
           });
         });
-      },
-      // A Kodik part YummyAnime does not list: arm says which TMDB season it belongs to, and the parts of that
-      // season are laid end to end. Proven when they fill the season (or, for the last, running one, do not exceed it).
-      // null: arm not answered yet
-      armed: function armed(part, q, counts) {
-        var self = this;
-        var me = part.all[part.at];
-        // shortcut: a Lampa-split season, run-on numbering and an entry with several seasons are not placed here
-        if (!me || q.split || !(q.tmdb > 0) || q.episode < 1 || me.first > 1 || part.all.some(function (c, i) {
-          return i !== part.at && c.shiki === me.shiki;
-        })) return false;
-        var mine = this.armOf(me.shiki);
-        if (!mine) return null;
-        if (mine.d !== +q.tmdb || !(mine.s >= 1)) return false;
-        var before = 0;
-        var sum = 0;
-        var wait = false;
-        var lost = false;
-        part.all.forEach(function (c, i) {
-          var a = self.armOf(c.shiki);
-          if (!a) wait = true;
-          // an earlier part arm failed on may sit in this season: the offset is unknown
-          // shortcut: a part arm has no mapping for (u) is skipped; if it sits in this season the offsets shift, accepted
-          if (a && a.e && !a.u && i < part.at) lost = true;
-          if (!a || a.d !== mine.d || a.s !== mine.s) return;
-          if (i < part.at) before += c.n;
-          sum += c.n;
-        });
-        if (wait) return null;
-        if (lost) return false;
-        var total = counts[mine.s];
-        // shortcut: order inside a season is Kodik's (YummyAnime's) part order, not checked against aired_at
-        // a short last season (running) is only known to start at its first part
-        if (!total || sum > total || sum < total && (counts[mine.s + 1] || before) || q.episode > me.n) return false;
-        return { season: mine.s, episode: before + q.episode };
-      },
-      // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
-      place: function place(map, counts, anime, q, alt) {
-        var r = this.rule(map, counts, anime, q, alt);
-        if (r === null && alt) r = q.src ? this.kodik(alt, counts, q) : this.agree(alt, counts, q);
-        return this.tmdb(alt, r, counts);
-      },
-      // the lowest episode_number TMDB gives a season (the Absolute runs alt.a); 0 when unknown
-      firstOf: function firstOf(runs, season) {
-        var first = 0;
-        (runs || []).forEach(function (r) {
-          if (r[1] === season && (!first || r[2] < first)) first = r[2];
-        });
-        return first;
-      },
-      // TMDB numbers a season on from the earlier ones (One Piece S22 = 1089..1155) when its first number is above the
-      // season's own episode count. shortcut: a run-on season starting at or below its own count is not seen, upgrade when such a show turns up
-      runOn: function runOn(runs, season, counts) {
-        var first = this.firstOf(runs, season);
-        return first > (counts && counts[season] || Infinity) ? first : 0;
-      },
-      // Every rule but the absolute one counts a season's episodes from 1 (answers and canon() store that form), TMDB
-      // may number them on from the earlier seasons: the last step turns the former into the latter, the key Lampa's
-      // timeline uses. A number already at or above the season's first is TMDB's own; past the end of a season that is
-      // not the last one it is not known where the number belongs, so it stays.
-      tmdb: function tmdb(alt, r, counts) {
-        var first = r && alt && alt.a ? this.runOn(alt.a, r.season, counts) : 0;
-        return first && r.episode < first && (r.episode <= counts[r.season] || !counts[r.season + 1]) ? { season: r.season, episode: r.episode + first - 1 } : r;
-      },
-      // a «Продолжить» record keeps the episode as an older version placed it (counted from 1): in TMDB's number
-      recOf: function recOf(card, rec) {
-        var out = {};
-        for (var k in rec) out[k] = rec[k];
-        out.p = this.tmdb(this.altOf(card), { season: +rec.p.season, episode: +rec.p.episode }, this.counts(card));
-        return out;
-      },
-      // [min, max] of the episode numbers of each season id over the lists of several voices ({season_id, episode_id}); null for a season nobody has
-      spanOf: function spanOf(ids, lists) {
-        var by = {};
-        (lists || []).forEach(function (list) {
-          (Array.isArray(list) ? list : []).forEach(function (e) {
-            var n = parseInt(e && e.episode_id);
-            if (!(n >= 0)) return;
-            var r = by[e.season_id] || (by[e.season_id] = [n, n]);
-            r[0] = Math.min(r[0], n);
-            r[1] = Math.max(r[1], n);
-          });
-        });
-        return (ids || []).map(function (id) {
-          return by[id] || null;
-        });
-      },
-      // a source's own seasons (span: [min, max] of each, from its whole list) are consecutive chunks of one absolute
-      // numbering: the first starts at 1, each next starts where the one before ended (a missing number is tolerated)
-      chain: function chain(span, seasons) {
-        if (!span || !(seasons > 1) || span.length !== seasons) return false;
-        return span.every(function (s, i) {
-          return !!s && s[1] >= s[0] && (i ? s[0] > span[i - 1][0] && Math.abs(s[0] - span[i - 1][1] - 1) <= 1 : s[0] === 1);
-        });
-      },
-      // A source's season list proves this season when the balancer has as many seasons, lists exactly this
-      // season's episodes, and the list meets TMDB's seasons at an end (stacked). Every list that fits must
-      // give the same episode, and so must TMDB's own seasons if the balancer fits them too.
-      agree: function agree(alt, counts, q) {
-        var self = this;
-        var out = null;
-        var clash = false;
-        var take = function take(p) {
-          if (!p) return;
-          if (out && (out.season !== p.season || out.episode !== p.episode)) clash = true;
-          out = out || p;
-        };
-        var ends = { 0: true };
-        for (var s = 1, sum = 0; counts[s]; s++) {
-          sum += counts[s];
-          ends[sum] = true;
-        }
-        // a running last season legitimately differs (aired vs planned): every element but the last must match
-        var confirmed = alt.g && alt.y && alt.g.length > 1 && alt.g.length === alt.y.length && alt.g.slice(0, -1).join() === alt.y.slice(0, -1).join();
-        // the two sources count this balancer's seasons differently: nothing is proven
-        if (alt.g && alt.y && !confirmed && alt.g.length === q.seasons && alt.y.length === q.seasons) return null;
-        [alt.y, alt.g].forEach(function (parts) {
-          var n = parts && parts.length === q.seasons && parts[q.season - 1];
-          if (!n) return;
-          var bounds = [0];
-          parts.forEach(function (c) {
-            bounds.push(bounds[bounds.length - 1] + c);
-          });
-          var from = bounds[q.season - 1];
-          var run = q.min > 1;
-          if (q.min !== (run ? from + 1 : 1) || q.max !== (run ? from : 0) + n) return;
-          // YummyAnime's viewing order is a watch order: a season counted from 1 needs TMDB's group to confirm it,
-          // or must sit exactly between two of Lampa's season ends (run-on numbers do not depend on the order)
-          if (parts === alt.y && !run && !confirmed && !(ends[from] && ends[from + n])) return;
-          take(self.stacked({ index: q.season - 1, bounds: bounds, first: q.min }, q.episode, counts));
-        });
-        if (out && q.seasons === Object.keys(counts).length && q.min === 1 && q.max === counts[q.season]) take({ season: q.season, episode: q.episode });
-        return out && !clash ? out : null;
       },
       // Other sources' season lists per card: {t, k: Kinopoisk id used, y: YummyAnime TV parts | 0, g: TMDB "Seasons" groups | 0, a: TMDB Absolute runs | 0}
       alts: null,
@@ -818,7 +929,7 @@
           Lampa.Storage.set('online_mod_watch_alt', self.alts);
           // «По сериям» rows of this card were placed without these lists (a refetch that brought the same keeps them)
           var same = have && JSON.stringify([out.y, out.ys, out.g, out.a]) === JSON.stringify([have.y, have.ys, have.g, have.a]);
-          if (!same && typeof episodeVariants != 'undefined') episodeVariants.forgetCard(id);
+          if (!same) self.changed(id);
           delete self.waits[id];
           waiting.forEach(function (cb) {
             cb();
@@ -844,6 +955,11 @@
         }, function () {
           listed([]);
         });
+      },
+      api: function api(path, ok, fail) {
+        var net = new Lampa.Reguest();
+        net.timeout(5000);
+        net.silent(Lampa.TMDB.api(path + '?api_key=' + Lampa.TMDB.key()), ok, fail);
       },
       // TMDB's episode group "Seasons" (type 6): episode counts of its groups when they are whole runs of
       // TMDB's regular episodes in order; anything else (story arcs, a special inside) is 0
@@ -894,11 +1010,6 @@
           }) : 0);
         }, fail);
       },
-      api: function api(path, ok, fail) {
-        var net = new Lampa.Reguest();
-        net.timeout(5000);
-        net.silent(Lampa.TMDB.api(path + '?api_key=' + Lampa.TMDB.key()), ok, fail);
-      },
       // TMDB's Absolute episode group (type 2; the smallest, without specials) as runs [n, season, firstEp, len]: source
       // episode n (1-based position in the group, not its raw `order`: swapped or repeated orders cannot break it) is
       // TMDB's season:firstEp+(n-n0). The specials group (season 0) is left out; no group is 0.
@@ -937,17 +1048,6 @@
           });
           call(out.length ? out : 0);
         }, fail);
-      },
-      // the source's absolute episode n as TMDB numbers it: false below 1, null when TMDB has seasons after the
-      // group's last one (the group is stale, n is unknown); otherwise a past-the-end n runs on in the last season (TMDB lags)
-      absolute: function absolute(a, n, counts) {
-        if (!a || !a.length || !(n >= 1)) return false;
-        for (var i = 0; i < a.length; i++) {
-          if (n >= a[i][0] && n < a[i][0] + a[i][3]) return { season: a[i][1], episode: a[i][2] + (n - a[i][0]) };
-        }
-        var r = a[a.length - 1];
-        if (counts && counts[r[1] + 1]) return null;
-        return { season: r[1], episode: r[2] + (n - r[0]) };
       },
       // Episodes of the franchise's TV parts in viewing order, found by the card's Kinopoisk id
       yummy: function yummy(card, call) {
@@ -994,18 +1094,9 @@
           });
         }, fail);
       },
-      // A season list (the answer map.parts, or a source's for the menu) applied to this season: the balancer
-      // must have as many seasons and the listed numbers must fit (the last season may run on: still airing)
-      byParts: function byParts(parts, counts, q) {
-        if (!parts || q.src || parts.length !== q.seasons || !parts[q.season - 1]) return null;
-        var from = 0;
-        for (var i = 0; i < q.season - 1; i++) from += parts[i];
-        var n = parts[q.season - 1];
-        var run = q.season > 1 && q.min > from;
-        var top = q.season < parts.length ? (run ? from : 0) + n : Infinity;
-        // run-on numbers that would also fit a season counted from 1 are not told apart
-        if (q.max > top || run && q.max <= n) return null;
-        return this.canon([1, 1, 1], run ? q.episode : from + q.episode, counts);
+      store: 'online_mod_watch_map',
+      map: function map(card) {
+        return (Lampa.Storage.get(this.store, '{}') || {})[this.id(card)] || {};
       },
       // answers hold canonical numbers: they stand while the seasons known then are the same (the last may grow)
       stands: function stands(c, counts) {
@@ -1032,39 +1123,17 @@
         Lampa.Storage.set(this.store, all);
         this.cached = null;
         // «По сериям» rows carry the places of the old answers
-        if (typeof episodeVariants != 'undefined') episodeVariants.clear();
+        this.changed();
         this.sync();
       },
-      title: function title(p) {
-        return Lampa.Lang.translate('online_mod_season') + ' ' + p.season + ', ' + Lampa.Lang.translate('online_mod_episode').toLowerCase() + ' ' + p.episode;
-      },
-      // The match menu: what the sources' lists make of this episode first, then Lampa's own numbers,
-      // a manual pick, no link. patch is what save() writes.
-      options: function options(a) {
-        var self = this;
-        var q = a.element.watch_q;
-        var counts = this.counts(a.card);
-        var alt = this.altOf(a.card) || {};
-        var key = q.src ? (q.part ? q.src + ':' + q.season : q.src) : q.balancer + ':' + q.season;
-        var L = Lampa.Lang.translate;
-        var out = [];
-        var add = function add(title, subtitle, patch, value) {
-          patch[key] = value;
-          out.push({ title: title, subtitle: subtitle, patch: patch });
-        };
-        [['y', 'YummyAnime'], ['g', 'TMDB']].forEach(function (s) {
-          var parts = alt[s[0]];
-          var place = self.byParts(parts, counts, q);
-          if (!place) return;
-          if (out[0] && out[0].patch.parts.join() === parts.join()) out[0].subtitle = out[0].subtitle.replace(':', ' + ' + s[1] + ':');else add(self.title(place), L('online_mod_watch_by') + ' ' + s[1] + ': ' + parts.join(' / '), { parts: parts, std: null }, null);
+      // the title has answers of the match menu (t and c are bookkeeping)
+      answered: function answered(card) {
+        var map = this.map(card);
+        // answers TMDB's renumbering voided are not offered for reset
+        if (map.c && !this.stands(map.c, this.counts(card))) return false;
+        return Object.keys(map).some(function (k) {
+          return k !== 't' && k !== 'c';
         });
-        var same = counts[q.season] && this.canon([1, q.season, 1], q.episode, counts);
-        // std is for the whole title; the anchor settles this season whatever the list's numbers
-        // Kodik's season is its own part number, not TMDB's: no "as in Lampa" row for it
-        if (same && !q.src) add(this.title(same), L('online_mod_watch_same'), !q.src && (!q.seasons || q.seasons === Object.keys(counts).length) ? { std: 1, parts: null } : {}, [1, q.season, 1]);
-        if (counts[1]) out.push({ title: L('online_mod_watch_manual'), manual: key });
-        add(L('online_mod_watch_none'), '', {}, 0);
-        return out;
       },
       uid: '',
       // the address of the user's Lampac, '' when not set
@@ -1121,232 +1190,17 @@
           self.uid = (/server_uid\s*=\s*['"]([^'"]+)['"]/.exec(js || '') || [])[1] || Lampa.Storage.get('lampac_unic_id', '') || false;
           if (self.uid) run();else done();
         }, done, false, { dataType: 'text' });
-      },
-      // the title has answers of the match menu (t and c are bookkeeping)
-      answered: function answered(card) {
-        var map = this.map(card);
-        // answers TMDB's renumbering voided are not offered for reset
-        if (map.c && !this.stands(map.c, this.counts(card))) return false;
-        return Object.keys(map).some(function (k) {
-          return k !== 't' && k !== 'c';
-        });
-      },
-      // A Kodik entry (one shikimori id each) is the franchise's TV part with that id in YummyAnime's viewing
-      // order: proven when it lists exactly that part and the parts meet Lampa's seasons (stacked); TMDB's
-      // "Seasons" group, when known, must count the same parts
-      kodik: function kodik(alt, counts, q) {
-        var m = /^shiki:(\d+)$/.exec(q.src || '');
-        var k = m && alt.ys ? alt.ys.indexOf(m[1]) : -1;
-        // an entry's own seasons other than 1 are not told apart here
-        if (k < 0 || q.part || q.season != 1 || !alt.y || q.min !== 1 || q.max !== alt.y[k]) return null;
-        if (alt.g && alt.g.join() !== alt.y.join()) return null;
-        var bounds = [0];
-        alt.y.forEach(function (c) {
-          bounds.push(bounds[bounds.length - 1] + c);
-        });
-        // YummyAnime's viewing order is a watch order: without TMDB's group to confirm it, the part must sit
-        // exactly between two of Lampa's season ends
-        var ends = { 0: true };
-        for (var s = 1, sum = 0; counts[s]; s++) {
-          sum += counts[s];
-          ends[sum] = true;
-        }
-        if (!alt.g && !(ends[bounds[k]] && ends[bounds[k + 1]])) return null;
-        var r = this.stacked({ index: k, bounds: bounds, first: 1 }, q.episode, counts);
-        // only the user settles "never link"
-        return r === false ? null : r;
-      },
-      // the list row of the pinned episode (rows: the item menu's entries, {item, element})
-      pinRow: function pinRow(pin, rows) {
-        var raw = null;
-        for (var i = 0; i < (rows || []).length; i++) {
-          var el = rows[i].element || {};
-          var w = el.watch_place;
-          if (w && w.season == pin.season && w.episode == pin.episode) return rows[i].item;
-          // an episode whose place is not proven: its own numbers only move the focus; a source numbering by its own
-          // releases (Kodik's parts with an OVA as a season, AniLibria) is never taken by its numbers
-          if (!w && !raw && el.season == pin.season && el.episode == pin.episode && !(el.watch_info && el.watch_info.src)) raw = rows[i].item;
-        }
-        return raw;
-      },
-      // «Продолжить»: the episode last played, or the next one when it is finished (percent >= 90); s: the source's season index guess
-      resumeTarget: function resumeTarget(rec, counts, percent, runs) {
-        var p = rec.p;
-        if (!(percent >= 90)) return { pin: { season: p.season, episode: p.episode }, s: rec.s };
-        // the Absolute runs (alt.a) know the order: the episode after this one, when the runs list it
-        var pos = 0;
-        (runs || []).forEach(function (r) {
-          if (r[1] === p.season && p.episode >= r[2] && p.episode < r[2] + r[3]) pos = r[0] + p.episode - r[2];
-        });
-        var last = runs && runs[runs.length - 1];
-        var to = pos && pos < last[0] + last[3] - 1 && this.absolute(runs, pos + 1, counts);
-        if (to) {
-          // an absolutely numbered season (One Piece S22 = 1089..1155) means a source with one season: its index stays
-          var lead = runs.filter(function (r) {
-            return r[1] === to.season;
-          })[0];
-          return { pin: to, s: lead[2] > counts[to.season] ? rec.s : rec.s + (to.season - p.season) };
-        }
-        if (counts[p.season] > p.episode) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
-        // absolutely numbered seasons without runs (or past them) stay in the season
-        if (p.episode > counts[p.season]) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
-        if (counts[p.season + 1]) return { pin: { season: p.season + 1, episode: 1 }, s: rec.s + 1 };
-        return { pin: { season: p.season, episode: p.episode }, s: rec.s };
-      },
-      // Lampa's own timeline: the card's most recently watched episode, by its card link and by its title key
-      // (an external player's position may come back with the title key only); a tie goes to the later episode
-      lastSeen: function lastSeen(card) {
-        var all = card && Lampa.Timeline && Lampa.Timeline.filename ? Lampa.Storage.get(Lampa.Timeline.filename(), '{}') : null;
-        if (!all || typeof all != 'object') return null;
-        var ln = Lampa.Timeline.link ? Lampa.Timeline.link(card, 1, 1) : null;
-        var best = null;
-        var take = function take(v, season, episode) {
-          if (!v || typeof v != 'object' || !(v.percent > 0) || !(season > 0) || !(episode > 0)) return;
-          var u = v.updated || 0;
-          if (best && (u < best.updated || u === best.updated && season * 1000 + episode <= best.season * 1000 + best.episode)) return;
-          best = { season: season, episode: episode, percent: v.percent, updated: u };
-        };
-        Object.keys(all).forEach(function (h) {
-          var v = all[h];
-          if (ln && v && v.card === ln.card) take(v, parseInt(v.season), parseInt(v.episode));
-        });
-        var counts = this.counts(card);
-        var self = this;
-        var runs = (this.altOf(card) || {}).a;
-        [card.original_title, card.original_name].forEach(function (name, i, names) {
-          if (!name || i && name === names[0]) return;
-          Object.keys(counts).forEach(function (s) {
-            // a season TMDB numbers on from the earlier ones (One Piece S22 = 1089..1155)
-            var off = Math.max(0, self.runOn(runs, +s, counts) - 1);
-            for (var e = 1 + off; e <= counts[s] + off; e++) take(all[Lampa.Utils.hash([s, s > 10 ? ':' : '', e, name].join(''))], +s, e);
-          });
-        });
-        return best;
-      },
-      // the episodes screen opens on the season to continue: the newer of our record and Lampa's timeline, the next season when that episode is finished; never watched: the first real season
-      startSeason: function startSeason(card) {
-        var counts = this.counts(card);
-        var all = Lampa.Storage.get('online_mod_resume', '{}');
-        var rec = all && typeof all == 'object' ? all[this.id(card)] : null;
-        var seen = this.lastSeen(card);
-        var p = null;
-        var percent;
-        if (rec && rec.p && (!seen || (rec.t || 0) >= (seen.updated || 0))) {
-          p = this.recOf(card, rec).p;
-          var tl = Lampa.Timeline && Lampa.Timeline.view ? Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, p.season, p.episode))) : null;
-          percent = tl && tl.percent;
-        } else if (seen) {
-          p = { season: seen.season, episode: seen.episode };
-          percent = seen.percent;
-        }
-        if (!p) return +Object.keys(counts)[0] || 1;
-        var s = this.resumeTarget({ p: p, s: 0 }, counts, percent, (this.altOf(card) || {}).a).pin.season;
-        return counts[s] || !Object.keys(counts).length ? s : +Object.keys(counts)[0];
-      },
-      // shortcut: temporary TV diagnostics — Lampa for Android logs each request URL to logcat; remove once «Продолжить» works on the TV
-      diag: function diag(tag, data) {
-        try {
-          var s = JSON.stringify(data);
-          new Lampa.Reguest()['native']('https://edembey.github.io/lampa-torbox/diag/' + tag + '?d=' + encodeURIComponent(s.length > 1500 ? s.slice(0, 1500) : s), function () {}, function () {}, false, { dataType: 'text' });
-        } catch (e) {}
-      },
-      // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
-      remember: function remember(card, balancer, voice_name, season_index, element) {
-        this.diag('remember', { b: balancer, v: voice_name, s: season_index, place: element && element.watch_place, pend: element && element.watch_pending, es: element && element.season, ee: element && element.episode });
-        if (!card || !balancer || !element || !element.season) return;
-        var all = Lampa.Storage.get('online_mod_resume', '{}');
-        if (!all || typeof all != 'object') all = {};
-        var id = this.id(card);
-        var old = all[id];
-        delete all[id];
-        // the place is not proven: the title's source and voice are still its own; the old place stays only for the same source
-        var place = element.watch_place;
-        var rec = { b: balancer, v: voice_name || '', s: season_index || 0, t: Date.now() };
-        if (place) rec.p = { season: place.season, episode: place.episode };else if (old && old.p && old.b === balancer) {
-          rec.p = old.p;
-          rec.s = old.s;
-          rec.t = old.t;
-        }
-        all[id] = rec;
-        var keys = Object.keys(all);
-        while (keys.length > 100) delete all[keys.shift()];
-        Lampa.Storage.set('online_mod_resume', all);
-      },
-      // "По сериям": per voice, the row of the pinned episode (rows: {season, voice, element}, in the source's order)
-      pinVariants: function pinVariants(pin, rows) {
-        var by = {};
-        var order = [];
-        (rows || []).forEach(function (r) {
-          if (!by[r.voice]) {
-            by[r.voice] = [];
-            order.push(r.voice);
-          }
-          by[r.voice].push({ item: r, element: r.element });
-        });
-        var self = this;
-        return order.map(function (v) {
-          return self.pinRow(pin, by[v]);
-        }).filter(Boolean);
-      },
-      // the best resolution any row names (720p, 1080p, 4K), capped at cap: the highest that really plays for this source (0 = no cap)
-      // shortcut: a source's placeholder '360p ~ 1080p' (quality unknown) reads as FHD; give such sources '' if the badge misleads
-      qualityBadge: function qualityBadge(qualities, cap) {
-        var best = 0;
-        (qualities || []).forEach(function (q) {
-          var s = String(q || '');
-          (s.match(/(\d{3,4})p/gi) || []).forEach(function (p) { best = Math.max(best, parseInt(p, 10)); });
-          if (/\b4k\b/i.test(s)) best = Math.max(best, 2160);
-        });
-        if (cap) best = Math.min(best, cap);
-        return !best ? '' : best >= 2160 ? '4K' : best >= 1080 ? 'FHD' : best >= 720 ? 'HD' : 'SD';
-      },
-      // a source's list of similar titles settled by the user, per card and source (kept for the next search)
-      similarStore: 'online_mod_similar',
-      similarOf: function similarOf(card, balancer, level) {
-        return (Lampa.Storage.get(this.similarStore, '{}') || {})[this.id(card) + ':' + balancer + ':' + level] || null;
-      },
-      // level: a source's own list ('src', is_similars) or the title search before it ('find')
-      similarSave: function similarSave(card, balancer, elem) {
-        // an episode card (Naruto Based lists episodes) picks one video, not the title
-        if (!elem || elem.episode) return;
-        var all = Lampa.Storage.get(this.similarStore, '{}') || {};
-        var copy = {};
-        for (var k in elem) if (typeof elem[k] != 'function') copy[k] = elem[k];
-        all[this.id(card) + ':' + balancer + ':' + (elem.is_similars ? 'src' : 'find')] = copy;
-        Lampa.Storage.set(this.similarStore, all);
-      },
-      similarClear: function similarClear(card, balancer) {
-        var all = Lampa.Storage.get(this.similarStore, '{}') || {};
-        delete all[this.id(card) + ':' + balancer + ':src'];
-        delete all[this.id(card) + ':' + balancer + ':find'];
-        Lampa.Storage.set(this.similarStore, all);
-      },
-      similarKey: function similarKey(e) {
-        return e ? String(e.id || e.link || e.kp_id || e.kinopoisk_id || e.kinopoiskId || e.filmId || e.imdb_id || (e.title || '') + '/' + (e.year || e.start_date || '')) : '';
-      },
-      // the balancer season whose label carries the pinned season's number, -1 if none
-      pinSeason: function pinSeason(pin, labels) {
-        for (var i = 0; i < (labels || []).length; i++) {
-          var n = /(\d+)/.exec(labels[i]);
-          if (n && +n[1] === +pin.season) return i;
-        }
-        return -1;
-      },
-      // a parameter of the plugin's URL (ultra?lampac=…&alloha=…); Lampa may append its own query after it
-      param: function param(src, key) {
-        var m = new RegExp('[?&]' + key + '=([^&#?]*)').exec(src || '');
-        try {
-          return m ? decodeURIComponent(m[1]) : '';
-        } catch (e) {
-          return '';
-        }
-      },
-      id: function id(card) {
-        return (card.source && card.source != 'cub' ? card.source : 'tmdb') + '_' + card.id;
-      },
-      map: function map(card) {
-        return (Lampa.Storage.get(this.store, '{}') || {})[this.id(card)] || {};
-      },
+      }
+    };
+    // @end watch-stores
+    // @module watch-timeline
+    // A list element under Lampa's timeline key: the element is placed, linked, kept for the match menu; the pinned row of «По сериям».
+    var watchTimeline = {
+      // the list (and its card) whose elements asks holds
+      shown: null,
+      shownCard: null,
+      links: {},
+      asks: [],
       // canonical timeline hash of a list element; '' = keep the source's own key
       hashOf: function hashOf(card, balancer, element, items, seasons) {
         element.watch_place = null;
@@ -1363,7 +1217,6 @@
         if (Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !split) return '';
         // per list, not per element: a list without its card or a list-less file (TorBox) is never reused
         if (!items || items !== this.cached || card !== this.cachedCard || season !== this.cachedSeason || items.length !== this.cachedLength || seasons !== this.cachedSeasons || this.splitOf(card) !== this.cachedSplitObj || this.altOf(card) !== this.cachedAlt) {
-          if (items && (items !== this.cached || card !== this.cachedCard)) this.asks = [];
           this.cached = items;
           this.cachedCard = card;
           this.cachedSeason = season;
@@ -1390,7 +1243,7 @@
           episode: episode,
           min: Math.min.apply(null, nums),
           max: Math.max.apply(null, nums),
-          split: !!(split && Object.keys(split).length >= 2),
+          split: this.isSplit(card),
           seasons: seasons,
           // the source's [min, max] per season, for sources whose lists hold one season at a time
           span: typeof info.span == 'function' ? info.span() : info.span,
@@ -1408,6 +1261,53 @@
         element.watch_pending = place === null;
         element.watch_place = place || null;
         return place ? Lampa.Utils.hash(this.key(card, place.season, place.episode)) : '';
+      },
+      view: function view(card, balancer, element, legacy, items, seasons) {
+        this.install();
+        // asks hold the list on screen. Only a list drawn through view() takes its place: an off-screen probe places
+        // its rows with hashOf() alone and must not empty the screen's
+        if (items && (items !== this.shown || card !== this.shownCard)) {
+          this.asks = [];
+          this.shown = items;
+          this.shownCard = card;
+        }
+        var hash = this.hashOf(card, balancer, element, items, seasons);
+        var place = element.watch_place;
+        var meta = hash && Lampa.Timeline.link ? Lampa.Timeline.link(card, place.season, place.episode) : null;
+        // a card without original_name links as a movie
+        if (meta && meta.season === undefined) meta = null;
+        if (meta) this.links[hash] = meta;
+        var view = Lampa.Timeline.view(hash || legacy, meta || undefined);
+        // A mark already under this key but written without the link (older code, Android): link it once, same time
+        var stored = meta && Lampa.Timeline.filename ? (Lampa.Storage.get(Lampa.Timeline.filename(), '{}') || {})[hash] : null;
+        if (stored && typeof stored == 'object' && !stored.card && (stored.percent || stored.time)) {
+          Lampa.Timeline.update({ hash: hash, percent: stored.percent, time: stored.time, duration: stored.duration, profile: stored.profile, updated: stored.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
+        }
+        // a row placed among seasons that are chunks of one run-on count: its own key is no real episode's when its number
+        // is past what TMDB has in that season (HDrezka S21 E1112); within it, it may be (a per-season show's S2 E15)
+        var chained = !!element.watch_q && this.chain(element.watch_q.span, element.watch_q.seasons) && !(this.counts(card)[parseInt(element.season)] >= parseInt(element.episode));
+        if (hash && hash !== legacy && !view.percent && !view.time && (chained || legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode))))) {
+          var old = Lampa.Timeline.view(legacy);
+          if (old.percent || old.time) {
+            view.percent = old.percent;
+            view.time = old.time;
+            view.duration = old.duration;
+            // a key only this balancer writes is this very episode: move the mark for good
+            Lampa.Timeline.update(view);
+          }
+        }
+        // what rekey() and the match menu need to place this element again; the list on screen only
+        if (items && element.watch_q) this.asks.push({ view: view, card: card, balancer: balancer, element: element, legacy: legacy, items: items, seasons: seasons });
+        return view;
+      },
+      // the row is not placed only because arm has not answered yet for one of the franchise's parts (armed() is null
+      // for nothing else): it will be placed without the user, so it is neither asked about nor kept in a cache
+      waiting: function waiting(element) {
+        var self = this;
+        var part = element && element.watch_pending && element.watch_q && element.watch_q.part;
+        return !!(part && part.index === -1 && part.all && part.all.some(function (c) {
+          return !self.armOf(c.shiki);
+        }));
       },
       // Lampa for Android returns an external player's (DDD) position without the card link, and TimeCode
       // then cannot tell the episode: put the link back once.
@@ -1449,6 +1349,210 @@
           if (a) item.timeline = a.next;
         });
         if (this.refresh) this.refresh();
+      },
+      // Lampa's own timeline: the card's most recently watched episode, by its card link and by its title key
+      // (an external player's position may come back with the title key only); a tie goes to the later episode
+      lastSeen: function lastSeen(card) {
+        var all = card && Lampa.Timeline && Lampa.Timeline.filename ? Lampa.Storage.get(Lampa.Timeline.filename(), '{}') : null;
+        if (!all || typeof all != 'object') return null;
+        var ln = Lampa.Timeline.link ? Lampa.Timeline.link(card, 1, 1) : null;
+        var best = null;
+        var take = function take(v, season, episode) {
+          if (!v || typeof v != 'object' || !(v.percent > 0) || !(season > 0) || !(episode > 0)) return;
+          var u = v.updated || 0;
+          if (best && (u < best.updated || u === best.updated && season * 1000 + episode <= best.season * 1000 + best.episode)) return;
+          best = { season: season, episode: episode, percent: v.percent, updated: u };
+        };
+        Object.keys(all).forEach(function (h) {
+          var v = all[h];
+          if (ln && v && v.card === ln.card) take(v, parseInt(v.season), parseInt(v.episode));
+        });
+        var counts = this.counts(card);
+        var self = this;
+        var runs = (this.altOf(card) || {}).a;
+        [card.original_title, card.original_name].forEach(function (name, i, names) {
+          if (!name || i && name === names[0]) return;
+          Object.keys(counts).forEach(function (s) {
+            // a season TMDB numbers on from the earlier ones (One Piece S22 = 1089..1155)
+            var off = Math.max(0, self.runOn(runs, +s, counts) - 1);
+            for (var e = 1 + off; e <= counts[s] + off; e++) take(all[Lampa.Utils.hash([s, s > 10 ? ':' : '', e, name].join(''))], +s, e);
+          });
+        });
+        return best;
+      },
+      // the list row of the pinned episode (rows: the item menu's entries, {item, element})
+      pinRow: function pinRow(pin, rows) {
+        var raw = null;
+        for (var i = 0; i < (rows || []).length; i++) {
+          var el = rows[i].element || {};
+          var w = el.watch_place;
+          if (w && w.season == pin.season && w.episode == pin.episode) return rows[i].item;
+          // an episode whose place is not proven: its own numbers only move the focus; a source numbering by its own
+          // releases (Kodik's parts with an OVA as a season, AniLibria) is never taken by its numbers
+          if (!w && !raw && el.season == pin.season && el.episode == pin.episode && !(el.watch_info && el.watch_info.src)) raw = rows[i].item;
+        }
+        return raw;
+      },
+      // "По сериям": per voice, the row of the pinned episode (rows: {season, voice, element}, in the source's order)
+      pinVariants: function pinVariants(pin, rows) {
+        var by = {};
+        var order = [];
+        (rows || []).forEach(function (r) {
+          if (!by[r.voice]) {
+            by[r.voice] = [];
+            order.push(r.voice);
+          }
+          by[r.voice].push({ item: r, element: r.element });
+        });
+        var self = this;
+        return order.map(function (v) {
+          return self.pinRow(pin, by[v]);
+        }).filter(Boolean);
+      },
+      // the balancer season whose label carries the pinned season's number, -1 if none
+      pinSeason: function pinSeason(pin, labels) {
+        for (var i = 0; i < (labels || []).length; i++) {
+          var n = /(\d+)/.exec(labels[i]);
+          if (n && +n[1] === +pin.season) return i;
+        }
+        return -1;
+      }
+    };
+    // @end watch-timeline
+    // @module watch-resume
+    // «Продолжить»: the record of the last played episode and where to go on.
+    var watchResume = {
+      // a «Продолжить» record keeps the episode as an older version placed it (counted from 1): in TMDB's number
+      recOf: function recOf(card, rec) {
+        var out = {};
+        for (var k in rec) out[k] = rec[k];
+        out.p = this.tmdb(this.altOf(card), { season: +rec.p.season, episode: +rec.p.episode }, this.counts(card));
+        return out;
+      },
+      // «Продолжить»: the episode last played, or the next one when it is finished (percent >= 90); s: the source's season index guess
+      resumeTarget: function resumeTarget(rec, counts, percent, runs) {
+        var p = rec.p;
+        if (!(percent >= 90)) return { pin: { season: p.season, episode: p.episode }, s: rec.s };
+        // the Absolute runs (alt.a) know the order: the episode after this one, when the runs list it
+        var pos = 0;
+        (runs || []).forEach(function (r) {
+          if (r[1] === p.season && p.episode >= r[2] && p.episode < r[2] + r[3]) pos = r[0] + p.episode - r[2];
+        });
+        var last = runs && runs[runs.length - 1];
+        var to = pos && pos < last[0] + last[3] - 1 && this.absolute(runs, pos + 1, counts);
+        if (to) {
+          // an absolutely numbered season (One Piece S22 = 1089..1155) means a source with one season: its index stays
+          var lead = runs.filter(function (r) {
+            return r[1] === to.season;
+          })[0];
+          return { pin: to, s: lead[2] > counts[to.season] ? rec.s : rec.s + (to.season - p.season) };
+        }
+        if (counts[p.season] > p.episode) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
+        // absolutely numbered seasons without runs (or past them) stay in the season
+        if (p.episode > counts[p.season]) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
+        if (counts[p.season + 1]) return { pin: { season: p.season + 1, episode: 1 }, s: rec.s + 1 };
+        return { pin: { season: p.season, episode: p.episode }, s: rec.s };
+      },
+      // the episodes screen opens on the season to continue: the newer of our record and Lampa's timeline, the next season when that episode is finished; never watched: the first real season
+      startSeason: function startSeason(card) {
+        var counts = this.counts(card);
+        var r = this.resumeOf(card);
+        var first = +Object.keys(counts)[0];
+        if (!r || !r.target) return first || 1;
+        var s = r.target.pin.season;
+        return counts[s] || !Object.keys(counts).length ? s : first;
+      },
+      // the card's «Продолжить» record as stored, null when none
+      resumeRec: function resumeRec(card) {
+        var all = Lampa.Storage.get('online_mod_resume', '{}');
+        return all && typeof all == 'object' && all[this.id(card)] || null;
+      },
+      // What «Продолжить» goes on with, read when asked (what was played meanwhile counts): null = never played;
+      // {rec, target: {pin, s}, pick} = our record's episode or the one after it; {rec: null, src, target?} = an episode
+      // only Lampa's timeline knows, played by the title's own source (src) when there is one
+      resumeOf: function resumeOf(card) {
+        var rec = this.resumeRec(card);
+        if (!rec || !rec.b) rec = null;
+        // src: the title's own source and voice, even when no episode place was proven (rec.p)
+        var src = rec;
+        if (rec && !rec.p) rec = null;
+        if (rec) rec = this.recOf(card, rec);
+        var seen = this.lastSeen(card);
+        var counts = this.counts(card);
+        var runs = (this.altOf(card) || {}).a;
+        // an episode Lampa saw played after our record (not from our list) wins; it has no source of its own: the title's source plays it in its restored voice, else its screen opens
+        if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
+          return { rec: null, src: src, target: this.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: seen.season - 1 }, counts, seen.percent, runs) };
+        }
+        if (!rec) return src ? { rec: null, src: src } : null;
+        var tl = Lampa.Timeline && Lampa.Timeline.view ? Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, rec.p.season, rec.p.episode))) : null;
+        var target = this.resumeTarget(rec, counts, tl && tl.percent || (seen && seen.season == rec.p.season && seen.episode == rec.p.episode ? seen.percent : undefined), runs);
+        return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
+      },
+      // shortcut: temporary TV diagnostics — Lampa for Android logs each request URL to logcat; remove once «Продолжить» works on the TV
+      diag: function diag(tag, data) {
+        try {
+          var s = JSON.stringify(data);
+          new Lampa.Reguest()['native']('https://edembey.github.io/lampa-torbox/diag/' + tag + '?d=' + encodeURIComponent(s.length > 1500 ? s.slice(0, 1500) : s), function () {}, function () {}, false, { dataType: 'text' });
+        } catch (e) {}
+      },
+      // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
+      remember: function remember(card, balancer, voice_name, season_index, element) {
+        this.diag('remember', { b: balancer, v: voice_name, s: season_index, place: element && element.watch_place, pend: element && element.watch_pending, es: element && element.season, ee: element && element.episode });
+        if (!card || !balancer || !element || !element.season) return;
+        var all = Lampa.Storage.get('online_mod_resume', '{}');
+        if (!all || typeof all != 'object') all = {};
+        var id = this.id(card);
+        var old = all[id];
+        delete all[id];
+        // the place is not proven: the title's source and voice are still its own; the old place stays only for the same source
+        var place = element.watch_place;
+        var rec = { b: balancer, v: voice_name || '', s: season_index || 0, t: Date.now() };
+        if (place) rec.p = { season: place.season, episode: place.episode };else if (old && old.p && old.b === balancer) {
+          rec.p = old.p;
+          rec.s = old.s;
+          rec.t = old.t;
+        }
+        all[id] = rec;
+        var keys = Object.keys(all);
+        while (keys.length > 100) delete all[keys.shift()];
+        Lampa.Storage.set('online_mod_resume', all);
+      }
+    };
+    // @end watch-resume
+    // @module watch-menu
+    // The match menu and the question before playback.
+    var watchMenu = {
+      title: function title(p) {
+        return Lampa.Lang.translate('online_mod_season') + ' ' + p.season + ', ' + Lampa.Lang.translate('online_mod_episode').toLowerCase() + ' ' + p.episode;
+      },
+      // The match menu: what the sources' lists make of this episode first, then Lampa's own numbers,
+      // a manual pick, no link. patch is what save() writes.
+      options: function options(a) {
+        var self = this;
+        var q = a.element.watch_q;
+        var counts = this.counts(a.card);
+        var alt = this.altOf(a.card) || {};
+        var key = this.answerKey(q);
+        var L = Lampa.Lang.translate;
+        var out = [];
+        var add = function add(title, subtitle, patch, value) {
+          patch[key] = value;
+          out.push({ title: title, subtitle: subtitle, patch: patch });
+        };
+        [['y', 'YummyAnime'], ['g', 'TMDB']].forEach(function (s) {
+          var parts = alt[s[0]];
+          var place = self.byParts(parts, counts, q);
+          if (!place) return;
+          if (out[0] && out[0].patch.parts.join() === parts.join()) out[0].subtitle = out[0].subtitle.replace(':', ' + ' + s[1] + ':');else add(self.title(place), L('online_mod_watch_by') + ' ' + s[1] + ': ' + parts.join(' / '), { parts: parts, std: null }, null);
+        });
+        var same = counts[q.season] && this.canon([1, q.season, 1], q.episode, counts);
+        // std is for the whole title; the anchor settles this season whatever the list's numbers
+        // Kodik's season is its own part number, not TMDB's: no "as in Lampa" row for it
+        if (same && !q.src) add(this.title(same), L('online_mod_watch_same'), !q.src && (!q.seasons || q.seasons === Object.keys(counts).length) ? { std: 1, parts: null } : {}, [1, q.season, 1]);
+        if (counts[1]) out.push({ title: L('online_mod_watch_manual'), manual: key });
+        add(L('online_mod_watch_none'), '', {}, 0);
+        return out;
       },
       // The match menu. Back answers nothing, and the caller does not go on.
       dialog: function dialog(a, enabled, done) {
@@ -1498,10 +1602,7 @@
         // Kodik's own seasons (one shikimori entry each) are matched from the menu, not asked at every new title
         if (a.element.watch_q && a.element.watch_q.src && !a.element.watch_q.part) return done();
         // a part waiting for arm's answer is placed once it comes: no dialog meanwhile
-        var part = a.element.watch_q && a.element.watch_q.part;
-        if (part && part.index === -1 && part.all && part.all.some(function (c) {
-          return !self.armOf(c.shiki);
-        })) return done();
+        if (this.waiting(a.element)) return done();
         var list = [first].concat(playlist || []);
         // Lampa.Loading does not hand the controller back
         var enabled = Lampa.Controller.enabled().name == 'loading' ? 'content' : Lampa.Controller.enabled().name;
@@ -1526,41 +1627,70 @@
         this.sync(function () {
           self.alt(a.card, go);
         });
-      },
-      view: function view(card, balancer, element, legacy, items, seasons) {
-        this.install();
-        var hash = this.hashOf(card, balancer, element, items, seasons);
-        var place = element.watch_place;
-        var meta = hash && Lampa.Timeline.link ? Lampa.Timeline.link(card, place.season, place.episode) : null;
-        // a card without original_name links as a movie
-        if (meta && meta.season === undefined) meta = null;
-        if (meta) this.links[hash] = meta;
-        var view = Lampa.Timeline.view(hash || legacy, meta || undefined);
-        // A mark already under this key but written without the link (older code, Android): link it once, same time
-        var stored = meta && Lampa.Timeline.filename ? (Lampa.Storage.get(Lampa.Timeline.filename(), '{}') || {})[hash] : null;
-        if (stored && typeof stored == 'object' && !stored.card && (stored.percent || stored.time)) {
-          Lampa.Timeline.update({ hash: hash, percent: stored.percent, time: stored.time, duration: stored.duration, profile: stored.profile, updated: stored.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
-        }
-        // a row placed among seasons that are chunks of one run-on count: its own key is no real episode's when its number
-        // is past what TMDB has in that season (HDrezka S21 E1112); within it, it may be (a per-season show's S2 E15)
-        var chained = !!element.watch_q && this.chain(element.watch_q.span, element.watch_q.seasons) && !(this.counts(card)[parseInt(element.season)] >= parseInt(element.episode));
-        if (hash && hash !== legacy && !view.percent && !view.time && (chained || legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode))))) {
-          var old = Lampa.Timeline.view(legacy);
-          if (old.percent || old.time) {
-            view.percent = old.percent;
-            view.time = old.time;
-            view.duration = old.duration;
-            // a key only this balancer writes is this very episode: move the mark for good
-            Lampa.Timeline.update(view);
-          }
-        }
-        // what rekey() and the match menu need to place this element again; the list on screen only
-        if (items && element.watch_q) this.asks.push({ view: view, card: card, balancer: balancer, element: element, legacy: legacy, items: items, seasons: seasons });
-        return view;
       }
     };
+    // @end watch-menu
+    // one object: the blocks reach each other through `this`, and a test builds a block with only what it may use
+    function watchMix(parts) {
+      var to = {};
+      parts.forEach(function (part) {
+        for (var k in part) to[k] = part[k];
+      });
+      return to;
+    }
+    var watch = watchMix([watchIndex, watchProofs, watchRules, watchStores, watchTimeline, watchResume, watchMenu]);
     window.online_mod_watch = watch;
     // @end watch
+    // @module watch-misc
+    // Not episode placing, but kept beside it: they read the card id the same way (watch.id)
+    // the best resolution any row names (720p, 1080p, 4K), capped at cap: the highest that really plays for this source (0 = no cap)
+    // shortcut: a source's placeholder '360p ~ 1080p' (quality unknown) reads as FHD; give such sources '' if the badge misleads
+    function qualityBadge(qualities, cap) {
+      var best = 0;
+      (qualities || []).forEach(function (q) {
+        var s = String(q || '');
+        (s.match(/(\d{3,4})p/gi) || []).forEach(function (p) { best = Math.max(best, parseInt(p, 10)); });
+        if (/\b4k\b/i.test(s)) best = Math.max(best, 2160);
+      });
+      if (cap) best = Math.min(best, cap);
+      return !best ? '' : best >= 2160 ? '4K' : best >= 1080 ? 'FHD' : best >= 720 ? 'HD' : 'SD';
+    }
+    // a source's list of similar titles settled by the user, per card and source (kept for the next search)
+    var similarTitles = {
+      store: 'online_mod_similar',
+      of: function of(card, balancer, level) {
+        return (Lampa.Storage.get(this.store, '{}') || {})[watch.id(card) + ':' + balancer + ':' + level] || null;
+      },
+      // level: a source's own list ('src', is_similars) or the title search before it ('find')
+      save: function save(card, balancer, elem) {
+        // an episode card (Naruto Based lists episodes) picks one video, not the title
+        if (!elem || elem.episode) return;
+        var all = Lampa.Storage.get(this.store, '{}') || {};
+        var copy = {};
+        for (var k in elem) if (typeof elem[k] != 'function') copy[k] = elem[k];
+        all[watch.id(card) + ':' + balancer + ':' + (elem.is_similars ? 'src' : 'find')] = copy;
+        Lampa.Storage.set(this.store, all);
+      },
+      clear: function clear(card, balancer) {
+        var all = Lampa.Storage.get(this.store, '{}') || {};
+        delete all[watch.id(card) + ':' + balancer + ':src'];
+        delete all[watch.id(card) + ':' + balancer + ':find'];
+        Lampa.Storage.set(this.store, all);
+      },
+      key: function key(e) {
+        return e ? String(e.id || e.link || e.kp_id || e.kinopoisk_id || e.kinopoiskId || e.filmId || e.imdb_id || (e.title || '') + '/' + (e.year || e.start_date || '')) : '';
+      }
+    };
+    // a parameter of the plugin's URL (ultra?lampac=…&alloha=…); Lampa may append its own query after it
+    function urlParam(src, key) {
+      var m = new RegExp('[?&]' + key + '=([^&#?]*)').exec(src || '');
+      try {
+        return m ? decodeURIComponent(m[1]) : '';
+      } catch (e) {
+        return '';
+      }
+    }
+    // @end watch-misc
 
     // @module skip
     // Season/episode of a playlist item, and the anime id when the balancer knows it (Kodik, Naruto Based).
@@ -20294,11 +20424,11 @@
         var _this6 = this;
         // the title picked here before (or in «По сериям») is opened again without asking; a clarified search asks
         var level = json[0] && json[0].is_similars ? 'src' : 'find';
-        var saved = object.clarification ? '' : watch.similarKey(watch.similarOf(object.movie, balanser, level));
+        var saved = object.clarification ? '' : similarTitles.key(similarTitles.of(object.movie, balanser, level));
         var auto = null;
 
         json.forEach(function (elem) {
-          var elem_key = watch.similarKey(elem);
+          var elem_key = similarTitles.key(elem);
           var title = elem.title || elem.ru_title || elem.nameRu || elem.en_title || elem.nameEn || elem.orig_title || elem.nameOriginal;
           var orig_title = elem.orig_title || elem.nameOriginal || elem.en_title || elem.nameEn;
           var year = elem.start_date || elem.year || '';
@@ -20324,7 +20454,7 @@
             sources[balanser].search(object, elem.kp_id || elem.kinopoisk_id || elem.kinopoiskId || elem.filmId || elem.imdb_id, [elem]);
           };
           item.on('hover:enter', function () {
-            watch.similarSave(object.movie, balanser, elem);
+            similarTitles.save(object.movie, balanser, elem);
             choose();
           });
           if (saved && !auto && elem_key === saved) auto = choose;
@@ -21798,7 +21928,7 @@
       };
       var hit = episodeVariants.cache[key] || (episodeVariants.cache[key] = episodeVariants.load(key));
       // a list to pick from kept for the session is dropped once a title was settled (here or on the source's screen)
-      if (hit && hit.res.status === 'choose' && (watch.similarOf(card, balancer, 'src') || watch.similarOf(card, balancer, 'find'))) hit = null;
+      if (hit && hit.res.status === 'choose' && (similarTitles.of(card, balancer, 'src') || similarTitles.of(card, balancer, 'find'))) hit = null;
       if (!hit) delete episodeVariants.cache[key];
       if (hit && covers(hit, pin)) return done(hit.res, true);
       if (episodeVariants.pending[key]) return episodeVariants.pending[key].push({ pin: pin, done: done });
@@ -21833,8 +21963,7 @@
         // sources' season lists came (watch.alt) is not placed yet: neither is kept
         // a list with a row still waiting for arm's answer (a Kodik part YummyAnime does not list) is not kept either
         var unsure = Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) || altLate || rows.some(function (r) {
-          var e = r.element || {};
-          return e.watch_pending && e.watch_q && e.watch_q.part && e.watch_q.part.index === -1;
+          return watch.waiting(r.element);
         });
         if ((status === 'ok' || status === 'none') && !unsure) {
           episodeVariants.cache[key] = entry;
@@ -21957,7 +22086,7 @@
         }
         finish('error', { message: typeof message == 'string' ? message : '' });
       };
-      // several titles: the user settles it once (watch.similarSave), the next probe goes straight to it
+      // several titles: the user settles it once (similarTitles.save), the next probe goes straight to it
       var replays = 0;
       // the source's «Show more» is followed (one page) so the list to pick from is not cut to the live search's five
       var more = 0;
@@ -21971,9 +22100,9 @@
           return e.link && seen[e.link] ? false : (seen[e.link] = true);
         });
         var level = items[0] && items[0].is_similars ? 'src' : 'find';
-        var saved = watch.similarKey(watch.similarOf(card, balancer, level));
+        var saved = similarTitles.key(similarTitles.of(card, balancer, level));
         var pick = null;
-        for (var i = 0; i < items.length && saved && !pick; i++) if (watch.similarKey(items[i]) === saved) pick = items[i];
+        for (var i = 0; i < items.length && saved && !pick; i++) if (similarTitles.key(items[i]) === saved) pick = items[i];
         // the title settled before: on to it, as a click in the source's list does (a list that keeps coming back stops)
         if (pick && replays++ < 3) {
           held = null;
@@ -22127,6 +22256,10 @@
       episodeVariants.mem = {};
       Lampa.Storage.set(episodeVariants.store, {});
     };
+    // rows are kept with their places: the watch tells when those may have moved
+    watch.onPlaces = function (id) {
+      if (id) episodeVariants.forgetCard(id);else episodeVariants.clear();
+    };
 
 
     // «По сериям»: a voice plays without its source's screen. The source runs off screen with the screen's own list
@@ -22200,14 +22333,14 @@
       probe.empty = probe.emptyForQuery = function () {
         fail();
       };
-      // several titles: the one settled before (watch.similarSave) is taken, as in episodeVariants
+      // several titles: the one settled before (similarTitles.save) is taken, as in episodeVariants
       var more = 0;
       probe.similars = function (items, search_more, more_params) {
         items = items || [];
         var level = items[0] && items[0].is_similars ? 'src' : 'find';
-        var saved = watch.similarKey(watch.similarOf(card, balancer, level));
+        var saved = similarTitles.key(similarTitles.of(card, balancer, level));
         var hit = null;
-        for (var i = 0; i < items.length && saved && !hit; i++) if (watch.similarKey(items[i]) === saved) hit = items[i];
+        for (var i = 0; i < items.length && saved && !hit; i++) if (similarTitles.key(items[i]) === saved) hit = items[i];
         // the title picked from «Show more» is on a later page of the list (three pages at most)
         if (!hit && saved && search_more && more++ < 3) {
           try {
@@ -22370,7 +22503,7 @@
       var failed = { open: false, box: $('<div class="online-mod-variants__failed"></div>').hide() };
       // what «Продолжить» replays for this card: its source and voice are "yours" on every episode
       var record = function record() {
-        return (Lampa.Storage.get('online_mod_resume', '{}') || {})[watch.id(card)] || null;
+        return watch.resumeRec(card);
       };
       var rec = record();
       // a source with one unnamed voice is remembered with v: ''
@@ -22421,7 +22554,7 @@
       };
       var headSub = function headSub(g) {
         var found = g.found;
-        g.badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), capOf(g.b));
+        g.badge = qualityBadge(found.map(function (r) { return r.element.quality; }), capOf(g.b));
         var names = found.map(function (r) { return r.voice; });
         var unproven = found.filter(function (r) { return !r.element.watch_place; }).length;
         // folded: which voices are inside; open: what the tiles do not say
@@ -22440,7 +22573,7 @@
         var i = (el.quality || '').indexOf(' / ');
         el.quality = '360p ~ ' + max + 'p' + (i < 0 ? '' : el.quality.slice(i));
         item.find('.online-mod-variants__chip').remove();
-        item.append(badgeChip(watch.qualityBadge([el.quality], capOf(b))));
+        item.append(badgeChip(qualityBadge([el.quality], capOf(b))));
         var g = groups[b.name];
         if (g.found && g.found.indexOf(r) >= 0) {
           headSub(g);
@@ -22499,7 +22632,7 @@
         var item = focusable($('<div class="online-mod-variants__voice selector"><span class="online-mod-variants__voice-name"></span></div>'));
         item.find('.online-mod-variants__voice-name').text(r.voice);
         if (!el.watch_place) item.append('<span class="online-mod-variants__dot"></span>');
-        item.append(badgeChip(watch.qualityBadge([el.quality], capOf(g.b))));
+        item.append(badgeChip(qualityBadge([el.quality], capOf(g.b))));
         if (mine(g, r)) item.addClass('online-mod-variants__voice--mine').prepend($('<span class="online-mod-variants__tag"></span>').text(L('online_mod_variants_mine')));
         item.on('hover:enter', function () {
           open(g.b, { season: r.season, voice_name: r.voice });
@@ -22617,7 +22750,7 @@
         cont.toggleClass('online-mod-variants__resume--wait', !r);
         cont.find('.online-mod-variants__play').toggleClass('is-loading', g.st === 'loading');
         cont.find('b').text(r ? time ? L('online_mod_resume') + ' ' + L('online_mod_variants_from') + ' ' + time : L('online_mod_variants_mine_play') : g.st === 'loading' ? L('online_mod_variants_finding') : g.st === 'choose' ? L('online_mod_variants_pick') : L('online_mod_variants_lost'));
-        cont.find('small').text([rec.v, g.b.title, r ? watch.qualityBadge([r.element.quality], capOf(g.b)) : ''].filter(Boolean).join(' · '));
+        cont.find('small').text([rec.v, g.b.title, r ? qualityBadge([r.element.quality], capOf(g.b)) : ''].filter(Boolean).join(' · '));
       };
       // the column's progress, the hero's totals and the «Продолжить» row
       var summary = function summary() {
@@ -22678,7 +22811,7 @@
       };
       // forget what this source found (and the title picked for it), then look again
       var again = function again(b, title) {
-        if (title) watch.similarClear(card, b.name);
+        if (title) similarTitles.clear(card, b.name);
         episodeVariants.forget(b.name + ':' + watch.id(card));
         ask(b);
       };
@@ -22687,7 +22820,7 @@
         // while its search runs, a reset would be overwritten by that search's answer
         if (groups[b.name].res) {
           items.push({ title: L('online_mod_variants_retry'), retry: true });
-          if (watch.similarOf(card, b.name, 'src') || watch.similarOf(card, b.name, 'find')) items.splice(4, 0, { title: L('online_mod_variants_reset'), reset: true });
+          if (similarTitles.of(card, b.name, 'src') || similarTitles.of(card, b.name, 'find')) items.splice(4, 0, { title: L('online_mod_variants_reset'), reset: true });
         }
         Lampa.Select.show({
           title: b.title,
@@ -22733,7 +22866,7 @@
             Lampa.Controller.toggle('content');
             // an episode card is a video, not a title: the source's own screen plays it
             if (a.elem.episode) return open(b);
-            watch.similarSave(card, b.name, a.elem);
+            similarTitles.save(card, b.name, a.elem);
             ask(b);
           }
         });
@@ -23184,22 +23317,7 @@
             btn.after(by);
             // read when pressed or focused, not when the card opened: what was played meanwhile counts
             var resume = function resume() {
-              var all = Lampa.Storage.get('online_mod_resume', '{}');
-              var rec = all && typeof all == 'object' ? all[watch.id(card)] : null;
-              if (!rec || !rec.b) rec = null;
-              // src: the title's own source and voice, even when no episode place was proven (rec.p)
-              var src = rec;
-              if (rec && !rec.p) rec = null;
-              if (rec) rec = watch.recOf(card, rec);
-              var seen = watch.lastSeen(card);
-              // an episode Lampa saw played after our record (not from our list) wins; it has no source of its own: the title's source plays it in its restored voice, else its screen opens
-              if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
-                return { rec: null, src: src, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: seen.season - 1 }, watch.counts(card), seen.percent, (watch.altOf(card) || {}).a) };
-              }
-              if (!rec) return src ? { rec: null, src: src } : null;
-              var tl = Lampa.Timeline.view(Lampa.Utils.hash(watch.key(card, rec.p.season, rec.p.episode)));
-              var target = watch.resumeTarget(rec, watch.counts(card), tl && tl.percent || (seen && seen.season == rec.p.season && seen.episode == rec.p.episode ? seen.percent : undefined), (watch.altOf(card) || {}).a);
-              return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
+              return watch.resumeOf(card);
             };
             var label = function label(r) {
               if (!r) return Lampa.Lang.translate('online_mod_start');
@@ -23240,7 +23358,7 @@
                 return s > 0 && e > 0 ? 'С' + s + 'Э' + e : '—';
               };
               var text = t(function () {
-                var rec = (Lampa.Storage.get('online_mod_resume', '{}') || {})[watch.id(card)];
+                var rec = watch.resumeRec(card);
                 var seen = watch.lastSeen(card);
                 var r = resume();
                 var raw = rec ? rec.b + (rec.v ? '/' + rec.v : '') + ' ' + (rec.p ? se(rec.p.season, rec.p.episode) : 'С—') + ' s' + rec.s : 'нет';
@@ -23788,7 +23906,7 @@
         if (p && carries(p.url)) src = p.url;
       });
       [['lampac', 'online_mod_lampac_server'], ['alloha', 'online_mod_alloha_server'], ['trakt_id', 'online_mod_trakt_id'], ['trakt_secret', 'online_mod_trakt_secret']].forEach(function (p) {
-        var value = watch.param(src, p[0]);
+        var value = urlParam(src, p[0]);
         if (value && !((Lampa.Storage.get(p[1], '') || '') + '').replace(/^\s+|\s+$/g, '')) Lampa.Storage.set(p[1], value);
       });
     }
