@@ -194,6 +194,33 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.strictEqual(keys[99], 'tmdb_101');
 }
 
+// startSeason: the season the episodes screen opens on
+{
+  for (const k in viewed) delete viewed[k];
+  const card = { id: 9, original_title: 'Z', seasons: [{ season_number: 0, episode_count: 3 }, { season_number: 1, episode_count: 10 }, { season_number: 2, episode_count: 8 }] };
+  const rec = (s, e, t) => { store.online_mod_resume = { tmdb_9: { b: 'turbo', v: '', s: 0, p: { season: s, episode: e }, t: t } }; };
+  store.online_mod_resume = undefined;
+  assert.strictEqual(watch.startSeason(card), 1);
+  rec(2, 3, 500);
+  assert.strictEqual(watch.startSeason(card), 2);
+  rec(1, 10, 500);
+  viewed['h:110Z'] = { percent: 95 };
+  assert.strictEqual(watch.startSeason(card), 2);
+  rec(1, 4, 500);
+  delete viewed['h:110Z'];
+  viewed.a = { percent: 30, card: 'tv_9', season: 2, episode: 2, updated: 900 };
+  assert.strictEqual(watch.startSeason(card), 2);
+  viewed.a.updated = 100;
+  assert.strictEqual(watch.startSeason(card), 1);
+  store.online_mod_resume = undefined;
+  assert.strictEqual(watch.startSeason(card), 2);
+  rec(5, 1, 500);
+  delete viewed.a;
+  assert.strictEqual(watch.startSeason(card), 1);
+  for (const k in viewed) delete viewed[k];
+  store.online_mod_resume = undefined;
+}
+
 // stacked
 {
   const part = { index: 1, bounds: [0, 12, 25], first: 1 };

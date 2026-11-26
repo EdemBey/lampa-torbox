@@ -973,6 +973,26 @@
         });
         return best;
       },
+      // the episodes screen opens on the season to continue: the newer of our record and Lampa's timeline, the next season when that episode is finished; never watched: the first real season
+      startSeason: function startSeason(card) {
+        var counts = this.counts(card);
+        var all = Lampa.Storage.get('online_mod_resume', '{}');
+        var rec = all && typeof all == 'object' ? all[this.id(card)] : null;
+        var seen = this.lastSeen(card);
+        var p = null;
+        var percent;
+        if (rec && rec.p && (!seen || (rec.t || 0) >= (seen.updated || 0))) {
+          p = { season: +rec.p.season, episode: +rec.p.episode };
+          var tl = Lampa.Timeline && Lampa.Timeline.view ? Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, p.season, p.episode))) : null;
+          percent = tl && tl.percent;
+        } else if (seen) {
+          p = { season: seen.season, episode: seen.episode };
+          percent = seen.percent;
+        }
+        if (!p) return +Object.keys(counts)[0] || 1;
+        var s = this.resumeTarget({ p: p, s: 0 }, counts, percent).pin.season;
+        return counts[s] || !Object.keys(counts).length ? s : +Object.keys(counts)[0];
+      },
       // shortcut: temporary TV diagnostics — Lampa for Android logs each request URL to logcat; remove once «Продолжить» works on the TV
       diag: function diag(tag, data) {
         try {
@@ -22396,7 +22416,7 @@
           select.push({
             title: Lampa.Lang.translate('torrent_serial_season') + ' ' + i,
             season: i,
-            selected: (object.season || Lampa.Utils.countSeasons(card)) == i
+            selected: object.season == i
           });
         }
         Lampa.Select.show({
@@ -22414,7 +22434,8 @@
       comp.use({
         onCreate: function onCreate() {
           var self = this;
-          var season = object.season || Lampa.Utils.countSeasons(card);
+          if (!object.season) object.season = watch.startSeason(card);
+          var season = object.season;
           Lampa.Api.seasons(card, [season], function (v) {
             var data = v[season];
             if (!data || !data.episodes || !data.episodes.length) return self.empty();
