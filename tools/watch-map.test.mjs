@@ -1243,11 +1243,10 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   // a saved answer still wins
   assert.strictEqual(watch.place({ 'alloha:1': 0 }, counts, true, one(), alt), false);
   // not through absolute (max 1150 is no whole run of seasons, so the old rules give null): two seasons, a franchise part,
-  // a Lampa split, a season not counted from 1, a short list
+  // a Lampa split, a short list
   assert.strictEqual(watch.place({}, counts, true, one({ seasons: 2, max: 1150 }), alt), null);
   assert.strictEqual(watch.place({}, counts, true, one({ part: { index: -2 }, max: 1150 }), alt), null);
   assert.strictEqual(watch.place({}, counts, true, one({ split: true, max: 1150 }), alt), null);
-  assert.strictEqual(watch.place({}, counts, true, one({ min: 2, max: 1150 }), alt), null);
   assert.deepStrictEqual(watch.place({}, counts, true, one({ max: 40, episode: 3 }), alt), { season: 1, episode: 3 });
   // a short count that is no whole run of seasons is not taken as absolute numbering
   assert.strictEqual(watch.place({}, { 1: 12, 2: 12 }, true, one({ episode: 13, max: 14 }), { a: [[1, 1, 1, 12], [13, 2, 1, 12]] }), null);
@@ -1256,6 +1255,115 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.strictEqual(watch.place({}, counts, true, one({ max: 1150 }), { a: 0, ys: ['21'], y: [1180] }), null);
   assert.strictEqual(watch.place({}, counts, true, one({ max: 1150 })), null);
   assert.deepStrictEqual(watch.place({}, counts, true, one(), { a: 0 }), { season: 22, episode: 24 });
+
+  // every other rule counts a season from 1: place() turns that into TMDB's number (S22 = 1089..1155)
+  {
+    const part = { index: 0, at: 0, first: 1, bounds: [0, 1180], all: [{ shiki: '21', n: 1180, first: 1 }] };
+    const kodik = (extra) => Object.assign({ src: 'shiki:21', balancer: 'kodik', season: 3, seasons: 34, episode: 1112, min: 1, max: 1157, split: false, part }, extra);
+    assert.deepStrictEqual(watch.place({}, counts, true, kodik(), alt), { season: 22, episode: 1112 });
+    assert.deepStrictEqual(watch.place({}, counts, true, kodik({ episode: 66 }), alt), { season: 2, episode: 66 });
+    assert.deepStrictEqual(watch.place({}, counts, true, kodik({ episode: 1180, max: 1180 }), alt), { season: 23, episode: 1180 });
+    // without the runs the number stays relative, as before
+    assert.deepStrictEqual(watch.place({}, counts, true, kodik()), { season: 22, episode: 24 });
+
+    // Alloha voices that start late (min > 1) are placed by their absolute numbers
+    assert.deepStrictEqual(watch.place({}, counts, true, one({ min: 1000, max: 1134 }), alt), { season: 22, episode: 1112 });
+    assert.deepStrictEqual(watch.place({}, counts, true, one({ min: 151, max: 1162, episode: 1162 }), alt), { season: 23, episode: 1162 });
+    // ... but a short late list is not taken as absolute numbering
+    assert.deepStrictEqual(watch.place({}, counts, true, one({ min: 5, max: 12, episode: 6 }), alt), { season: 1, episode: 6 });
+
+    // Filmix lists the series as season -1
+    assert.deepStrictEqual(watch.place({}, counts, true, one({ balancer: 'filmix', season: -1, episode: 66, max: 1051 }), alt), { season: 2, episode: 66 });
+    assert.strictEqual(watch.place({}, counts, true, one({ balancer: 'filmix', season: -1, episode: 3, max: 40 }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, one({ balancer: 'filmix', season: -1, seasons: 2, max: 1051 }), alt), null);
+
+    // Turbo's own 25 seasons are chunks of the absolute count
+    const bounds = [1, 62, 77, 92, 130, 143, 195, 227, 263, 336, 381, 407, 421, 458, 516, 578, 628, 746, 782, 890, 915, 956, 1085, 1118, 1155, 1180];
+    const span = [];
+    for (let i = 1; i <= 25; i++) span.push([i === 1 ? 1 : bounds[i - 1] + 1 + (i === 8 ? 1 : 0), bounds[i]]);
+    const turbo = (extra) => Object.assign({ src: '', balancer: 'turbo', season: 23, seasons: 25, episode: 1112, min: 1086, max: 1118, split: false, span }, extra);
+    assert.strictEqual(span[22][0], 1086);
+    assert.deepStrictEqual(watch.place({}, counts, true, turbo(), alt), { season: 22, episode: 1112 });
+    assert.deepStrictEqual(watch.place({}, counts, true, turbo({ season: 2, episode: 66, min: 63, max: 77 }), alt), { season: 2, episode: 66 });
+    assert.strictEqual(watch.chain(span, 25), true);
+    // broken, incomplete or foreign chains are not guessed
+    const cut = (f) => { const c = span.map((r) => (r ? r.slice() : r)); f(c); return c; };
+    assert.strictEqual(watch.place({}, counts, true, turbo({ span: cut((c) => { c[10][0] = 500; }) }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, turbo({ span: cut((c) => { c[3] = null; }) }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, turbo({ span: cut((c) => { c.pop(); }) }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, turbo({ span: cut((c) => { c[0][0] = 2; }) }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, turbo({ span: undefined }), alt), null);
+    assert.strictEqual(watch.place({}, counts, true, turbo(), { ys: [], a: 0 }), null);
+    // restarting seasons (each from 1) are no chain
+    assert.strictEqual(watch.chain([[1, 12], [1, 12]], 2), false);
+    assert.strictEqual(watch.chain([[1, 12], [13, 24]], 2), true);
+
+    // answers are stored per season from 1 (canon): they stay valid and are turned into TMDB's number on the way out
+    assert.deepStrictEqual(watch.place({ 'alloha:1': [1, 1, 1] }, counts, true, one({ max: 1155 }), alt), { season: 22, episode: 1112 });
+    assert.deepStrictEqual(watch.place({ 'alloha:1': [1, 22, 1] }, counts, true, one({ episode: 5 }), alt), { season: 22, episode: 1093 });
+    assert.deepStrictEqual(watch.place({ 'std:1': [1, 22, 1] }, counts, true, one({ episode: 5, balancer: 'x' }), alt), { season: 22, episode: 1093 });
+    assert.deepStrictEqual(watch.place({ 'alloha:1': [1, 22, 1] }, counts, true, one({ episode: 5 }), { ys: [] }), { season: 22, episode: 5 });
+    // a per-season show is unchanged
+    const per = { a: [[1, 1, 1, 12], [13, 2, 1, 12]] };
+    assert.deepStrictEqual(watch.place({ std: 1 }, { 1: 12, 2: 12 }, true, { src: '', balancer: 'x', season: 2, seasons: 2, episode: 3, min: 1, max: 12 }, per), { season: 2, episode: 3 });
+    assert.deepStrictEqual(watch.place({ 'x:1': [1, 1, 1] }, { 1: 12, 2: 12 }, false, { src: '', balancer: 'x', season: 1, seasons: 1, episode: 14, min: 1, max: 24 }, per), { season: 2, episode: 2 });
+    // a number that is already TMDB's is left alone (the absolute and the same-season results)
+    assert.deepStrictEqual(watch.tmdb(alt, { season: 22, episode: 1112 }, counts), { season: 22, episode: 1112 });
+    assert.deepStrictEqual(watch.tmdb(alt, { season: 22, episode: 24 }, counts), { season: 22, episode: 1112 });
+    assert.strictEqual(watch.tmdb(alt, false, counts), false);
+    assert.strictEqual(watch.tmdb(alt, null, counts), null);
+    // past the end of a season that is not the last one nothing says where the number belongs; the last season runs on
+    assert.deepStrictEqual(watch.tmdb(alt, { season: 22, episode: 100 }, counts), { season: 22, episode: 100 });
+    assert.deepStrictEqual(watch.tmdb(alt, { season: 23, episode: 30 }, counts), { season: 23, episode: 1185 });
+    // a season counts as run-on only when its first number is above its own count: a per-season show whose season
+    // lacks its first episode (runs [2..12]) keeps S2E1
+    const lacking = { a: [[1, 1, 1, 12], [13, 2, 2, 11]] };
+    assert.deepStrictEqual(watch.place({ 'x:2': [1, 2, 1] }, { 1: 12, 2: 12 }, true, { src: '', balancer: 'x', season: 2, seasons: 2, episode: 1, min: 1, max: 12 }, lacking), { season: 2, episode: 1 });
+    assert.deepStrictEqual(watch.place({ 'x:2': [1, 2, 1] }, counts, true, { src: '', balancer: 'x', season: 2, seasons: 2, episode: 1, min: 1, max: 12 }, { a: runs }), { season: 2, episode: 62 });
+    assert.strictEqual(watch.chain([[1, 1], [1, 12]], 2), false);
+
+    // an old «Продолжить» record (counted from 1) is read as TMDB's number
+    {
+      const cardR = { id: 37854, original_title: 'OP', anime: true, seasons: sizes.map((n, i) => ({ season_number: i + 1, episode_count: n })) };
+      const keep = watch.alts;
+      watch.alts = { tmdb_37854: { t: 1, a: runs, ys: ['21'] } };
+      const old = { b: 'kodik', v: '', s: 21, t: 500, p: { season: 22, episode: 24 } };
+      const fresh = watch.recOf(cardR, old);
+      assert.deepStrictEqual(fresh.p, { season: 22, episode: 1112 });
+      assert.deepStrictEqual(old.p, { season: 22, episode: 24 });
+      assert.strictEqual(fresh.b, 'kodik');
+      assert.deepStrictEqual(watch.resumeTarget(fresh, counts, 95, runs), { pin: { season: 22, episode: 1113 }, s: 21 });
+      assert.deepStrictEqual(watch.resumeTarget(fresh, counts, 40, runs), { pin: { season: 22, episode: 1112 }, s: 21 });
+      assert.deepStrictEqual(watch.recOf(cardR, { p: { season: 22, episode: 1112 } }).p, { season: 22, episode: 1112 });
+      store.online_mod_resume = { tmdb_37854: old };
+      for (const k in viewed) delete viewed[k];
+      viewed['h:22:1112OP'] = { percent: 95 };
+      assert.strictEqual(watch.startSeason(cardR), 22);
+      viewed['h:22:1112OP'] = { percent: 0 };
+      store.online_mod_resume = { tmdb_37854: Object.assign({}, old, { p: { season: 22, episode: 67 } }) };
+      assert.strictEqual(watch.startSeason(cardR), 22);
+      store.online_mod_resume = undefined;
+      for (const k in viewed) delete viewed[k];
+      watch.alts = keep;
+    }
+
+    // hashOf takes the source's season spans from watch_info and keys the episode by TMDB's number
+    for (const k in viewed) delete viewed[k];
+    const card = { id: 37854, original_title: 'OP', original_name: 'OP', anime: true, number_of_seasons: 23, seasons: sizes.map((n, i) => ({ season_number: i + 1, episode_count: n })) };
+    const saved = [watch.alts, watch.cached];
+    watch.alts = { tmdb_37854: { t: 1, a: runs, ys: ['21'] } };
+    const element = { season: '23', episode: '1112', watch_info: { span: () => span } };
+    assert.strictEqual(watch.hashOf(card, 'turbo', element, [element], 25), 'h:22:1112OP');
+    assert.deepStrictEqual(element.watch_place, { season: 22, episode: 1112 });
+    // lastSeen finds a position Lampa keeps by the title key only, under TMDB's number
+    viewed['h:22:1112OP'] = { percent: 50, updated: 7 };
+    store.online_mod_resume = undefined;
+    const seen = watch.lastSeen(card);
+    assert.strictEqual(seen.season + ':' + seen.episode, '22:1112');
+    for (const k in viewed) delete viewed[k];
+    watch.alts = saved[0];
+    watch.cached = null;
+  }
 
   // «Продолжить» on absolutely numbered seasons (S22 = 1089..1155): the next number, not S23E1
   {

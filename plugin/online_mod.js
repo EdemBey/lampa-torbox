@@ -498,9 +498,11 @@
         if (listed) return listed;
         // -2: YummyAnime's parts are not known yet, they may prove the part (asked again by view)
         if (q.part) return q.part.index === -1 && q.part.all ? this.armed(q.part, q, counts) : this.stacked(q.part, q.episode, counts);
-        // one season counting on from 1 past TMDB's first season is numbered absolutely (One Piece): TMDB's Absolute group
-        // places it, with TMDB's own episode numbers (they may run on across seasons, so canon() is not applied)
-        if (alt && alt.a && !q.split && q.seasons === 1 && q.season === 1 && q.min === 1 && q.max > counts[1] && (q.max > counts[1] + (counts[2] || 0) || this.whole(q.max, counts)) && (!q.src || alt.ys && q.src === 'shiki:' + alt.ys[0])) return this.absolute(alt.a, q.episode, counts);
+        // numbered absolutely (One Piece): a single list (Filmix numbers it season -1) that goes beyond TMDB's first two
+        // seasons (or counts from 1 up to a whole run of them), or seasons that are chunks of one count (chain): TMDB's
+        // Absolute group places it, with TMDB's own episode numbers (place() leaves those as they are)
+        var one = q.seasons === 1 && (q.season === 1 || q.season < 0) && (q.max > counts[1] + (counts[2] || 0) || q.min === 1 && q.max > counts[1] && this.whole(q.max, counts));
+        if (alt && alt.a && !q.split && (one || this.chain(q.span, q.seasons)) && (!q.src || alt.ys && q.src === 'shiki:' + alt.ys[0])) return this.absolute(alt.a, q.episode, counts);
         if (q.src) return null;
         var same = { season: q.season, episode: q.episode };
         // no TMDB list to check against: today's behaviour
@@ -687,8 +689,45 @@
       // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
       place: function place(map, counts, anime, q, alt) {
         var r = this.rule(map, counts, anime, q, alt);
-        if (r !== null || !alt) return r;
-        return q.src ? this.kodik(alt, counts, q) : this.agree(alt, counts, q);
+        if (r === null && alt) r = q.src ? this.kodik(alt, counts, q) : this.agree(alt, counts, q);
+        return this.tmdb(alt, r, counts);
+      },
+      // the lowest episode_number TMDB gives a season (the Absolute runs alt.a); 0 when unknown
+      firstOf: function firstOf(runs, season) {
+        var first = 0;
+        (runs || []).forEach(function (r) {
+          if (r[1] === season && (!first || r[2] < first)) first = r[2];
+        });
+        return first;
+      },
+      // TMDB numbers a season on from the earlier ones (One Piece S22 = 1089..1155) when its first number is above the
+      // season's own episode count. shortcut: a run-on season starting at or below its own count is not seen, upgrade when such a show turns up
+      runOn: function runOn(runs, season, counts) {
+        var first = this.firstOf(runs, season);
+        return first > (counts && counts[season] || Infinity) ? first : 0;
+      },
+      // Every rule but the absolute one counts a season's episodes from 1 (answers and canon() store that form), TMDB
+      // may number them on from the earlier seasons: the last step turns the former into the latter, the key Lampa's
+      // timeline uses. A number already at or above the season's first is TMDB's own; past the end of a season that is
+      // not the last one it is not known where the number belongs, so it stays.
+      tmdb: function tmdb(alt, r, counts) {
+        var first = r && alt && alt.a ? this.runOn(alt.a, r.season, counts) : 0;
+        return first && r.episode < first && (r.episode <= counts[r.season] || !counts[r.season + 1]) ? { season: r.season, episode: r.episode + first - 1 } : r;
+      },
+      // a «Продолжить» record keeps the episode as an older version placed it (counted from 1): in TMDB's number
+      recOf: function recOf(card, rec) {
+        var out = {};
+        for (var k in rec) out[k] = rec[k];
+        out.p = this.tmdb(this.altOf(card), { season: +rec.p.season, episode: +rec.p.episode }, this.counts(card));
+        return out;
+      },
+      // a source's own seasons (span: [min, max] of each, from its whole list) are consecutive chunks of one absolute
+      // numbering: the first starts at 1, each next starts where the one before ended (a missing number is tolerated)
+      chain: function chain(span, seasons) {
+        if (!span || !(seasons > 1) || span.length !== seasons) return false;
+        return span.every(function (s, i) {
+          return !!s && s[1] >= s[0] && (i ? s[0] > span[i - 1][0] && Math.abs(s[0] - span[i - 1][1] - 1) <= 1 : s[0] === 1);
+        });
       },
       // A source's season list proves this season when the balancer has as many seasons, lists exactly this
       // season's episodes, and the list meets TMDB's seasons at an end (stacked). Every list that fits must
@@ -1129,7 +1168,7 @@
           var lead = runs.filter(function (r) {
             return r[1] === to.season;
           })[0];
-          return { pin: to, s: lead[2] > 1 ? rec.s : rec.s + (to.season - p.season) };
+          return { pin: to, s: lead[2] > counts[to.season] ? rec.s : rec.s + (to.season - p.season) };
         }
         if (counts[p.season] > p.episode) return { pin: { season: p.season, episode: p.episode + 1 }, s: rec.s };
         // absolutely numbered seasons without runs (or past them) stay in the season
@@ -1155,10 +1194,14 @@
           if (ln && v && v.card === ln.card) take(v, parseInt(v.season), parseInt(v.episode));
         });
         var counts = this.counts(card);
+        var self = this;
+        var runs = (this.altOf(card) || {}).a;
         [card.original_title, card.original_name].forEach(function (name, i, names) {
           if (!name || i && name === names[0]) return;
           Object.keys(counts).forEach(function (s) {
-            for (var e = 1; e <= counts[s]; e++) take(all[Lampa.Utils.hash([s, s > 10 ? ':' : '', e, name].join(''))], +s, e);
+            // a season TMDB numbers on from the earlier ones (One Piece S22 = 1089..1155)
+            var off = Math.max(0, self.runOn(runs, +s, counts) - 1);
+            for (var e = 1 + off; e <= counts[s] + off; e++) take(all[Lampa.Utils.hash([s, s > 10 ? ':' : '', e, name].join(''))], +s, e);
           });
         });
         return best;
@@ -1172,7 +1215,7 @@
         var p = null;
         var percent;
         if (rec && rec.p && (!seen || (rec.t || 0) >= (seen.updated || 0))) {
-          p = { season: +rec.p.season, episode: +rec.p.episode };
+          p = this.recOf(card, rec).p;
           var tl = Lampa.Timeline && Lampa.Timeline.view ? Lampa.Timeline.view(Lampa.Utils.hash(this.key(card, p.season, p.episode))) : null;
           percent = tl && tl.percent;
         } else if (seen) {
@@ -1332,6 +1375,8 @@
           max: Math.max.apply(null, nums),
           split: !!(split && Object.keys(split).length >= 2),
           seasons: seasons,
+          // the source's [min, max] per season, for sources whose lists hold one season at a time
+          span: typeof info.span == 'function' ? info.span() : info.span,
           tmdb: this.id(card).indexOf('tmdb_') === 0 ? card.id : 0
         };
         var anime = animeSkip.isAnime(card, skipOf(element));
@@ -16649,6 +16694,23 @@
         return m ? parseInt(m[1], 10) : i + 1;
       }
 
+      // [min, max] of every season of the playlist (all voices): a list holds one season, watch.chain needs them all
+      var spanFor = null;
+      var spanOf = null;
+      function seasonSpan() {
+        if (!Array.isArray(extract.seasons)) return null;
+        if (spanFor !== extract.seasons) {
+          spanFor = extract.seasons;
+          spanOf = spanFor.map(function (s) {
+            var n = (s && s.folder || []).map(function (ep, i) {
+              return episodeNum(ep, i);
+            });
+            return n.length ? [Math.min.apply(null, n), Math.max.apply(null, n)] : null;
+          });
+        }
+        return spanOf;
+      }
+
       this.extendChoice = function (saved) {
         Lampa.Arrays.extend(choice, saved, true);
       };
@@ -16748,7 +16810,8 @@
               voices: ep.folder || [],
               voice: voice,
               s: choice.season,
-              ep: i
+              ep: i,
+              watch_info: { span: seasonSpan }
             });
           });
         } else if (extract.movie) {
@@ -21843,7 +21906,7 @@
     // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
     episodeVariants.store = 'online_mod_variants_v2';
     // bump when the placement rules change: answers saved under older rules are not reused
-    episodeVariants.rules = 5;
+    episodeVariants.rules = 6;
     episodeVariants.all = function () {
       if (!episodeVariants.mem) {
         var old = Lampa.Storage.get('online_mod_variants', '{}');
@@ -22984,6 +23047,7 @@
               // src: the title's own source and voice, even when no episode place was proven (rec.p)
               var src = rec;
               if (rec && !rec.p) rec = null;
+              if (rec) rec = watch.recOf(card, rec);
               var seen = watch.lastSeen(card);
               // an episode Lampa saw played after our record (not from our list) wins; it has no source of its own: the title's source plays it in its restored voice, else its screen opens
               if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
