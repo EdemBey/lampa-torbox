@@ -12,6 +12,7 @@ const DONE_PAGE = '<!doctype html><meta charset="utf-8"><meta name="viewport" co
 
 // One user per helper: the obrut host, the approval cookies and the browser that earned them.
 const state = { host: '', cookies: new Map(), ua: '', approved: false };
+let lastPlaylist = null;
 
 const isTurboHost = (h) => /(^|\.)obrut\.show$/i.test(h || '');
 export const isCdnHost = (h) => /(^|\.)superdupercdn\.com$/i.test(h || '');
@@ -117,6 +118,60 @@ export function masterPlaylist({ base, tracks, def, qualities, audioQ }) {
   return lines.join('\n') + '\n';
 }
 
+// DDD's voice menu: each link is this helper's playlist route, which serves the CDN playlist with absolute urls.
+export function dddVoiceovers({ voices, u, base, tail }) {
+  const out = [];
+  for (const v of voices) {
+    if (!v.file) continue;
+    const parts = v.file.split(',').map((p) => p.match(/^\s*\[([^\]]+)\]\s*(\S+)/)).filter(Boolean).map((m) => ({ label: m[1], url: m[2] }));
+    const quals = parts.map((p) => ({ n: parseInt(p.label, 10), url: p.url })).filter((p) => !isNaN(p.n)).sort((a, b) => b.n - a.n);
+    const auto = (parts.find((p) => /auto/i.test(p.label)) || quals[0] || {}).url;
+    if (!auto) continue;
+    out.push({
+      id: v.title,
+      name: v.title,
+      selected: parts.some((p) => p.url === u),
+      url: `${base}/turbo/stream.m3u8?u=${encodeURIComponent(auto)}${tail}`,
+      qualities: quals.map((p) => ({ name: p.n + 'p', url: `${base}/turbo/stream.m3u8?u=${encodeURIComponent(p.url)}${tail}` })),
+    });
+  }
+  if (out.length && !out.some((v) => v.selected)) out[0].selected = true;
+  return { voiceovers: out };
+}
+
+// Playlist lines are relative to the CDN path; the player fetches them from this helper's origin, so make them absolute.
+export function absolutePlaylist(text, playlistUrl) {
+  return text.split('\n').map((line) => {
+    if (line.startsWith('#')) return line.replace(/URI="([^"]*)"/g, (m, x) => `URI="${new URL(x, playlistUrl).href}"`);
+    const t = line.trim();
+    return t ? new URL(t, playlistUrl).href : line;
+  }).join('\n');
+}
+
+// obrut's stream link → the CDN link. Failures come back as { status, body } instead of a reply.
+async function resolveCdn(u) {
+  let target;
+  try { target = new URL(u || ''); } catch { return { status: 400, body: { error: 'bad stream url' } }; }
+  if (target.protocol !== 'https:' || !isTurboHost(target.hostname)) return { status: 400, body: { error: 'not a turbo stream' } };
+  const up = await fetch(target.href, {
+    redirect: 'manual',
+    headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0' },
+    signal: AbortSignal.timeout(TIMEOUT),
+  });
+  const location = up.headers.get('location');
+  await up.body?.cancel();
+  if (up.status >= 300 && up.status < 400 && location) {
+    const next = new URL(location, target.href);
+    if (!isCdnHost(next.hostname) || next.protocol !== 'https:') return { status: 502, body: { error: 'unexpected stream host' } };
+    // z.superdupercdn.com often stalls 20+ s from home networks before redirecting to its edge, and the edge
+    // serves the same path, so players get the edge host directly.
+    // shortcut: the edge name is hard-coded (always lucky.z so far); look it up again if the CDN renames it.
+    if (next.hostname === 'z.superdupercdn.com') next.hostname = 'lucky.z.superdupercdn.com';
+    return { cdn: next.href };
+  }
+  return { status: 502, body: { error: 'stream: ' + up.status } };
+}
+
 // Returns true when the request was a Turbo one.
 export async function handleTurbo(req, res, url, base) {
   try {
@@ -149,31 +204,25 @@ export async function handleTurbo(req, res, url, base) {
 
     // Only this hop needs obrut's Referer, which a browser cannot set; the player follows the CDN redirects itself.
     if (path === '/turbo/stream') {
-      let target;
-      try { target = new URL(q.get('u') || ''); } catch { json(res, 400, { error: 'bad stream url' }); return true; }
-      if (target.protocol !== 'https:' || !isTurboHost(target.hostname)) { json(res, 400, { error: 'not a turbo stream' }); return true; }
-      const up = await fetch(target.href, {
-        redirect: 'manual',
-        headers: { Referer: 'https://' + (state.host || target.hostname.replace(/^cdn-/, '')) + '/', 'User-Agent': state.ua || 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(TIMEOUT),
-      });
-      const location = up.headers.get('location');
-      await up.body?.cancel();
-      if (up.status >= 300 && up.status < 400 && location) {
-        const next = new URL(location, target.href);
-        if (!isCdnHost(next.hostname) || next.protocol !== 'https:') { json(res, 502, { error: 'unexpected stream host' }); return true; }
-        // z.superdupercdn.com often stalls 20+ s from home networks before redirecting to its edge, and the edge
-        // serves the same path, so players get the edge host directly.
-        // shortcut: the edge name is hard-coded (always lucky.z so far); look it up again if the CDN renames it.
-        if (next.hostname === 'z.superdupercdn.com') next.hostname = 'lucky.z.superdupercdn.com';
-        const cdn = next.href;
-        // Lampa asks with json=1 and hands the link to its player: a redirect from here to the CDN makes the browser send Origin: null, which the CDN refuses.
-        if (q.get('json')) { json(res, 200, { url: cdn }); return true; }
-        res.writeHead(302, { Location: cdn, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
-        res.end();
-        return true;
-      }
-      json(res, 502, { error: 'stream: ' + up.status });
+      const r = await resolveCdn(q.get('u'));
+      if (!r.cdn) { json(res, r.status, r.body); return true; }
+      // Lampa asks with json=1 and hands the link to its player: a redirect from here to the CDN makes the browser send Origin: null, which the CDN refuses.
+      if (q.get('json')) { json(res, 200, { url: r.cdn }); return true; }
+      res.writeHead(302, { Location: r.cdn, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+      res.end();
+      return true;
+    }
+
+    // The CDN playlist served from this origin, so DDD takes its voice and segment links from here.
+    if (path === '/turbo/stream.m3u8') {
+      const r = await resolveCdn(q.get('u'));
+      if (!r.cdn) { json(res, r.status, r.body); return true; }
+      const up = await fetch(r.cdn, { redirect: 'follow', headers: { 'User-Agent': state.ua || 'Mozilla/5.0' }, signal: AbortSignal.timeout(TIMEOUT) });
+      if (!isCdnHost(new URL(up.url).hostname)) { await up.body?.cancel(); json(res, 502, { error: 'unexpected stream host' }); return true; }
+      const text = await up.text();
+      if (!text.includes('#EXTM3U')) { json(res, 502, { error: 'playlist' }); return true; }
+      res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+      res.end(absolutePlaylist(text, up.url));
       return true;
     }
 
@@ -190,6 +239,33 @@ export async function handleTurbo(req, res, url, base) {
       if (!/^\d{1,2}$/.test(q.get('d') ?? '0') || !known.includes(audioQ) || !qualities.every((x) => known.includes(x))) { json(res, 400, { error: 'bad quality' }); return true; }
       res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
       res.end(masterPlaylist({ base: b.href, tracks, def, qualities, audioQ }));
+      return true;
+    }
+
+    // DDD asks for one episode's voices; the item's own query (e, s, ep, u) says which episode.
+    if (path === '/turbo/voiceovers') {
+      let embed;
+      try { embed = new URL(q.get('e') || ''); } catch { json(res, 400, { error: 'bad url' }); return true; }
+      if (embed.protocol !== 'https:' || !isTurboHost(embed.hostname)) { json(res, 400, { error: 'not a turbo url' }); return true; }
+      const s = q.get('s') ?? '';
+      const ep = q.get('ep') ?? '';
+      if (!/^\d+$/.test(s) || !/^\d+$/.test(ep)) { json(res, 400, { error: 'bad episode' }); return true; }
+      state.host = embed.hostname;
+      // Each DDD episode start would fetch obrut's embed page, which makes its human check fire sooner.
+      let file;
+      if (lastPlaylist && lastPlaylist.href === embed.href && Date.now() - lastPlaylist.time < 5 * 60 * 1000) {
+        file = lastPlaylist.file;
+      } else {
+        const pl = await playlist(embed.href);
+        if (pl.verify) { json(res, 503, { error: 'verify' }); return true; }
+        file = pl.file;
+        lastPlaylist = { href: embed.href, file, time: Date.now() };
+      }
+      const season = file[Number(s)];
+      const item = season && season.folder && season.folder[Number(ep)];
+      if (!item || !item.folder) { json(res, 404, { error: 'no episode' }); return true; }
+      const tail = '&e=' + encodeURIComponent(embed.href) + '&s=' + s + '&ep=' + ep;
+      json(res, 200, dddVoiceovers({ voices: item.folder, u: q.get('u') || '', base, tail }));
       return true;
     }
 

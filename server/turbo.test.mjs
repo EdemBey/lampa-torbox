@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { decodePlaylist, browserCookie, isCdnHost, masterPlaylist } from './turbo.mjs';
+import { decodePlaylist, browserCookie, isCdnHost, masterPlaylist, dddVoiceovers, absolutePlaylist } from './turbo.mjs';
 
 // Build a PlayerJS-style blob: junk prefix + base64 JSON with "//" + btoa("c/c/c") markers spliced in.
 const cfg = { lang: 'en', file: [{ title: 'Season 1', folder: [{ title: 'Episode 1', folder: [{ title: '(RU) DUB', file: '[720p]https://cdn-x.obrut.show/stream/a,[Auto]https://cdn-x.obrut.show/stream/b' }] }] }] };
@@ -41,3 +41,31 @@ assert.equal(master, [
 ].join('\n') + '\n');
 assert.equal(masterPlaylist({ base: B, tracks: [{ n: 1, name: 'TVShows' }, { n: 3, name: 'Original "x"' }], def: 3, qualities: [720, 999, 1080], audioQ: 240 }), master, 'unknown quality skipped');
 console.log('turbo master OK');
+
+// dddVoiceovers
+const V = [
+  { title: 'Voice A', file: '[480p]https://cdn-x.obrut.show/stream/a1,[1080p]https://cdn-x.obrut.show/stream/a2,[Auto]https://cdn-x.obrut.show/stream/a3' },
+  { title: 'Voice B', file: '[1080p]https://cdn-x.obrut.show/stream/b2,[720p]https://cdn-x.obrut.show/stream/b1,[Auto]https://cdn-x.obrut.show/stream/b3' },
+];
+const BASE = 'https://helper.example';
+const TAIL = '&e=' + encodeURIComponent('https://obrut.show/embed/x') + '&s=0&ep=3';
+const U = 'https://cdn-x.obrut.show/stream/b1';
+const dv = dddVoiceovers({ voices: V, u: U, base: BASE, tail: TAIL }).voiceovers;
+assert.equal(dv.length, 2);
+assert.equal(dv[0].selected, false);
+assert.equal(dv[1].selected, true);
+assert.equal(dv[1].url, BASE + '/turbo/stream.m3u8?u=' + encodeURIComponent('https://cdn-x.obrut.show/stream/b3') + TAIL);
+assert.deepEqual(dv[1].qualities.map((q) => q.name), ['1080p', '720p']);
+assert.equal(dv[1].qualities[1].url, BASE + '/turbo/stream.m3u8?u=' + encodeURIComponent(U) + TAIL);
+assert.ok(dv.every((v) => v.url.endsWith(TAIL) && v.qualities.every((q) => q.url.endsWith(TAIL))));
+const dvNone = dddVoiceovers({ voices: V, u: 'https://nope', base: BASE, tail: TAIL }).voiceovers;
+assert.deepEqual(dvNone.map((v) => v.selected), [true, false]);
+console.log('turbo voiceovers OK');
+
+// absolutePlaylist
+const PL = 'https://lucky.z.superdupercdn.com/t/h/s:1/hls-v1-a3.m3u8';
+assert.equal(absolutePlaylist('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n./1080.mp4:hls:manifest-v1-a3.m3u8\n', PL),
+  '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://lucky.z.superdupercdn.com/t/h/s:1/1080.mp4:hls:manifest-v1-a3.m3u8\n');
+assert.equal(absolutePlaylist('#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4,\nseg1.ts\n', PL),
+  '#EXT-X-MAP:URI="https://lucky.z.superdupercdn.com/t/h/s:1/init.mp4"\n#EXTINF:4,\nhttps://lucky.z.superdupercdn.com/t/h/s:1/seg1.ts\n');
+console.log('turbo absolutePlaylist OK');
