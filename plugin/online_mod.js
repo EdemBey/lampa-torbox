@@ -973,8 +973,16 @@
         });
         return best;
       },
+      // shortcut: temporary TV diagnostics — Lampa for Android logs each request URL to logcat; remove once «Продолжить» works on the TV
+      diag: function diag(tag, data) {
+        try {
+          var s = JSON.stringify(data);
+          new Lampa.Reguest()['native']('https://edembey.github.io/lampa-torbox/diag/' + tag + '?d=' + encodeURIComponent(s.length > 1500 ? s.slice(0, 1500) : s), function () {}, function () {}, false, { dataType: 'text' });
+        } catch (e) {}
+      },
       // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
       remember: function remember(card, balancer, voice_name, season_index, element) {
+        this.diag('remember', { b: balancer, v: voice_name, s: season_index, place: element && element.watch_place, pend: element && element.watch_pending, es: element && element.season, ee: element && element.episode });
         if (!card || !element || !element.season || !element.watch_place) return;
         var all = Lampa.Storage.get('online_mod_resume', '{}');
         if (!all || typeof all != 'object') all = {};
@@ -21509,6 +21517,7 @@
       };
       var fail = function fail() {
         if (over) return;
+        watch.diag('pv-fail', { b: balancer, stage: stage, pin: pin, pick: pick, season: labels && labels.season, voice: labels && labels.voice, choice: choice, rows: rows.length });
         over = true;
         Lampa.Loading.stop();
         stop();
@@ -21604,7 +21613,10 @@
         if (!row) return fail();
         var rowEntry = rows.filter(function (r) { return r.item === row; })[0];
         // its place is not proven: the source's own screen asks, a guess would write a wrong watched mark
-        if (rowEntry && rowEntry.element && rowEntry.element.watch_pending) return fail();
+        if (rowEntry && rowEntry.element && rowEntry.element.watch_pending) {
+          watch.diag('pv-pending', { b: balancer, pin: pin, es: rowEntry.element.season, ee: rowEntry.element.episode });
+          return fail();
+        }
         over = true;
         clearTimeout(timer);
         var started = false;
@@ -22166,6 +22178,7 @@
                 var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
                 var b = r.rec ? r.rec.b : last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
                 var pick = r.rec ? r.pick : { season: r.target.s };
+                watch.diag('enter', { r: r, b: b, lastb: last[card.id] || '', glob: Lampa.Storage.get('online_mod_balanser', '') + '', save: Lampa.Storage.field('online_mod_save_last_balanser') });
                 Utils.setMyIp('');
                 checkMyIp(function () {
                   checkCurrentFanserialsHost(function () {
