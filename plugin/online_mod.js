@@ -22227,6 +22227,10 @@
           left: function left() {
             if (Navigator.canmove('left')) Navigator.move('left');else Lampa.Controller.toggle('menu');
           },
+          // voice tiles and the bottom buttons sit side by side
+          right: function right() {
+            Navigator.move('right');
+          },
           back: function back() {
             Lampa.Activity.backward();
           }
