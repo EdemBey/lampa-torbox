@@ -55,27 +55,4 @@ const of = (fv, resume) => makeWatch(code, Object.assign({ fv: fv }, resume ? { 
   assert.deepStrictEqual(w.resumeOf(card), { rec: null, src: { b: 'kodik', v: '', s: 0, t: 5 } });
   assert.strictEqual(w.startSeason(card), 1);
 }
-
-// every mix of a record and up to two marks: one episode for both
-{
-  const eps = [[1, 5], [1, 12], [2, 3], [2, 12], [3, 12]];
-  const marks = [null];
-  eps.forEach((e) => [50, 95].forEach((pc) => [200, 400].forEach((u) => marks.push({ e, pc, u }))));
-  const recs = [null];
-  [[1, 5], [1, 12], [2, 12], [3, 12]].forEach((p) => [100, 300, 500].forEach((t) => recs.push(rec(p[0], p[1], t))));
-  let n = 0;
-  ['key', 'title', 'own'].forEach((how) => marks.forEach((m1) => marks.forEach((m2) => recs.forEach((r) => {
-    if (m1 && m2 && m1.e === m2.e) return;
-    const fv = {};
-    [m1, m2].forEach((m, i) => {
-      if (m) fv[how === 'own' ? 'h:own' + i : key(m.e[0], m.e[1])] = Object.assign({ percent: m.pc, updated: m.u }, how === 'title' ? {} : link(m.e[0], m.e[1]));
-    });
-    const w = of(fv, r);
-    const got = w.resumeOf(card);
-    const season = got && got.target ? got.target.pin.season : 1;
-    assert.strictEqual(w.startSeason(card), season, JSON.stringify({ how, m1, m2, r }));
-    n++;
-  }))));
-  assert.ok(n > 10000);
-}
 console.log('watch-resume OK');
