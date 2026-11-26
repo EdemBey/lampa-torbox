@@ -20457,6 +20457,7 @@
         online_mod_watch_match: { ru: 'Сопоставить серии…', en: 'Match episodes…' },
         online_mod_watch_reset: { ru: 'Сбросить сопоставление', en: 'Reset episode matching' },
         online_mod_by_episodes: { ru: 'Выбор плеера', en: 'Choose player' },
+        online_mod_all_sources: { ru: 'Все источники', en: 'All sources' },
         online_mod_resume: { ru: 'Продолжить', en: 'Continue' },
         online_mod_start: { ru: 'Начать просмотр', en: 'Start watching' },
         online_mod_season_short: { ru: 'С', en: 'S' },
@@ -22433,6 +22434,26 @@
           }
         });
       };
+      // a selectable line in the list, like the season header: the way out to the card's "Онлайн" screen
+      var allSources = function allSources() {
+        return {
+          params: {
+            createInstance: function createInstance(item) {
+              var line = new (Maker.get('Season'))(item);
+              line.use({
+                onCreate: function onCreate() {
+                  this.html = $('<div class="season-info selector"><div class="season-info__title">' + Lampa.Lang.translate('online_mod_all_sources') + '</div></div>')[0];
+                  $(this.html).on('hover:enter', function () {
+                    online_loading = false;
+                    loadOnline(card);
+                  });
+                }
+              });
+              return line;
+            }
+          }
+        };
+      };
       comp.use({
         onCreate: function onCreate() {
           var self = this;
@@ -22440,7 +22461,7 @@
           var season = object.season;
           Lampa.Api.seasons(card, [season], function (v) {
             var data = v[season];
-            if (!data || !data.episodes || !data.episodes.length) return self.empty();
+            if (!data || !data.episodes || !data.episodes.length) return self.build({ results: [allSources()] });
             var real = Lampa.Utils.countSeasons(card);
             if (real > 1) {
               object.seasons_count = real;
@@ -22457,7 +22478,8 @@
                 }
               }
             });
-            var results = [data];
+            // under the season header, so the screen still opens on the season
+            var results = [data, allSources()];
             data.episodes.forEach(function (episode) {
               // the series' title for the timeline key, as Lampa does
               episode.original_name = card.original_name;
