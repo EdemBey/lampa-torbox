@@ -16549,7 +16549,9 @@
               episode: n,
               file: media.file,
               voices: ep.folder || [],
-              voice: voice
+              voice: voice,
+              s: choice.season,
+              ep: i
             });
           });
         } else if (extract.movie) {
@@ -16643,6 +16645,7 @@
           element.voice = v.title;
           element.stream = res.stream;
           element.stream_time = res.stream_time;
+          element.stream_ddd = false;
           element.qualitys = res.qualitys;
           // Playlist entries already resolved get their url function back, so they resolve again with this voice.
           items.forEach(function (e) {
@@ -16677,7 +16680,30 @@
       // CDN links carry an hourly expiry, so a resolved set is reused for 30 minutes only.
       function getStream(element, call, error) {
         // shortcut: a playlist cell keeps the link it resolved first, so returning to an episode after an hour in the same player session gets an expired link; re-open the episode from the list if that shows up.
-        if (element.stream && Date.now() - (element.stream_time || 0) < 30 * 60 * 1000) return call(element);
+        if (element.stream && Date.now() - (element.stream_time || 0) < 30 * 60 * 1000 && !!element.stream_ddd === isExternalAndroidPlayer()) return call(element);
+        if (isExternalAndroidPlayer() && element.voices && extract && extract.embed) {
+          // DDD asks the helper for this episode's voices (X-DDD-Voiceover-Path), so the links must sit on the helper's origin; the helper serves the CDN playlist with absolute links.
+          var tail = '&e=' + encodeURIComponent(extract.embed) + '&s=' + element.s + '&ep=' + element.ep;
+          var linkMap = {};
+          var linkAuto = '';
+          String(element.file || '').split(',').forEach(function (part) {
+            var m = part.match(/^\s*\[([^\]]+)\]\s*(\S+)/);
+            if (!m) return;
+            var link = server + '/turbo/stream.m3u8?u=' + encodeURIComponent(m[2]) + tail;
+            if (/auto/i.test(m[1])) linkAuto = link;
+            else if (!isNaN(parseInt(m[1], 10))) linkMap[m[1]] = link;
+          });
+          var linkLabels = Object.keys(linkMap).sort(function (a, b) {
+            return parseInt(b, 10) - parseInt(a, 10);
+          });
+          element.stream = linkAuto || (linkLabels.length ? linkMap[linkLabels[0]] : '');
+          element.stream_time = Date.now();
+          element.qualitys = linkLabels.length ? linkMap : false;
+          element.subtitles = false;
+          element.multi_audio = false;
+          element.stream_ddd = true;
+          return element.stream ? call(element) : error();
+        }
         var parts = [];
         String(element.file || '').split(',').forEach(function (part) {
           var m = part.match(/^\s*\[([^\]]+)\]\s*(\S+)/);
@@ -16754,6 +16780,7 @@
           });
           element.stream = auto || labels.length && map[labels[0]] || '';
           element.stream_time = Date.now();
+          element.stream_ddd = false;
           element.qualitys = labels.length ? map : false;
           element.subtitles = false;
           element.stream ? call(element) : error();
@@ -16798,6 +16825,7 @@
               };
               // shortcut: `first` has no resolver, so a voice picked on a later episode reaches it only after reopening from the list; give it one if users go back in the player.
               first.voiceovers = voiceoversFor(element, first, items);
+              if (isExternalAndroidPlayer() && element.voices) first.voiceoverPath = server.replace(/^https?:\/\/[^\/]+/, '') + '/turbo/voiceovers';
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
