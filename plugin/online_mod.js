@@ -21675,6 +21675,9 @@
         clearTimeout(timer);
         var started = false;
         var listener = Lampa.Player && Lampa.Player.listener;
+        var rememberIt = function rememberIt() {
+          watch.remember(card, balancer, want != null ? want : labels && labels.voice && choice ? labels.voice[choice.voice] : '', choice ? choice.season : pick.season, rowEntry && rowEntry.element);
+        };
         var onStart = function onStart() {
           if (cancelled) {
             try { Lampa.Player.close(); } catch (e) {}
@@ -21682,7 +21685,7 @@
           }
           started = true;
           // the player really started: only then is it what the user last played
-          watch.remember(card, balancer, want != null ? want : labels && labels.voice && choice ? labels.voice[choice.voice] : '', choice ? choice.season : pick.season, rowEntry && rowEntry.element);
+          rememberIt();
         };
         onDestroy = function onDestroy() {
           if (listener) {
@@ -21703,6 +21706,12 @@
           if (cancelled) return;
           Lampa.Loading.stop(); // Lampa's player takes the remote; stopping the loader after it would hand the remote back to the screen.
           row.trigger('hover:enter');
+          // an external Android player (DDD) gets no Lampa 'start' event: handing it the episode is the only signal
+          if (isExternalAndroidPlayer()) {
+            watch.diag('pv-ext', { b: balancer, pin: pin });
+            if (listener) listener.remove('start', onStart);
+            rememberIt();
+          }
         }, 0);
       };
       // back while it loads: nothing plays
