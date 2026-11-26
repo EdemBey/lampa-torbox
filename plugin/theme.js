@@ -6,7 +6,7 @@
   window.__lampa_theme_loaded__ = true;
 
   var KEY = 'lampa_theme_enabled';
-  var CSS = "\n/* body + .background: глубокий фон, бэкдроп виднее, сильная виньетка слева и снизу */\nbody{background:#07080c;font-family:\"SegoeUI\",\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,sans-serif;-webkit-font-smoothing:antialiased}\n.background{background:#07080c}\n.background__one,.background__two,.background__fade{-webkit-filter:brightness(1.5) saturate(1.3);filter:brightness(1.5) saturate(1.3)}\n.background:after{content:\"\";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;background:-webkit-linear-gradient(left,rgba(5,6,10,.8) 0,rgba(5,6,10,.4) 16%,rgba(5,6,10,0) 45%),-webkit-linear-gradient(bottom,rgba(5,6,10,.9) 0,rgba(5,6,10,.4) 14%,rgba(5,6,10,0) 38%),-webkit-linear-gradient(top,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%);background:linear-gradient(90deg,rgba(5,6,10,.8) 0,rgba(5,6,10,.4) 16%,rgba(5,6,10,0) 45%),linear-gradient(0deg,rgba(5,6,10,.9) 0,rgba(5,6,10,.4) 14%,rgba(5,6,10,0) 38%),linear-gradient(180deg,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%)}\n\n/* .head: прозрачная, верхний градиент */\n.head{background:-webkit-linear-gradient(top,rgba(5,6,10,.8),rgba(5,6,10,0));background:linear-gradient(180deg,rgba(5,6,10,.8),rgba(5,6,10,0))}\n.head__title{font-size:1.5em;font-weight:700;letter-spacing:.01em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.head__time{padding:.45em 1em;border-radius:2em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n.head__time-now{font-size:1.25em;font-weight:700}\n.head__time-date{display:none}\n\n/* .wrap__left: стеклянная панель (ширину и сдвиг задаёт Lampa), фокус = белая пилюля */\n.wrap__left:before{content:\"\";position:absolute;z-index:-1;left:0;top:4em;bottom:0;width:100%;background:rgba(14,16,22,.82);border-right:1px solid rgba(255,255,255,.1);box-shadow:.3em 0 2em rgba(0,0,0,.5);-webkit-backdrop-filter:blur(1.2em);backdrop-filter:blur(1.2em)}\nbody.menu--open .wrap__left:before{width:15em}\n.menu__list{padding-left:.7em;padding-right:.7em}\n.menu__item{padding:.95em 1em;margin-bottom:.25em;border-radius:3em;color:rgba(255,255,255,.72);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.menu__item + li{margin-top:0}\n.menu__text{font-weight:500}\n.menu__item.focus,.menu__item.hover{background-color:#fff;color:#000;box-shadow:0 .5em 1.4em rgba(0,0,0,.5)}\n\n/* .items-line: крупные жирные заголовки с акцентной меткой, больше воздуха */\n.items-line{padding-bottom:3em}\n.items-line__head{margin-bottom:0}\n.scroll--horizontal{padding-top:1.9em;padding-bottom:1em}\n.items-line__title{font-size:1.9em;font-weight:700;letter-spacing:.005em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.items-line__title:before{content:\"\";display:inline-block;width:.24em;height:.85em;margin-right:.5em;border-radius:.2em;background:#ffb020;vertical-align:-.08em;box-shadow:0 0 .8em rgba(255,176,32,.55)}\n.items-line__more{padding:.45em 1.2em;border-radius:2em;font-weight:600;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n\n/* .card: радиус, тень, фокус = белое кольцо + scale + глубокая тень */\n.card{-webkit-transition:-webkit-transform .2s;transition:transform .2s}\n.card__view,.card__img{border-radius:1.1em}\n.card__view{box-shadow:0 .6em 1.6em rgba(0,0,0,.55);-webkit-transition:box-shadow .2s;transition:box-shadow .2s}\n.card__vote{right:.6em;bottom:.6em;font-size:1.1em;font-weight:700;padding:.2em .6em;border-radius:2em;background:rgba(5,6,10,.82);color:#fff;border:1px solid rgba(255,255,255,.16);text-shadow:none}\n.card__vote:before{content:\"\\2605\";margin-right:.3em;font-size:.9em;color:#ffb020}\n.card__quality{left:.6em;top:.6em;bottom:auto;font-size:.8em;font-weight:800;padding:.3em .7em;border-radius:2em;background:#ffb020;color:#000;letter-spacing:.03em}\n.card__icons-inner{background:rgba(5,6,10,.75)}\n.card__title{font-size:1.2em;font-weight:500;margin-top:.8em;opacity:.6;-webkit-transition:opacity .2s;transition:opacity .2s}\n.card__age{opacity:.4}\n.card.focus{-webkit-transform:scale(1.08);transform:scale(1.08)}\n.card.focus .card__view{box-shadow:0 1.4em 3em rgba(0,0,0,.8)}\n.card.focus .card__view:after{top:-.45em;left:-.45em;right:-.45em;bottom:-.45em;border-width:.28em;border-radius:1.55em}\n.card.focus .card__title{opacity:1;font-weight:700}\n.card.focus .card__age{opacity:.7}\n\n/* .full-start__button + .simple-button: пилюли, фокус = белая заливка */\n.full-start__button,.simple-button{border-radius:3em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.full-start__button{font-size:1.2em;height:2.6em;padding:.3em 1.4em;margin-right:.6em}\n.simple-button{font-size:1.2em;height:2.6em;padding:.3em 1.4em}\n.full-start__button.focus,.simple-button.focus{background-color:#fff;color:#000;box-shadow:0 .6em 1.6em rgba(0,0,0,.4)}\n\n/* .full-start-new + img.full-start__background: большой бэкдроп, диагональная маска */\n.full-start__background.loaded{opacity:1;-webkit-filter:brightness(1.1) saturate(1.2);filter:brightness(1.1) saturate(1.2);-webkit-mask-image:-webkit-linear-gradient(top right,#000 25%,rgba(0,0,0,0) 80%);-webkit-mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%);mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%)}\n.full-start-new__poster{border-radius:1.2em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08)}\n.full-start-new__head{font-size:1em;letter-spacing:.08em;text-transform:uppercase;opacity:.55}\n.full-start-new__title{font-size:3.6em;font-weight:800;line-height:1.05;letter-spacing:-.015em;-webkit-line-clamp:2;line-clamp:2;text-shadow:0 .1em .6em rgba(0,0,0,.6)}\n.full-start-new__tagline{font-style:italic;opacity:.65}\n.full-start__rate{padding:.4em 1em;border-radius:1.1em;background:rgba(5,6,10,.55);border:1px solid rgba(255,255,255,.12);font-size:1.1em}\n.full-start__rate>div:first-child{font-weight:800;font-size:1.1em}\n.full-start-new__reactions .reaction{background:rgba(5,6,10,.6);border:1px solid rgba(255,255,255,.1)}\n.rate--tmdb>div:first-child{color:#3ecbf5}\n.rate--kp>div:first-child{color:#ff9a3c}\n.rate--imdb>div:first-child{color:#f5c518}\n.source--name{text-transform:uppercase;letter-spacing:.06em;font-size:.7em}\n.full-start__pg,.full-start__status{border:1px solid rgba(255,255,255,.4);border-radius:.4em;font-size:1em}\n.full-start-new__details{opacity:.78}\n.full-start-new__buttons{margin-top:1.8em}\n\n/* .full-descr: стеклянная панель, фокус = белое кольцо */\n.full-descr__text{padding:1.2em 1.5em;border-radius:1.2em;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.06);color:rgba(255,255,255,.85);opacity:1;-webkit-transition:background-color .2s,box-shadow .2s;transition:background-color .2s,box-shadow .2s}\n.full-descr__text.focus{background:rgba(255,255,255,.12);box-shadow:0 0 0 .2em #fff}\n.full-descr__details{opacity:.5}\n\n/* .full-person: режиссёры и актёры, круглое фото, фокус = белая заливка как у кнопок */\n.full-person{padding:.6em 1.6em .6em .6em;margin-right:1em;border-radius:1.6em;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);-webkit-transition:-webkit-transform .2s,background-color .2s,box-shadow .2s;transition:transform .2s,background-color .2s,box-shadow .2s}\n.full-person__photo{width:6em;height:6em;border-radius:50%;box-shadow:0 .4em 1em rgba(0,0,0,.5)}\n.full-person__photo>img{height:100%;object-fit:cover}\n.full-person__photo>span{color:#333}\n.full-person__body{max-width:11em}\n.full-person__name,.full-person__role{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.full-person__name{font-size:1.25em;font-weight:600}\n.full-person__role{font-size:1em;margin-top:.5em;opacity:.55}\n.full-person.focus{-webkit-transform:scale(1.04);transform:scale(1.04);background-color:#fff;color:#000;box-shadow:0 1em 2.2em rgba(0,0,0,.55)}\n\n/* .items-line__title с иконкой (Lampa рисует его через .full-person--small): выглядит как обычный заголовок */\n.items-line__title{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\n.items-line__title .full-person,.items-line__title .full-person.focus{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;width:auto;font-size:1em;margin:0;padding:0;background:none;color:inherit;border:0;border-radius:0;box-shadow:none;-webkit-transform:none;transform:none;opacity:1}\n.items-line__title .full-person__photo{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;width:1.15em;height:1.15em;min-width:0;margin:0 .45em 0 0;border-radius:50%;box-shadow:none;-webkit-flex-shrink:0;flex-shrink:0}\n.items-line__title .full-person--svg .full-person__photo{padding:0!important}.items-line__title .full-person--svg .full-person__photo svg{width:.68em!important;height:.68em!important}\n.items-line__title .full-person__body{font-size:1em;padding:0;margin:0;max-width:none}\n.items-line__title .full-person__name{font-size:1em;font-weight:inherit;line-height:inherit;letter-spacing:inherit;margin:0;white-space:nowrap;overflow:visible}\n.items-line__title .full-person__role{display:none}\n\n/* .full-episode + .time-line: стеклянные строки, акцентный прогресс */\n.full-episode{border-radius:1.2em;background:rgba(255,255,255,.06);box-shadow:0 .5em 1.4em rgba(0,0,0,.35);-webkit-transition:-webkit-transform .2s,background-color .2s;transition:transform .2s,background-color .2s}\n.full-episode__img{border-radius:1.2em 0 0 1.2em}\n.full-episode__num{display:inline-block;padding:.2em .6em;border-radius:2em;background:rgba(255,176,32,.2);color:#ffd27a;font-weight:700;opacity:1;font-size:.8em;letter-spacing:.04em;text-transform:uppercase}\n.full-episode__name{font-size:1.25em;font-weight:600}\n.full-episode__date{opacity:.45}\n.time-line{height:.3em;background:rgba(255,255,255,.18)}\n.time-line>div{background:#ffb020}\n.full-episode.focus{-webkit-transform:scale(1.025);transform:scale(1.025);background:rgba(255,255,255,.12)}\n.full-episode.focus:after{border-width:.25em;border-radius:1.5em}\n.torrent-filter{padding-bottom:1.5em}\n\n/* .selectbox: только цвета и фокус, позицию и анимацию выезда задаёт Lampa */\n.selectbox__layer{background:rgba(0,0,0,.55)}\n.selectbox__content{background:rgba(16,18,24,.94);box-shadow:-2em 0 4em rgba(0,0,0,.5);border-left:1px solid rgba(255,255,255,.08)}\n.selectbox__title{font-weight:700}\n.selectbox-item{margin:0 1em .3em;border-radius:1em;-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.selectbox-item.focus{background-color:#fff;color:#000}\n.selectbox-item.focus.selected:after{border-color:#000}\n\n/* .online-mod-variants: только отступы и цвета, структура и белый фокус пользователя сохранены */\n.online-mod-variants__still{border-radius:1.3em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.08)}\n.online-mod-variants__still-bar{height:.3em}\n.online-mod-variants__still-bar i{background:#ffb020}\n.online-mod-variants__title{letter-spacing:-.01em}\n.online-mod-variants__stats>div{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.06)}\n.online-mod-variants__colhead{padding-bottom:1em}\n.online-mod-variants__resume{background:rgba(255,176,32,.16);border:1px solid rgba(255,176,32,.3)}\n.online-mod-variant{margin-bottom:.6em;border-radius:1em;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}\n.online-mod-variants__voice{border-radius:.8em;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.09)}\n.online-mod-variants__util{background:rgba(255,255,255,.08)}\n\n/* описание на весь экран: модалка с классом lampa-descr-modal (ставит JS ниже) */\n.modal.lampa-descr-modal{padding:0;background:rgba(5,6,10,.72);-webkit-backdrop-filter:blur(1.4em);backdrop-filter:blur(1.4em)}\n.modal.lampa-descr-modal .modal__content{max-width:60em;width:100%;background:transparent;padding:0 2em;border-radius:0}\n.lampa-descr-full{font-size:1.3em;line-height:1.6;font-weight:300;padding:3em 0}\n";
+  var CSS = "\n/* body + .background: глубокий фон, бэкдроп виднее, сильная виньетка слева и снизу */\nbody{background:#07080c;font-family:\"SegoeUI\",\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,sans-serif;-webkit-font-smoothing:antialiased}\n.background{background:#07080c}\n.background__one,.background__two,.background__fade{-webkit-filter:brightness(1.5) saturate(1.3);filter:brightness(1.5) saturate(1.3)}\n.background:after{content:\"\";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;background:-webkit-linear-gradient(left,rgba(5,6,10,.85) 0,rgba(5,6,10,.5) 18%,rgba(5,6,10,0) 50%),-webkit-linear-gradient(bottom,rgba(5,6,10,.75) 0,rgba(5,6,10,.55) 25%,rgba(5,6,10,.3) 45%,rgba(5,6,10,0) 62%),-webkit-linear-gradient(top,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%);background:linear-gradient(90deg,rgba(5,6,10,.85) 0,rgba(5,6,10,.5) 18%,rgba(5,6,10,0) 50%),linear-gradient(0deg,rgba(5,6,10,.75) 0,rgba(5,6,10,.55) 25%,rgba(5,6,10,.3) 45%,rgba(5,6,10,0) 62%),linear-gradient(180deg,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%)}\n\n/* .head: прозрачная, верхний градиент */\n.head{background:-webkit-linear-gradient(top,rgba(5,6,10,.85),rgba(5,6,10,.7));background:linear-gradient(180deg,rgba(5,6,10,.85),rgba(5,6,10,.7))}\n.head:after{content:\"\";position:absolute;left:0;right:0;top:100%;height:3.2em;pointer-events:none;background:-webkit-linear-gradient(top,rgba(5,6,10,.7),rgba(5,6,10,0));background:linear-gradient(180deg,rgba(5,6,10,.7),rgba(5,6,10,0))}\n.head__title{font-size:1.5em;font-weight:700;letter-spacing:.01em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.head__time{padding:.45em 1em;border-radius:2em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n.head__time-now{font-size:1.25em;font-weight:700}\n.head__time-date{display:none}\n\n/* .wrap__left: стеклянная панель (ширину и сдвиг задаёт Lampa), фокус = белая пилюля */\n.wrap__left:before{content:\"\";position:absolute;z-index:-1;left:0;top:4em;bottom:0;width:100%;background:rgba(14,16,22,.82);border-right:1px solid rgba(255,255,255,.1);box-shadow:.3em 0 2em rgba(0,0,0,.5);-webkit-backdrop-filter:blur(1.2em);backdrop-filter:blur(1.2em)}\nbody.menu--open .wrap__left:before{width:15em}\n.menu__list{padding-left:.7em;padding-right:.7em}\n.menu__item{padding:.95em 1em;margin-bottom:.25em;border-radius:3em;color:rgba(255,255,255,.72);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.menu__item + li{margin-top:0}\n.menu__text{font-weight:500}\n.menu__item.focus,.menu__item.hover{background-color:#fff;color:#000;box-shadow:0 .5em 1.4em rgba(0,0,0,.5)}\n\n/* .items-line: крупные жирные заголовки с акцентной меткой, больше воздуха */\n.items-line{padding-bottom:1em}\n.items-line__head{margin-bottom:-.3em}\n.scroll--horizontal{padding-top:1.9em;padding-bottom:1em}\n.items-line__title{font-size:1.9em;font-weight:700;letter-spacing:.005em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.items-line__title:before{content:\"\";display:inline-block;width:.24em;height:.85em;margin-right:.5em;border-radius:.2em;background:#ffb020;vertical-align:-.08em;box-shadow:0 0 .8em rgba(255,176,32,.55)}\n.items-line__more{padding:.45em 1.2em;border-radius:2em;font-weight:600;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n\n/* .card: радиус, тень, фокус = белое кольцо + scale + глубокая тень */\n.card{-webkit-transition:-webkit-transform .2s;transition:transform .2s}\n.card__view,.card__img{border-radius:1.1em}\n.card__view{box-shadow:0 .6em 1.6em rgba(0,0,0,.55);-webkit-transition:box-shadow .2s;transition:box-shadow .2s}\n.card__vote{right:.6em;bottom:.6em;font-size:1.1em;font-weight:700;padding:.2em .6em;border-radius:2em;background:rgba(5,6,10,.82);color:#fff;border:1px solid rgba(255,255,255,.16);text-shadow:none}\n.card__vote:before{content:\"\\2605\";margin-right:.3em;font-size:.9em;color:#ffb020}\n.card__quality{left:.6em;top:.6em;bottom:auto;font-size:.8em;font-weight:800;padding:.3em .7em;border-radius:2em;background:#ffb020;color:#000;letter-spacing:.03em}\n.card__icons-inner{background:rgba(5,6,10,.75)}\n.card__title{font-size:1.2em;font-weight:500;margin-top:.6em;color:rgba(255,255,255,.85);text-shadow:0 .1em .4em rgba(0,0,0,.8);-webkit-transition:opacity .2s;transition:opacity .2s}\n.card__age{color:rgba(255,255,255,.55);text-shadow:0 .1em .4em rgba(0,0,0,.8)}\n.items-line .card .card__type{display:none}\n.card.focus{-webkit-transform:scale(1.08);transform:scale(1.08)}\n.card.focus .card__view{box-shadow:0 1.4em 3em rgba(0,0,0,.8)}\n.card.focus .card__view:after{top:-.45em;left:-.45em;right:-.45em;bottom:-.45em;border-width:.28em;border-radius:1.55em}\n.card.focus .card__title{color:#fff;font-weight:700}\n.card.focus .card__age{color:rgba(255,255,255,.7)}\n\n/* .full-start__button + .simple-button: пилюли, фокус = белая заливка */\n.full-start__button,.simple-button{border-radius:3em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.full-start__button{font-size:1.2em;height:2.6em;padding:.3em 1.4em;margin-right:.6em}\n.simple-button{font-size:1.2em;height:2.6em;padding:.3em 1.4em}\n.full-start__button.focus,.simple-button.focus{background-color:#fff;color:#000;box-shadow:0 .6em 1.6em rgba(0,0,0,.4)}\n\n/* .full-start-new + img.full-start__background: большой бэкдроп, диагональная маска */\n.full-start__background.loaded{opacity:1;-webkit-filter:brightness(1.1) saturate(1.2);filter:brightness(1.1) saturate(1.2);-webkit-mask-image:-webkit-linear-gradient(top right,#000 25%,rgba(0,0,0,0) 80%);-webkit-mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%);mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%)}\n.full-start-new__poster{border-radius:1.2em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08)}\n.full-start-new__head{font-size:1em;letter-spacing:.08em;text-transform:uppercase;opacity:.55}\n.full-start-new__title{font-size:3.6em;font-weight:800;line-height:1.05;letter-spacing:-.015em;-webkit-line-clamp:2;line-clamp:2;text-shadow:0 .1em .6em rgba(0,0,0,.6)}\n.full-start-new__tagline{font-style:italic;opacity:.65}\n.full-start__rate{padding:.4em 1em;border-radius:1.1em;background:rgba(5,6,10,.55);border:1px solid rgba(255,255,255,.12);font-size:1.1em}\n.full-start__rate>div:first-child{font-weight:800;font-size:1.1em}\n.full-start-new__reactions .reaction{background:rgba(5,6,10,.6);border:1px solid rgba(255,255,255,.1)}\n.rate--tmdb>div:first-child{color:#3ecbf5}\n.rate--kp>div:first-child{color:#ff9a3c}\n.rate--imdb>div:first-child{color:#f5c518}\n.source--name{text-transform:uppercase;letter-spacing:.06em;font-size:.7em}\n.full-start__pg,.full-start__status{border:1px solid rgba(255,255,255,.4);border-radius:.4em;font-size:1em}\n.full-start-new__details{opacity:.78}\n.full-start-new__buttons{margin-top:1.8em}\n\n/* .full-descr: стеклянная панель, фокус = белое кольцо */\n.full-descr__text{padding:1.2em 1.5em;border-radius:1.2em;background:rgba(10,12,18,.62);-webkit-backdrop-filter:blur(.8em);backdrop-filter:blur(.8em);border:1px solid rgba(255,255,255,.06);font-weight:400;color:rgba(255,255,255,.92);opacity:1;-webkit-transition:background-color .2s,box-shadow .2s;transition:background-color .2s,box-shadow .2s}\n.full-descr__text.focus{background:rgba(10,12,18,.78);box-shadow:inset 0 0 0 .28em #fff;-webkit-mask-image:none;mask-image:none}\n.full-descr__details{opacity:.5}\n\n/* .full-person: режиссёры и актёры, круглое фото, фокус = белая заливка как у кнопок */\n.full-person{padding:.6em 1.6em .6em .6em;margin-right:1em;border-radius:1.6em;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);-webkit-transition:-webkit-transform .2s,background-color .2s,box-shadow .2s;transition:transform .2s,background-color .2s,box-shadow .2s}\n.full-person__photo{width:6em;height:6em;border-radius:50%;box-shadow:0 .4em 1em rgba(0,0,0,.5)}\n.full-person__photo>img{height:100%;object-fit:cover}\n.full-person__photo>span{color:#333}\n.full-person__body{max-width:11em}\n.full-person__name,.full-person__role{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.full-person__name{font-size:1.25em;font-weight:600}\n.full-person__role{font-size:1em;margin-top:.5em;opacity:.55}\n.full-person.focus{-webkit-transform:scale(1.04);transform:scale(1.04);background-color:#fff;color:#000;box-shadow:0 1em 2.2em rgba(0,0,0,.55)}\n\n/* .items-line__title с иконкой (Lampa рисует его через .full-person--small): выглядит как обычный заголовок */\n.items-line__title{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\n.items-line__title .full-person,.items-line__title .full-person.focus{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;width:auto;font-size:1em;margin:0;padding:0;background:none;color:inherit;border:0;border-radius:0;box-shadow:none;-webkit-transform:none;transform:none;opacity:1}\n.items-line__title .full-person__photo{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;width:1.15em;height:1.15em;min-width:0;margin:0 .45em 0 0;border-radius:50%;box-shadow:none;-webkit-flex-shrink:0;flex-shrink:0}\n.items-line__title .full-person--svg .full-person__photo{padding:0!important}.items-line__title .full-person--svg .full-person__photo svg{width:.68em!important;height:.68em!important}\n.items-line__title .full-person__body{font-size:1em;padding:0;margin:0;max-width:none}\n.items-line__title .full-person__name{font-size:1em;font-weight:inherit;line-height:inherit;letter-spacing:inherit;margin:0;white-space:nowrap;overflow:visible}\n.items-line__title .full-person__role{display:none}\n\n/* .full-episode + .time-line: стеклянные строки, акцентный прогресс */\n.full-episode{border-radius:1.2em;background:rgba(255,255,255,.06);box-shadow:0 .5em 1.4em rgba(0,0,0,.35);-webkit-transition:-webkit-transform .2s,background-color .2s;transition:transform .2s,background-color .2s}\n.full-episode__img{border-radius:1.2em 0 0 1.2em}\n.full-episode__num{display:inline-block;padding:.2em .6em;border-radius:2em;background:rgba(255,176,32,.2);color:#ffd27a;font-weight:700;opacity:1;font-size:.8em;letter-spacing:.04em;text-transform:uppercase}\n.full-episode__name{font-size:1.25em;font-weight:600}\n.full-episode__date{opacity:.45}\n.time-line{height:.3em;background:rgba(255,255,255,.18)}\n.time-line>div{background:#ffb020}\n.full-episode.focus{-webkit-transform:scale(1.025);transform:scale(1.025);background:rgba(255,255,255,.12)}\n.full-episode.focus:after{border-width:.25em;border-radius:1.5em}\n.torrent-filter{padding-bottom:1.5em}\n\n/* .selectbox: только цвета и фокус, позицию и анимацию выезда задаёт Lampa */\n.selectbox__layer{background:rgba(0,0,0,.55)}\n.selectbox__content{background:rgba(16,18,24,.94);box-shadow:-2em 0 4em rgba(0,0,0,.5);border-left:1px solid rgba(255,255,255,.08)}\n.selectbox__title{font-weight:700}\n.selectbox-item{margin:0 1em .3em;border-radius:1em;-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.selectbox-item.focus{background-color:#fff;color:#000}\n.selectbox-item.focus.selected:after{border-color:#000}\n\n/* .online-mod-variants: только отступы и цвета, структура и белый фокус пользователя сохранены */\n.online-mod-variants__still{border-radius:1.3em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.08)}\n.online-mod-variants__still-bar{height:.3em}\n.online-mod-variants__still-bar i{background:#ffb020}\n.online-mod-variants__title{letter-spacing:-.01em}\n.online-mod-variants__stats>div{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.06)}\n.online-mod-variants__colhead{padding-bottom:1em}\n.online-mod-variants__resume{background:rgba(255,176,32,.16);border:1px solid rgba(255,176,32,.3)}\n.online-mod-variant{margin-bottom:.6em;border-radius:1em;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}\n.online-mod-variants__voice{border-radius:.8em;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.09)}\n.online-mod-variants__util{background:rgba(255,255,255,.08)}\n\n/* описание на весь экран: модалка с классом lampa-descr-modal (ставит JS ниже) */\n.modal.lampa-descr-modal{padding:0;background:rgba(5,6,10,.72);-webkit-backdrop-filter:blur(1.4em);backdrop-filter:blur(1.4em)}\n.modal.lampa-descr-modal .modal__content{max-width:60em;width:100%;background:transparent;padding:0 2em;border-radius:0}\n.lampa-descr-full{font-size:1.3em;line-height:1.6;font-weight:300;padding:3em 0}\n\n\n/* .full-start-new: hero внизу-слева, фон открыт; постер маленький (вкл/выкл в настройках) */\nbody .full-start-new{position:relative;min-height:calc(100vh - 6.5em);box-sizing:border-box;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:end;-webkit-align-items:flex-end;align-items:flex-end;padding-bottom:2.5em;\nbackground:-webkit-radial-gradient(0% 100%,ellipse farthest-side,rgba(5,6,10,.92) 0%,rgba(5,6,10,.6) 45%,rgba(5,6,10,0) 100%);\nbackground:radial-gradient(ellipse 75% 85% at 0% 100%,rgba(5,6,10,.92) 0%,rgba(5,6,10,.6) 45%,rgba(5,6,10,0) 100%)}\nbody .full-start-new__body{-webkit-box-flex:1;-webkit-flex:1 1 auto;flex:1 1 auto;-webkit-box-align:end;-webkit-align-items:flex-end;align-items:flex-end}\nbody .full-start-new__right{max-width:46em;width:100%}\nbody .full-start__background.loaded,body .full-start__background{-webkit-mask-image:-webkit-linear-gradient(top,#000 62%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(to bottom,#000 62%,rgba(0,0,0,0) 100%);filter:none}\nbody .full-start-new__rate-line{margin:0 0 .9em;-webkit-flex-wrap:wrap;flex-wrap:wrap;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\nbody .full-start-new__rate-line .full-start__rate{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-orient:horizontal;-webkit-box-direction:reverse;-webkit-flex-direction:row-reverse;flex-direction:row-reverse;-webkit-box-align:center;-webkit-align-items:center;align-items:center;background:none!important;border:0!important;box-shadow:none!important;padding:0!important;margin:0 1.1em 0 0!important;font-size:1.05em;font-weight:600}\nbody .full-start-new__rate-line .full-start__rate>div{margin:0!important;padding:0!important;background:none!important}\nbody .full-start-new__rate-line .full-start__rate .rate--icon{width:1em;height:1em;margin:0 .35em 0 0!important;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\nbody .full-start-new__rate-line .full-start__rate .rate--icon svg,body .full-start-new__rate-line .full-start__rate .rate--icon img{width:1em!important;height:1em!important;max-width:1em;max-height:1em}\nbody .full-start-new__rate-line .full-start__pg,body .full-start-new__rate-line .full-start__status{font-size:.75em;padding:.15em .6em;margin:0 .8em 0 0;border-radius:.4em;opacity:.8}\nbody .full-start-new__details{margin-bottom:.8em}\nbody .full-start-new__reactions{display:none}\nbody .full-start-new__buttons{margin-top:1.2em}\nbody .full-start-new__buttons .full-start__button{padding-left:.6em;padding-right:.6em;margin-right:0}\nbody .full-start-new__buttons .full-start__button:first-child{padding-left:1.2em;padding-right:1.2em}\nbody .full-start-new__title{font-size:4.2em}\nbody .full-start__background{left:0!important;width:100%;-webkit-transition:opacity .4s;transition:opacity .4s}\nbody.lampa-theme--card-down .full-start__background.loaded{opacity:.28!important}\n@media (min-width:900px){\nbody .full-start-new__left{display:block;-webkit-box-flex:0;-webkit-flex:0 0 auto;flex:0 0 auto;width:12em;margin:0 2em 0 0;-webkit-align-self:flex-end;align-self:flex-end}\nbody .full-start-new__left .full-start-new__poster{width:100%;margin:0;border-radius:1em;overflow:visible;-webkit-box-shadow:0 .6em 2em rgba(0,0,0,.55);box-shadow:0 .6em 2em rgba(0,0,0,.55)}\nbody .full-start-new__left .full-start-new__img{display:block;width:100%;height:auto;border-radius:1em}\n}\n";
 
   function isOn() {
     var v = true;
@@ -23,6 +23,19 @@
       document.head.appendChild(el);
     }
     el.disabled = !isOn();
+
+    var np = document.getElementById('lampa-theme-noposter');
+    if (!np) {
+      np = document.createElement('style');
+      np.id = 'lampa-theme-noposter';
+      np.appendChild(document.createTextNode('@media (min-width:900px){body .full-start-new__left{display:none!important}}'));
+      document.head.appendChild(np);
+    }
+    var poster = true;
+    try { if (window.Lampa && Lampa.Storage) poster = String(Lampa.Storage.get('lampa_theme_poster', 'true')) !== 'false'; } catch (e) {}
+    np.disabled = !(isOn() && !poster);
+    if (!isOn() && document.body) document.body.classList.remove('lampa-theme--card-down');
+    bbSync();
   }
 
   function addSetting() {
@@ -36,6 +49,18 @@
       component: 'lampa_theme',
       param: { name: KEY, type: 'trigger', default: true },
       field: { name: 'Включить тему', description: 'Редизайн интерфейса, быстрая смена фона, полноэкранное описание' },
+      onChange: apply
+    });
+    Lampa.SettingsApi.addParam({
+      component: 'lampa_theme',
+      param: { name: 'lampa_theme_poster', type: 'trigger', default: true },
+      field: { name: 'Постер на карточке', description: 'Маленький постер рядом с названием' },
+      onChange: apply
+    });
+    Lampa.SettingsApi.addParam({
+      component: 'lampa_theme',
+      param: { name: 'lampa_theme_billboard', type: 'trigger', default: true },
+      field: { name: 'Афиша на главной', description: 'Описание и рейтинги выбранной карточки над рядами' },
       onChange: apply
     });
   }
@@ -117,12 +142,187 @@
     }, true);
   }
 
+  // Billboard: title, meta, ratings and overview of the focused card above the rows of home/catalog screens.
+  var BB_IDS = [28, 12, 16, 35, 80, 99, 18, 10751, 14, 36, 27, 10402, 9648, 10749, 878, 10770, 53, 10752, 37, 10759, 10762, 10763, 10764, 10765, 10766, 10767, 10768];
+  // shortcut: genre names only ru/en; other languages get English, add maps if asked
+  var BB_NAMES = {
+    ru: 'Боевик|Приключения|Мультфильм|Комедия|Криминал|Документальный|Драма|Семейный|Фэнтези|История|Ужасы|Музыка|Детектив|Мелодрама|Фантастика|ТВ фильм|Триллер|Военный|Вестерн|Боевик и приключения|Детский|Новости|Реалити|НФ и фэнтези|Мыльная опера|Ток-шоу|Война и политика',
+    en: 'Action|Adventure|Animation|Comedy|Crime|Documentary|Drama|Family|Fantasy|History|Horror|Music|Mystery|Romance|Sci-Fi|TV Movie|Thriller|War|Western|Action & Adventure|Kids|News|Reality|Sci-Fi & Fantasy|Soap|Talk|War & Politics'
+  };
+  var bb = { root: null, shade: null, style: null, timer: 0, last: null, on: false, genres: {}, kp: {}, sh: {}, cacheAt: 0 };
+
+  function bbQ(s, c) { return (c || document).querySelector(s); }
+
+  // closest() is needed to find the focused card; without it the rows must not shrink
+  function bbEnabled() {
+    var v = true;
+    try { v = String(Lampa.Storage.get('lampa_theme_billboard', 'true')) !== 'false'; } catch (e) {}
+    return isOn() && v && !!document.documentElement.closest;
+  }
+
+  function bbBuild() {
+    var H = window.innerHeight, head = (bbQ('.head') || {}).offsetHeight || 66;
+    var bottom = Math.round(H * 0.45), rows = bottom - 34;
+    var act = bbQ('.activity--active');
+    var actTop = act ? act.getBoundingClientRect().top : head;
+    var t = bbQ('.activity--active .items-line__title');
+    var left = t ? Math.round(t.getBoundingClientRect().left) : 112;
+    if (left < 90 || left > 300) left = 112;
+    var B = 'body.lampa-theme--billboard ';
+    bb.style.textContent =
+      '.lampa-bb,.lampa-bb-shade{display:none}' +
+      B + '.lampa-bb-shade{display:block}' +
+      '.lampa-bb-shade{position:fixed;left:0;top:0;right:0;bottom:0;z-index:0;pointer-events:none;' +
+      'background:-webkit-linear-gradient(left,rgba(8,10,16,.92) 0%,rgba(8,10,16,.7) 38%,rgba(8,10,16,0) 78%),' +
+      '-webkit-linear-gradient(top,rgba(8,10,16,.55) 0%,rgba(8,10,16,0) 25%,rgba(8,10,16,0) 38%,rgba(8,10,16,.88) 62%,rgba(8,10,16,.95) 100%);' +
+      'background:linear-gradient(to right,rgba(8,10,16,.92) 0%,rgba(8,10,16,.7) 38%,rgba(8,10,16,0) 78%),' +
+      'linear-gradient(to bottom,rgba(8,10,16,.55) 0%,rgba(8,10,16,0) 25%,rgba(8,10,16,0) 38%,rgba(8,10,16,.88) 62%,rgba(8,10,16,.95) 100%)}' +
+      '.lampa-bb{position:fixed;z-index:3;pointer-events:none;left:' + left + 'px;top:' + head + 'px;height:' + (rows + 12 - head) + 'px;width:46em;max-width:60%;' +
+      '-webkit-flex-direction:column;flex-direction:column;-webkit-justify-content:flex-end;justify-content:flex-end}' +
+      B + '.lampa-bb{display:-webkit-flex;display:flex}' +
+      '.lampa-bb__in{padding-bottom:.4em;-webkit-transition:opacity .22s ease,-webkit-transform .22s ease;transition:opacity .22s ease,transform .22s ease}' +
+      '.lampa-bb--out .lampa-bb__in{opacity:0;-webkit-transform:translateY(10px);transform:translateY(10px)}' +
+      '.lampa-bb__chip{display:inline-block;font-size:.72em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#fff;background:rgba(255,255,255,.16);border-radius:.4em;padding:.35em .8em;margin-bottom:.9em}' +
+      '.lampa-bb__title{font-size:2.2em;font-weight:800;line-height:1.08;color:#fff;text-shadow:0 2px 16px rgba(0,0,0,.55);margin-bottom:.28em;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}' +
+      '.lampa-bb__meta{font-size:.95em;color:rgba(255,255,255,.62);margin-bottom:.35em;font-weight:500}' +
+      '.lampa-bb__rate{font-size:.9em;font-weight:600;color:rgba(255,255,255,.9);margin-bottom:.8em;min-height:1.3em}' +
+      '.lampa-bb__r{margin-right:1.3em}.lampa-bb__r i{font-style:normal;font-weight:800;margin-right:.15em}' +
+      '.lampa-bb__text{font-size:1.05em;line-height:1.5;color:rgba(255,255,255,.85);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;max-width:42em}' +
+      B + '.activity--active .activity__body>div>.scroll{margin-top:' + Math.max(0, Math.round(rows - actTop)) + 'px !important;height:' + (H - rows - 34) + 'px !important;' +
+      '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) 36px,#000 56px,#000 93%,rgba(0,0,0,0) 100%) !important}' +
+      B + '.activity--active .items-line .card{font-size:' + (H > 700 ? '.68em' : '.6em') + '}' +
+      B + '.activity--active .items-line .card .card__title{-webkit-line-clamp:2 !important;overflow:hidden !important}';
+  }
+
+  // The rows area is shrunk only on screens made of .items-line rows; the class is set by every focus event and by apply()
+  function bbSync() {
+    if (!bb.root) return false;
+    var a = bbQ('.activity--active');
+    var comp = '';
+    try { comp = (Lampa.Activity.active() || {}).component; } catch (e) {}
+    // only the home and the section pages are made of rows; category_full, actor, bookmarks etc. are grids or lists
+    var on = bbEnabled() && (comp === 'main' || comp === 'category') && !!(a && bbQ('.items-line', a));
+    if (on !== bb.on) {
+      bb.on = on;
+      bb.last = null;
+      if (on) { bbCaches(true); bbBuild(); }
+      document.body.classList.toggle('lampa-theme--billboard', on);
+      // the rows change height with the class, but Lampa has already scrolled for the old height (stale offset, e.g. back from a card page): make it realign the focused row
+      try { Lampa.Activity.active().activity.resize(); } catch (e) {}
+      var c = on && bbQ('.activity--active .items-line .card.focus');
+      if (c) bbOnFocus({ target: c });
+    }
+    return on;
+  }
+
+  // shortcut: ratings appear only for titles whose card page was opened before (plugins fill the caches there); prefetch would need the plugins' APIs
+  function bbCache(k) {
+    try {
+      var o = Lampa.Storage.get(k, '{}');
+      if (typeof o === 'string') o = JSON.parse(o);
+      return o && typeof o === 'object' ? o : {};
+    } catch (e) { return {}; }
+  }
+
+  // the caches can be large; re-read them at most every 30 s
+  function bbCaches(force) {
+    var now = Date.now();
+    if (!force && now - bb.cacheAt < 30000) return;
+    bb.kp = bbCache('kp_rating');
+    bb.sh = bbCache('shikimori_rating');
+    bb.cacheAt = now;
+  }
+
+  function bbRatings(d, tv) {
+    bbCaches();
+    var kp = bb.kp[d.id] || {}, sh = bb.sh['tmdb_' + (tv ? 'tv' : 'movie') + '_' + d.id] || {};
+    var list = [
+      ['★', '#ffc83d', d.vote_average],
+      ['КП', '#ff7a1a', kp.kp || d.kp_rating],
+      ['IMDb', '#f5c518', kp.imdb || d.imdb_rating],
+      ['Shiki', '#7fa8ff', sh.s]
+    ], out = [];
+    list.forEach(function (r) {
+      var v = parseFloat(r[2]);
+      if (v > 0) out.push('<span class="lampa-bb__r"><i style="color:' + r[1] + '">' + r[0] + '</i> ' + v.toFixed(1) + '</span>');
+    });
+    return out.join('');
+  }
+
+  // history cards are stored without an overview
+  function bbFallback(d) {
+    var o = d.original_title || d.original_name, p = [];
+    if (o && o !== (d.title || d.name)) p.push(o);
+    if (d.number_of_seasons) p.push('S' + d.number_of_seasons + (d.number_of_episodes ? ' · ' + d.number_of_episodes + ' ep.' : ''));
+    else if (d.runtime) p.push(d.runtime + ' min');
+    if (d.status) p.push(d.status);
+    return p.join(' · ');
+  }
+
+  function bbArr(v) { return Object.prototype.toString.call(v) === '[object Array]' ? v : []; }
+
+  function bbMeta(d) {
+    var meta = [], date = String(d.release_date || d.first_air_date || '');
+    if (date) meta.push(date.slice(0, 4));
+    var g = (bbArr(d.genres).length ? bbArr(d.genres).map(function (x) { return x && x.name; }) : bbArr(d.genre_ids).map(function (i) { return bb.genres[i]; })).filter(Boolean).slice(0, 3);
+    if (g.length) meta.push(g.join(', '));
+    return meta.join(' \u00a0·\u00a0 ');
+  }
+
+  function bbRender(d) {
+    var tv = !!(d.name || d.first_air_date || d.number_of_seasons || d.media_type === 'tv');
+    bbQ('.lampa-bb__chip', bb.root).textContent = Lampa.Lang.translate(tv ? 'menu_tv' : 'menu_movies');
+    bbQ('.lampa-bb__title', bb.root).textContent = d.title || d.name || '';
+    bbQ('.lampa-bb__meta', bb.root).textContent = bbMeta(d);
+    // innerHTML is safe here: bbRatings builds the markup only from constants and toFixed() numbers
+    bbQ('.lampa-bb__rate', bb.root).innerHTML = bbRatings(d, tv);
+    bbQ('.lampa-bb__text', bb.root).textContent = d.overview || bbFallback(d);
+  }
+
+  function bbOnFocus(e) {
+    var el = e.target;
+    if (!el || !el.closest || !bbSync()) return;
+    var card = el.closest('.items-line .card'), d = card && card.card_data;
+    if (!d || d === bb.last) return;
+    bb.last = d;
+    clearTimeout(bb.timer);
+    bb.timer = setTimeout(function () {
+      bb.root.classList.add('lampa-bb--out');
+      setTimeout(function () { bbRender(d); bb.root.classList.remove('lampa-bb--out'); }, 160);
+    }, 120);
+  }
+
+  function bbInit() {
+    if (bb.root) return;
+    var n = BB_NAMES[Lampa.Storage.get('language', 'ru') === 'ru' ? 'ru' : 'en'].split('|');
+    for (var i = 0; i < BB_IDS.length; i++) bb.genres[BB_IDS[i]] = n[i];
+    bb.style = document.createElement('style');
+    bb.style.id = 'lampa-theme-billboard-css';
+    bb.shade = document.createElement('div');
+    bb.shade.className = 'lampa-bb-shade';
+    bb.root = document.createElement('div');
+    bb.root.className = 'lampa-bb lampa-bb--out';
+    bb.root.innerHTML = '<div class="lampa-bb__in"><div class="lampa-bb__chip"></div><div class="lampa-bb__title"></div><div class="lampa-bb__meta"></div><div class="lampa-bb__rate"></div><div class="lampa-bb__text"></div></div>';
+    document.head.appendChild(bb.style);
+    document.body.appendChild(bb.shade);
+    document.body.appendChild(bb.root);
+    document.addEventListener('hover:focus', bbOnFocus, true);
+    window.addEventListener('resize', function () { if (bb.on) bbBuild(); });
+  }
+
   function ready() {
     patchBackground();
     fixBackdrops();
+    bbInit();
     document.addEventListener('hover:enter', function (e) {
       var t = e.target;
       if (t && t.classList && t.classList.contains('full-descr__text')) openDescr.call(t);
+    }, true);
+    // the card's backdrop stays bright on its first screen and dims once the focus moves down to the description, episodes, actors
+    document.addEventListener('hover:focus', function (e) {
+      var t = e.target, act = t && t.closest ? t.closest('.activity') : null;
+      var down = isOn() && !!act && !!act.querySelector('.full-start-new') && !t.closest('.full-start-new');
+      document.body.classList.toggle('lampa-theme--card-down', down);
     }, true);
     addSetting();
     apply();
