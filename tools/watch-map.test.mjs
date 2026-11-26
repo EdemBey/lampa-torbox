@@ -343,6 +343,51 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.strictEqual(watch.place({}, counts, true, { src: 'shiki:48661', part: { index: -1, bounds: [0], first: 0 }, season: 7, episode: 1, min: 1, max: 12 }), false);
 }
 
+// Naruto Based: one MAL entry numbered from 1 (JoJo Steel Ball Run, MAL 61469 = TMDB 45790 S6), shaped as in narutobased filtred()
+{
+  const counts = { 1: 26, 2: 48, 3: 39, 4: 39, 5: 38, 6: 12 };
+  const eps = (mal, from, to) => { const o = []; for (let i = from; i <= to; i++) o.push({ malId: mal, episodeNumber: i }); return o; };
+  const nb = (episode, mal) => ({
+    src: mal ? 'shiki:' + mal : 'naruto-based:slug',
+    part: mal ? watch.nbParts(eps(mal, 1, 10))[mal] : undefined,
+    balancer: 'narutobased', season: 1, episode, min: 1, max: 10, seasons: 1, tmdb: 45790
+  });
+  const arm = (d, s) => { watch.arms = null; store.online_mod_watch_arm = { m61469: { t: Date.now(), d, s } }; };
+  arm(45790, 6);
+  assert.deepStrictEqual(watch.place({}, counts, true, nb(2, 61469), null), { season: 6, episode: 2 });
+  // arm not answered yet: pending
+  watch.arms = null;
+  store.online_mod_watch_arm = {};
+  assert.strictEqual(watch.place({}, counts, true, nb(2, 61469), null), null);
+  // no MAL id: never linked, not guessed as season 1 (null: asked for no dialog, see ask())
+  assert.notDeepStrictEqual(watch.place({}, counts, true, nb(2, ''), null), { season: 1, episode: 2 });
+  assert.strictEqual(watch.place({}, counts, true, nb(2, ''), null), null);
+  // arm says another show
+  arm(99, 6);
+  assert.strictEqual(watch.place({}, counts, true, nb(2, 61469), null), false);
+
+  // one shared list across the series: two MAL entries in TMDB's last season lie end to end
+  const two = watch.nbParts(eps(1, 1, 10).concat(eps(2, 1, 2)));
+  assert.strictEqual(two[1].all, two[2].all);
+  assert.deepStrictEqual([two[1].at, two[2].at, two[2].index, two[2].first, two[2].bounds], [0, 1, -1, 1, [0]]);
+  watch.arms = null;
+  store.online_mod_watch_arm = { m1: { t: Date.now(), d: 45790, s: 6 }, m2: { t: Date.now(), d: 45790, s: 6 } };
+  const row = (mal, episode) => Object.assign(nb(episode, mal), { part: two[mal] });
+  assert.deepStrictEqual(watch.place({}, counts, true, row(1, 1), null), { season: 6, episode: 1 });
+  assert.deepStrictEqual(watch.place({}, counts, true, row(2, 1), null), { season: 6, episode: 11 });
+  // n is the highest number (a gap), a fractional number counts for nothing
+  const gap = watch.nbParts([{ malId: 7, episodeNumber: 1 }, { malId: 7, episodeNumber: 3 }, { malId: 7, episodeNumber: '5.5' }, { malId: 7, episodeNumber: 'x' }, { episodeNumber: 9 }]);
+  assert.deepStrictEqual([gap[7].all.length, gap[7].all[0].n, gap[7].first], [1, 3, 1]);
+  // ask(): a part waiting for arm's answer opens no dialog (the Controller is not even touched)
+  watch.arms = null;
+  store.online_mod_watch_arm = { m1: { t: Date.now(), d: 45790, s: 6 } };
+  const view = {};
+  let skipped = 0;
+  watch.asks = [{ view, element: { watch_pending: true, watch_q: { src: 'shiki:2', part: two[2] } } }];
+  watch.ask({ timeline: view }, [], () => skipped++);
+  assert.strictEqual(skipped, 1);
+}
+
 // arm(): one request per id, cached, a failure never throws, the card's rows are forgotten once
 {
   const urls = [];
@@ -510,9 +555,9 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
 }
 // every TMDB-like balancer and Kodik go through the shared key; the six with their own keys do not yet
 {
-  // redheadsound (movies) and Naruto Based (its own tracking keys) keep their own keys
-  assert.strictEqual(src.split('component.watchView(element, hash, items)').length - 1, 21);
-  assert.strictEqual(src.split('var view = Lampa.Timeline.view(hash);').length - 1, 2);
+  // redheadsound (movies) keeps its own key; Naruto Based is placed by its MAL id (watch_info.part)
+  assert.strictEqual(src.split('component.watchView(element, hash, items)').length - 1, 22);
+  assert.strictEqual(src.split('var view = Lampa.Timeline.view(hash);').length - 1, 1);
   // release-numbered balancers are never placed by the TMDB rules: their own release key
   ['anilibria:', 'anilibria2:', 'animelib:'].forEach((s) => assert.ok(src.indexOf("watch_info: { src: '" + s + "'") > 0, s));
   // every item menu gets its element: "Match episodes…" and the redraw after an answer look it up

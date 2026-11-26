@@ -577,6 +577,26 @@
         });
         return { index: tv ? index : -2, bounds: tv ? bounds : [0], first: tv ? first : 0, all: all, at: at };
       },
+      // Naruto Based: the series' MAL entries (episodes in season order), each numbered from 1. One shared list,
+      // a part per entry for armed(); n is the entry's highest number, first its lowest
+      nbParts: function nbParts(episodes) {
+        var all = [];
+        var by = {};
+        episodes.forEach(function (ep) {
+          if (!ep.malId) return;
+          var c = by[ep.malId];
+          if (!c) all.push(c = by[ep.malId] = { shiki: ep.malId, n: 0, first: 0 });
+          var num = /^\d+$/.test(String(ep.episodeNumber)) ? parseInt(ep.episodeNumber) : 0;
+          if (!num) return;
+          c.n = Math.max(c.n, num);
+          c.first = c.first ? Math.min(c.first, num) : num;
+        });
+        var parts = {};
+        all.forEach(function (c, i) {
+          parts[c.shiki] = { index: -1, at: i, bounds: [0], first: c.first, all: all };
+        });
+        return parts;
+      },
       // MAL id -> TMDB show and season (arm.haglund.dev), per Kodik part: lookups made by arm()
       arms: null,
       armWait: {},
@@ -1336,6 +1356,11 @@
         if (!a || !a.element.watch_pending) return done();
         // Kodik's own seasons (one shikimori entry each) are matched from the menu, not asked at every new title
         if (a.element.watch_q && a.element.watch_q.src && !a.element.watch_q.part) return done();
+        // a part waiting for arm's answer is placed once it comes: no dialog meanwhile
+        var part = a.element.watch_q && a.element.watch_q.part;
+        if (part && part.index === -1 && part.all && part.all.some(function (c) {
+          return !self.armOf(c.shiki);
+        })) return done();
         var list = [first].concat(playlist || []);
         // Lampa.Loading does not hand the controller back
         var enabled = Lampa.Controller.enabled().name == 'loading' ? 'content' : Lampa.Controller.enabled().name;
@@ -18520,6 +18545,14 @@
         var multiple_seasons = seasons.length > 1;
         var seen = {};
         var list = [];
+        // The site numbers each MAL entry from 1: one part per entry, placed by Lampa's arm lookup (watch.armed)
+        var ordered = [];
+        (extract.seasons || []).forEach(function (s) {
+          normalizeEpisodes().forEach(function (episode) {
+            if (inSeason(episode, s)) ordered.push(episode);
+          });
+        });
+        var parts = watch.nbParts(ordered);
 
         normalizeEpisodes().forEach(function (episode) {
           if (!inSeason(episode, season)) return;
@@ -18539,6 +18572,8 @@
             season: season_number,
             episode: episode.episodeNumber,
             malId: episode.malId,
+            // without a MAL id the row is never placed (a src without a part is not linked), not guessed as season 1
+            watch_info: episode.malId && /^\d+$/.test(String(episode.episodeNumber)) ? { src: 'shiki:' + episode.malId, part: parts[episode.malId] } : { src: 'naruto-based:' + episode.slug },
             trackingKey: episode.trackingKey || episode.slug,
             slug: episode.slug,
             language: language,
@@ -18567,7 +18602,7 @@
 
         items.forEach(function (element) {
           var hash = element.trackingKey ? Lampa.Utils.hash('naruto-based:' + element.trackingKey) : Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, movie_title, element.orig_title].join('') : movie_title + element.orig_title);
-          var view = Lampa.Timeline.view(hash);
+          var view = component.watchView(element, hash, items);
           var item = Lampa.Template.get('online_mod', element);
           var hash_file = Lampa.Utils.hash(element.season ? [element.season, element.season > 10 ? ':' : '', element.episode, movie_title, element.orig_title].join('') : movie_title + element.orig_title + element.title);
           element.timeline = view;
@@ -21580,6 +21615,8 @@
           voices = names.map(function (n, i) {
             return i;
           });
+          // a source without a voice list has no voice step: the season's rows are the answer
+          if (!names.length) for (var j = 0; j < batch.length; j++) rows.push({ season: current, voice: '', element: batch[j] });
         }
         // a season that did not load is not walked: not kept as done
         if (!ok && me.kind === 'season') {
@@ -21727,7 +21764,7 @@
     // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
     episodeVariants.store = 'online_mod_variants_v2';
     // bump when the placement rules change: answers saved under older rules are not reused
-    episodeVariants.rules = 3;
+    episodeVariants.rules = 4;
     episodeVariants.all = function () {
       if (!episodeVariants.mem) {
         var old = Lampa.Storage.get('online_mod_variants', '{}');
