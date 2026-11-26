@@ -949,7 +949,12 @@
       },
       // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
       remember: function remember(card, balancer, voice_name, season_index, element) {
-        if (!card || !element || !element.season || !element.watch_place) return;
+        // shortcut: temporary TV diagnostics for «Продолжить», remove once the cause is known
+        var why = !card ? 'no card' : !element ? 'no element' : !element.season ? 'no season' : !element.watch_place ? 'no place' : '';
+        try {
+          Lampa.Noty.show('resume: ' + (why ? why + ' | b=' + balancer + ' pending=' + !!(element && element.watch_pending) + ' q=' + (element && element.watch_q ? JSON.stringify(element.watch_q) : 'none') + ' ot=' + !!(card && card.original_title) + ' cs=' + (card && Lampa.Utils.countSeasons ? Lampa.Utils.countSeasons(card) : '-') + ' alt=' + !!(card && watch.altOf(card)) : 'saved S' + element.watch_place.season + 'E' + element.watch_place.episode));
+        } catch (e) {}
+        if (why) return;
         var all = Lampa.Storage.get('online_mod_resume', '{}');
         if (!all || typeof all != 'object') all = {};
         var id = this.id(card);
