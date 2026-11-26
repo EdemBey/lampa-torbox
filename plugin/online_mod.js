@@ -20429,7 +20429,6 @@
         online_mod_resume: { ru: 'Продолжить', en: 'Continue' },
         online_mod_season_short: { ru: 'С', en: 'S' },
         online_mod_episode_short: { ru: 'Е', en: 'E' },
-        online_mod_watch_unproven: { ru: 'номер не подтверждён', en: 'number not confirmed' },
         online_mod_variants_choose: { ru: 'несколько совпадений — выберите', en: 'several matches: pick one' },
         online_mod_variants_voices: { ru: 'озвучек:', en: 'voices:' },
         online_mod_variants_open: { ru: 'Открыть источник', en: 'Open the source' },
@@ -20438,6 +20437,29 @@
         online_mod_variants_top: { ru: 'Сделать первым', en: 'Move to the top' },
         online_mod_variants_up: { ru: 'Выше', en: 'Move up' },
         online_mod_variants_down: { ru: 'Ниже', en: 'Move down' },
+        online_mod_variants_where: { ru: 'Где смотреть', en: 'Where to watch' },
+        online_mod_variants_sources: { ru: 'Источников:', en: 'Sources:' },
+        online_mod_variants_found: { ru: 'Нашли в {x} из {n}', en: 'Found in {x} of {n}' },
+        online_mod_variants_searching: { ru: 'ещё ищут {k}', en: '{k} still searching' },
+        online_mod_variants_failed: { ru: 'Не нашли серию', en: 'Episode not found' },
+        online_mod_variants_error: { ru: 'Ошибка', en: 'Error' },
+        online_mod_variants_none: { ru: 'Нет серии', en: 'No episode' },
+        online_mod_variants_none_sub: { ru: 'У источника нет этой серии', en: 'The source has no such episode' },
+        online_mod_variants_pick: { ru: 'Выбрать тайтл', en: 'Pick the title' },
+        online_mod_variants_best: { ru: 'лучшее', en: 'best' },
+        online_mod_variants_unproven: { ru: 'номер не подтверждён:', en: 'number not confirmed:' },
+        online_mod_variants_mine: { ru: 'вы смотрели', en: 'you watched' },
+        online_mod_variants_mine_play: { ru: 'Смотреть в вашей озвучке', en: 'Watch in your voice' },
+        online_mod_variants_from: { ru: 'с', en: 'from' },
+        online_mod_variants_finding: { ru: 'Ищу вашу озвучку…', en: 'Looking for your voice…' },
+        online_mod_variants_lost: { ru: 'Ваша озвучка не нашлась', en: 'Your voice was not found' },
+        online_mod_variants_total: { ru: 'озвучек найдено', en: 'voices found' },
+        online_mod_variants_min: { ru: 'мин', en: 'min' },
+        online_mod_variants_stopped: { ru: 'Вы остановились на {t} из {d}', en: 'Stopped at {t} of {d}' },
+        online_mod_variants_hint_ok: { ru: 'раскрыть / смотреть', en: 'open / play' },
+        online_mod_variants_hold: { ru: 'удерж. OK', en: 'hold OK' },
+        online_mod_variants_hint_hold: { ru: 'действия и порядок', en: 'actions and order' },
+        online_mod_variants_retry_all: { ru: 'Обновить все', en: 'Reload all' },
         online_mod_trakt_id: { ru: 'Trakt: Client ID', en: 'Trakt: Client ID' },
         online_mod_trakt_secret: { ru: 'Trakt: Client Secret', en: 'Trakt: Client Secret' },
         online_mod_trakt_in: { ru: 'Войти: код на экране, ввести на телефоне', en: 'Sign in: a code on screen, entered on the phone' },
@@ -21680,8 +21702,9 @@
       }
     }
 
-    // "По сериям", one episode: every source as a row with its state (loading, its voices for this episode, ✕, !),
-    // filled in as the sources answer. A voice plays the episode; a source row opens the source on it.
+    // "По сериям", one episode: the episode on the left; on the right every source as a row with its state (loading,
+    // its voices for this episode as tiles, error, choose), filled in as the sources answer. Sources without the
+    // episode fold into one row at the end. A voice plays the episode; a source row opens the source on it.
     function variantsScreen(object) {
       var L = Lampa.Lang.translate;
       var card = object.card;
@@ -21689,17 +21712,32 @@
       var self = this;
       var scroll = new Lampa.Scroll({ mask: true, over: true });
       var html = $('<div class="online-mod-variants"></div>');
-      // the screen's height (minus Lampa's head), so the list scrolls
-      scroll.minus();
+      var colHead = $('<div class="online-mod-variants__colhead"><div><div class="online-mod-variants__where"></div><div class="online-mod-variants__count"></div></div><div class="online-mod-variants__progress"><div class="online-mod-variants__progress-text"></div><div class="online-mod-variants__progress-bar"><i></i></div></div></div>');
+      // the screen's height minus Lampa's head and the column's own head, so the list scrolls
+      scroll.minus(colHead);
       scroll.body().addClass('online-mod-variants__body');
       var last = null;
       var alive = true;
       var groups = {};
-      var row = function row(title, subtitle, cls) {
-        var item = $('<div class="online-mod-variant selector"><div class="online-mod-variant__text"><div class="online-mod-variant__title"></div><div class="online-mod-variant__subtitle"></div></div><div class="online-mod-variant__status"></div></div>');
-        item.find('.online-mod-variant__title').text(title);
-        item.find('.online-mod-variant__subtitle').text(subtitle || '');
-        if (cls) item.addClass(cls);
+      var order = [];
+      var main = $('<div></div>');
+      var failed = { open: false, box: $('<div class="online-mod-variants__failed"></div>').hide() };
+      // what «Продолжить» replays for this card: its source and voice are "yours" on every episode
+      var record = function record() {
+        return (Lampa.Storage.get('online_mod_resume', '{}') || {})[watch.id(card)] || null;
+      };
+      var rec = record();
+      // a source with one unnamed voice is remembered with v: ''
+      var mine = function mine(g, r) {
+        return !!rec && rec.b === g.b.name && (r.voice === rec.v || !rec.v && g.found.length === 1);
+      };
+      var timeline = object.episode && object.episode.data && object.episode.data.timeline || {};
+      var cont = null;
+      var stats = null;
+      var left = null;
+      var STATES = 'online-mod-variant--loading online-mod-variant--ok online-mod-variant--choose online-mod-variant--error online-mod-variant--empty';
+      var RANK = { '4K': 4, FHD: 3, HD: 2, SD: 1 };
+      var focusable = function focusable(item) {
         item.on('hover:focus', function (e) {
           last = e.target;
           clearTimeout(qTimer);
@@ -21707,14 +21745,43 @@
         });
         return item;
       };
-      var headSub = function headSub(b, found) {
-        // before any HDrezka playback there is no saved result yet: the Premium setting decides
-        var cap = b.name === 'rezka2' ? +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720) : 0;
-        var badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), cap);
-        groups[b.name].head.find('.online-mod-variant__subtitle').text([badge, L('online_mod_variants_voices') + ' ' + found.length].filter(Boolean).join(' · '));
+      var row = function row(title, mono) {
+        var item = $('<div class="online-mod-variant selector"><div class="online-mod-variant__mono"></div><div class="online-mod-variant__text"><div class="online-mod-variant__title"></div><div class="online-mod-variant__subtitle"></div></div><div class="online-mod-variant__right"></div><div class="online-mod-variant__status"></div></div>');
+        item.find('.online-mod-variant__title').text(title);
+        item.find('.online-mod-variant__mono').text(mono);
+        return focusable(item);
       };
-      var rowSub = function rowSub(el) {
-        return [el.quality, el.watch_place ? '' : L('online_mod_watch_unproven')].filter(Boolean).join(' · ');
+      var util = function util(text) {
+        return focusable($('<div class="online-mod-variants__util selector"></div>').text(text));
+      };
+      var initials = function initials(t) {
+        var w = String(t || '').replace(/[^A-Za-zА-Яа-яЁё0-9]+/g, ' ').replace(/^\s+|\s+$/g, '').split(' ');
+        return (w.length > 1 ? w[0].charAt(0) + w[1].charAt(0) : w[0].slice(0, 2)).toUpperCase();
+      };
+      var hue = function hue(t) {
+        var h = 0;
+        for (var i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) % 360;
+        return h;
+      };
+      var chip = function chip(text, cls) {
+        return $('<span class="online-mod-variants__chip"></span>').addClass(cls || '').text(text);
+      };
+      var badgeChip = function badgeChip(badge) {
+        return badge ? chip(badge, 'online-mod-variants__chip--' + badge.toLowerCase()) : null;
+      };
+      // before any HDrezka playback there is no saved result yet: the Premium setting decides
+      var capOf = function capOf(b) {
+        return b.name === 'rezka2' ? +Lampa.Storage.get('online_mod_rezka2_best', 0) || (Lampa.Storage.field('online_mod_rezka2_show_premium') === true ? 1080 : 720) : 0;
+      };
+      var headSub = function headSub(g) {
+        var found = g.found;
+        g.badge = watch.qualityBadge(found.map(function (r) { return r.element.quality; }), capOf(g.b));
+        var names = found.map(function (r) { return r.voice; });
+        var unproven = found.filter(function (r) { return !r.element.watch_place; }).length;
+        // folded: which voices are inside; open: what the tiles do not say
+        var sub = g.collapsed ? names.slice(0, 3).join(', ') + (names.length > 3 ? ' +' + (names.length - 3) : '') : [g.badge ? L('online_mod_variants_best') + ' ' + g.badge : '', unproven ? L('online_mod_variants_unproven') + ' ' + unproven : ''].filter(Boolean).join(' · ');
+        g.head.find('.online-mod-variant__subtitle').text(sub);
+        g.head.find('.online-mod-variant__right').empty().append(badgeChip(g.badge), chip(L('online_mod_variants_voices') + ' ' + found.length));
       };
       // Alloha does not list a voice's resolution: it is asked from the helper once the remote stays on the voice
       var qTimer = 0;
@@ -21726,9 +21793,13 @@
         if (!max || !alive) return;
         var i = (el.quality || '').indexOf(' / ');
         el.quality = '360p ~ ' + max + 'p' + (i < 0 ? '' : el.quality.slice(i));
-        item.find('.online-mod-variant__subtitle').text(rowSub(el));
+        item.find('.online-mod-variants__chip').remove();
+        item.append(badgeChip(watch.qualityBadge([el.quality], capOf(b))));
         var g = groups[b.name];
-        if (g.found && g.found.indexOf(r) >= 0) headSub(b, g.found);
+        if (g.found && g.found.indexOf(r) >= 0) {
+          headSub(g);
+          summary();
+        }
       };
       var qRun = function qRun(w) {
         qBusy = true;
@@ -21777,6 +21848,23 @@
         if (pick) return playVariant(card, b.name, pin, pick, screen);
         screen();
       };
+      var tile = function tile(g, r) {
+        var el = r.element;
+        var item = focusable($('<div class="online-mod-variants__voice selector"><span class="online-mod-variants__voice-name"></span></div>'));
+        item.find('.online-mod-variants__voice-name').text(r.voice);
+        if (!el.watch_place) item.append('<span class="online-mod-variants__dot"></span>');
+        item.append(badgeChip(watch.qualityBadge([el.quality], capOf(g.b))));
+        if (mine(g, r)) item.addClass('online-mod-variants__voice--mine').prepend($('<span class="online-mod-variants__tag"></span>').text(L('online_mod_variants_mine')));
+        item.on('hover:enter', function () {
+          open(g.b, { season: r.season, voice_name: r.voice });
+        });
+        item.on('hover:focus', function () {
+          qTimer = setTimeout(function () {
+            qWatch(g.b, r, item);
+          }, 1000);
+        });
+        return item;
+      };
       var fill = function fill(b, res) {
         var g = groups[b.name];
         g.rows.forEach(function (r) {
@@ -21785,48 +21873,162 @@
         });
         g.rows = [];
         g.res = res;
-        var status = g.head.find('.online-mod-variant__status').removeClass('is-loading is-error is-choose').text('');
-        g.head.find('.online-mod-variant__subtitle').text('');
-        if (!res) {
-          status.addClass('is-loading');
-          return refresh();
+        g.found = res && res.status === 'ok' ? watch.pinVariants(pin, res.rows) : [];
+        g.st = !res ? 'loading' : res.status === 'error' ? 'error' : res.status === 'choose' ? 'choose' : g.found.length ? 'ok' : 'empty';
+        g.head.removeClass(STATES).addClass('online-mod-variant--' + g.st);
+        g.head.find('.online-mod-variant__status').toggleClass('is-loading', !res);
+        var sub = g.head.find('.online-mod-variant__subtitle').empty();
+        var right = g.head.find('.online-mod-variant__right').empty();
+        if (!res) sub.append('<span class="online-mod-variants__shimmer"></span>');
+        else if (g.st === 'error') {
+          sub.text(res.message || '');
+          right.append(chip(L('online_mod_variants_error'), 'online-mod-variants__chip--error'));
+        } else if (g.st === 'choose') {
+          sub.text(L('online_mod_variants_choose'));
+          right.append(chip(L('online_mod_variants_pick'), 'online-mod-variants__chip--choose'));
+        } else if (g.st === 'empty') {
+          sub.text(L('online_mod_variants_none_sub'));
+          right.append(chip(L('online_mod_variants_none')));
         }
-        var found = res.status === 'ok' ? watch.pinVariants(pin, res.rows) : [];
-        if (res.status === 'error') {
-          status.addClass('is-error').text('✕');
-          if (res.message) g.head.find('.online-mod-variant__subtitle').text(res.message);
-        } else if (res.status === 'choose') {
-          status.addClass('is-choose').text('!');
-          g.head.find('.online-mod-variant__subtitle').text(L('online_mod_variants_choose'));
-        } else if (!found.length) status.text('—');
-        g.found = found;
-        if (res.status === 'ok' && found.length) headSub(b, found);
-        var after = g.head;
-        found.forEach(function (r) {
-          var item = row(r.voice, rowSub(r.element), 'online-mod-variant--voice');
-          item.on('hover:enter', function () {
-            open(b, { season: r.season, voice_name: r.voice });
-          });
-          item.on('hover:focus', function () {
-            qTimer = setTimeout(function () {
-              qWatch(b, r, item);
-            }, 1000);
-          });
-          after.after(item);
-          after = item;
+        g.found.forEach(function (r) {
+          var item = tile(g, r);
+          g.box.append(item);
           g.rows.push(item);
         });
+        place(g);
         collapse(g, g.collapsed);
+        summary();
         refresh();
       };
-      // the source's voices folded under its row: hidden rows leave the remote's navigation
+      // the source's voices folded under its row: hidden tiles leave the remote's navigation
       var collapse = function collapse(g, folded) {
         g.collapsed = folded;
         g.rows.forEach(function (r) {
-          r.toggleClass('selector', !folded).toggle(!folded);
+          r.toggleClass('selector', !folded);
           if (folded && last === r[0]) last = g.head[0];
         });
-        g.head.toggleClass('online-mod-variant--folded', !!folded && g.rows.length > 0);
+        var has = g.rows.length > 0;
+        g.box.toggle(has && !folded);
+        g.head.toggleClass('online-mod-variant--folded', has && !!folded).toggleClass('online-mod-variant--open', has && !folded);
+        if (g.st === 'ok') headSub(g);
+      };
+      var inFailed = function inFailed(g) {
+        return g.block.parent()[0] === failed.box[0];
+      };
+      // a source without the episode moves into the folded row at the end, and back when it is asked again
+      var place = function place(g) {
+        var bad = g.st === 'error' || g.st === 'empty';
+        var box = bad ? failed.box : main;
+        if (g.block.parent()[0] !== box[0]) {
+          // the focus stays where it was on screen, not inside a folded row
+          if (bad && !failed.open && last && $.contains(g.block[0], last)) last = g.block.next().find('.selector')[0] || g.block.prev().find('.selector')[0] || failed.head[0];
+          var before = null;
+          for (var i = order.indexOf(g.b.name) + 1; i < order.length && !before; i++) {
+            if (groups[order[i]].block.parent()[0] === box[0]) before = groups[order[i]].block;
+          }
+          if (before) before.before(g.block);else box.append(g.block);
+        }
+        g.head.toggleClass('selector', !bad || failed.open);
+        failedHead();
+      };
+      var failedHead = function failedHead() {
+        var names = order.filter(function (n) {
+          return inFailed(groups[n]);
+        }).map(function (n) {
+          return groups[n].b.title;
+        });
+        failed.wrap.toggle(names.length > 0);
+        failed.head.toggleClass('selector', names.length > 0);
+        if (!names.length && last === failed.head[0]) last = main.find('.selector').last()[0] || null;
+        failed.head.find('.online-mod-variant__mono').text(names.length);
+        failed.head.find('.online-mod-variant__subtitle').text(names.join(' · '));
+        failed.head.toggleClass('online-mod-variant--open', failed.open).toggleClass('online-mod-variant--folded', !failed.open);
+        failed.box.toggle(failed.open);
+      };
+      var foldFailed = function foldFailed(open) {
+        failed.open = open;
+        order.forEach(function (n) {
+          var g = groups[n];
+          if (!inFailed(g)) return;
+          g.head.toggleClass('selector', open);
+          if (!open && last === g.head[0]) last = failed.head[0];
+        });
+        failedHead();
+      };
+      // «Продолжить» row: your source and voice, once that source has answered for this episode
+      var resume = function resume() {
+        var g = rec && groups[rec.b];
+        cont.toggle(!!g).toggleClass('selector', !!g);
+        if (!g) {
+          if (last === cont[0]) last = null;
+          return;
+        }
+        var r = g.found.filter(function (x) {
+          return mine(g, x);
+        })[0];
+        var time = r && timeline.time > 0 && Lampa.Utils.secondsToTime ? Lampa.Utils.secondsToTime(timeline.time, true) : '';
+        cont.data('pick', r || null);
+        cont.toggleClass('online-mod-variants__resume--wait', !r);
+        cont.find('.online-mod-variants__play').toggleClass('is-loading', g.st === 'loading');
+        cont.find('b').text(r ? time ? L('online_mod_resume') + ' ' + L('online_mod_variants_from') + ' ' + time : L('online_mod_variants_mine_play') : g.st === 'loading' ? L('online_mod_variants_finding') : g.st === 'choose' ? L('online_mod_variants_pick') : L('online_mod_variants_lost'));
+        cont.find('small').text([rec.v, g.b.title, r ? watch.qualityBadge([r.element.quality], capOf(g.b)) : ''].filter(Boolean).join(' · '));
+      };
+      // the column's progress, the hero's totals and the «Продолжить» row
+      var summary = function summary() {
+        var total = order.length;
+        var loading = 0;
+        var ok = 0;
+        var voices = 0;
+        var top = null;
+        order.forEach(function (n) {
+          var g = groups[n];
+          if (g.st === 'loading') loading++;
+          if (g.st !== 'ok') return;
+          ok++;
+          voices += g.found.length;
+          if (!top || (RANK[g.badge] || 0) > (RANK[top.badge] || 0)) top = g;
+        });
+        colHead.find('.online-mod-variants__progress-text').text(L('online_mod_variants_found').replace('{x}', ok).replace('{n}', total) + (loading ? ' · ' + L('online_mod_variants_searching').replace('{k}', loading) : ''));
+        colHead.find('.online-mod-variants__progress-bar i').css('width', (total ? (total - loading) / total * 100 : 100) + '%');
+        stats.find('b').eq(0).text(top && top.badge || '—');
+        stats.find('span').eq(0).text(L('online_mod_variants_best') + (top && top.badge ? ' · ' + top.b.title : ''));
+        stats.find('b').eq(1).text(voices);
+        if (cont) resume();
+      };
+      // the still's bar and «Вы остановились на …»: drawn again after «Отметить просмотренной»
+      var progress = function progress(el) {
+        var sec = Lampa.Utils.secondsToTime;
+        el.find('.online-mod-variants__still-bar').toggle(timeline.percent > 0).find('i').css('width', (timeline.percent || 0) + '%');
+        el.find('.online-mod-variants__stopped').text(sec && timeline.time > 0 && timeline.duration > 0 ? L('online_mod_variants_stopped').replace('{t}', sec(timeline.time, true)).replace('{d}', sec(timeline.duration, true)) : '');
+      };
+      var hero = function hero() {
+        var d = object.episode && object.episode.data || {};
+        var el = $('<div class="online-mod-variants__hero"><div class="online-mod-variants__still"><div class="online-mod-variants__still-top"><span></span><span></span></div><div class="online-mod-variants__still-bar"><i></i></div></div><div class="online-mod-variants__stopped"></div><div class="online-mod-variants__series"></div><div class="online-mod-variants__title"></div><div class="online-mod-variants__meta"></div><div class="online-mod-variants__overview"></div><div class="online-mod-variants__stats"><div><b></b><span></span></div><div><b></b><span></span></div></div><div class="online-mod-variants__hint"></div></div>');
+        var img = d.still_path || card.backdrop_path;
+        if (img && Lampa.Api && Lampa.Api.img) el.find('.online-mod-variants__still').css('background-image', 'url("' + Lampa.Api.img(img, 'w780') + '")');
+        var top = el.find('.online-mod-variants__still-top span');
+        top.eq(0).text(L('online_mod_season_short') + pin.season + ' · ' + L('online_mod_episode_short') + pin.episode);
+        if (d.runtime) top.eq(1).text(d.runtime + ' ' + L('online_mod_variants_min'));else top.eq(1).remove();
+        progress(el);
+        var name = card.name || card.title || '';
+        el.find('.online-mod-variants__series').text([name, card.original_name && card.original_name !== name ? card.original_name : ''].filter(Boolean).join(' · '));
+        el.find('.online-mod-variants__title').text(object.name || watch.title(pin));
+        var date = '';
+        try {
+          var t = d.air_date && Lampa.Utils.parseTime(d.air_date);
+          date = t ? t.full || t.short || d.air_date : '';
+        } catch (e) {
+          date = d.air_date || '';
+        }
+        var meta = el.find('.online-mod-variants__meta');
+        [object.name ? watch.title(pin) : '', date, d.vote_average > 0 ? '★ ' + (+d.vote_average).toFixed(1) : ''].forEach(function (text) {
+          if (text) meta.append($('<span></span>').text(text));
+        });
+        el.find('.online-mod-variants__overview').text(d.overview || '');
+        el.find('.online-mod-variants__hint').append($('<div></div>').append($('<i></i>').text('OK'), document.createTextNode(L('online_mod_variants_hint_ok'))), $('<div></div>').append($('<i></i>').text(L('online_mod_variants_hold')), document.createTextNode(L('online_mod_variants_hint_hold'))));
+        stats = el.find('.online-mod-variants__stats');
+        stats.find('span').eq(1).text(L('online_mod_variants_total'));
+        return el;
       };
       // forget what this source found (and the title picked for it), then look again
       var again = function again(b, title) {
@@ -21891,16 +22093,30 @@
         });
       };
       this.create = function () {
-        if (!$('#online-mod-variants-css').length) $('head').append('<style id="online-mod-variants-css">' + '.online-mod-variants__body{padding:1.5em 2em 3em}' + '.online-mod-variants__head{font-size:1.7em;font-weight:600;margin:0 0 .2em}' + '.online-mod-variants__name{opacity:.6;font-size:1.2em;margin:0 0 1.2em}' + '.online-mod-variant{display:flex;align-items:center;padding:.8em 1.2em;margin-bottom:.4em;border-radius:.6em;background:rgba(255,255,255,.07)}' + '.online-mod-variant--voice{margin-left:2.2em;background:rgba(255,255,255,.035)}' + '.online-mod-variant.focus{background:#fff;color:#000}' + '.online-mod-variant__text{flex:1;min-width:0}' + '.online-mod-variant__title{font-size:1.3em}' + '.online-mod-variant--voice .online-mod-variant__title{font-size:1.15em}' + '.online-mod-variant__subtitle{opacity:.6;margin-top:.2em}' + '.online-mod-variant__subtitle:empty{display:none}' + '.online-mod-variant__status{width:1.5em;height:1.5em;flex-shrink:0;margin-left:1em;font-weight:700;font-size:1.2em;text-align:center;line-height:1.5em;box-sizing:border-box}' + '.online-mod-variant__status.is-loading{border:.18em solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:online-mod-spin 1s linear infinite}' + '.online-mod-variant.focus .online-mod-variant__status.is-loading{border-color:rgba(0,0,0,.2);border-top-color:#000}' + '.online-mod-variant__status.is-error{color:#e5484d}' + '.online-mod-variant__status.is-choose{color:#f5a524}' + '.online-mod-variant--folded .online-mod-variant__title:after{content:" ▸";opacity:.5}' + '@keyframes online-mod-spin{to{transform:rotate(360deg)}}' + '</style>');
-        var head = $('<div><div class="online-mod-variants__head"></div><div class="online-mod-variants__name"></div></div>');
-        head.find('.online-mod-variants__head').text(watch.title(pin));
-        head.find('.online-mod-variants__name').text(object.name || '');
-        scroll.append(head);
+        if (!$('#online-mod-variants-css').length) $('head').append('<style id="online-mod-variants-css">' + variantsScreen.css + '</style>');
+        if (Lampa.Storage.field('animation') === false) html.addClass('online-mod-variants--static');
         var enabled = Balancers.filter(function (b) {
           return !b.disabled;
         });
+        order = enabled.map(function (b) {
+          return b.name;
+        });
+        left = hero();
+        colHead.find('.online-mod-variants__where').text(L('online_mod_variants_where'));
+        colHead.find('.online-mod-variants__count').text(L('online_mod_variants_sources') + ' ' + enabled.length);
+        // always built: resume() shows it once there is a record of an enabled source
+        cont = focusable($('<div class="online-mod-variants__resume selector"><div class="online-mod-variants__play"></div><div><b></b><small></small></div></div>'));
+        cont.on('hover:enter', function () {
+          var g = rec && groups[rec.b];
+          var r = cont.data('pick');
+          if (!g) return;
+          if (r) open(g.b, { season: r.season, voice_name: r.voice });else if (g.st === 'choose') choose(g.b);else if (g.st !== 'loading') open(g.b);
+        });
+        scroll.append(cont);
+        scroll.append(main);
         enabled.forEach(function (b) {
-          var g = groups[b.name] = { head: row(b.title, ''), rows: [], res: null, collapsed: false };
+          var g = groups[b.name] = { b: b, head: row(b.title, initials(b.title)), box: $('<div class="online-mod-variants__voices"></div>').hide(), block: $('<div></div>'), rows: [], res: null, found: [], st: 'loading', collapsed: false };
+          g.head.find('.online-mod-variant__mono').css('background-color', 'hsl(' + hue(b.name) + ',50%,40%)');
           // OK folds/unfolds the voices; without voices it opens the source; hold: open, forget the title, reload
           g.head.on('hover:enter', function () {
             if (g.res && g.res.status === 'choose') return choose(b);
@@ -21913,33 +22129,61 @@
           g.head.on('hover:long', function () {
             actions(b);
           });
-          scroll.append(g.head);
+          main.append(g.block.append(g.head, g.box));
         });
+        failed.head = row(L('online_mod_variants_failed'), '').addClass('online-mod-variant--empty');
+        failed.wrap = $('<div></div>').append(failed.head, failed.box);
+        failed.head.on('hover:enter', function () {
+          foldFailed(!failed.open);
+          refresh();
+        });
+        failed.head.on('hover:long', function () {
+          Lampa.Select.show({
+            title: L('online_mod_variants_failed'),
+            items: [{ title: L('online_mod_variants_retry_all') }],
+            onBack: function onBack() {
+              Lampa.Controller.toggle('content');
+            },
+            onSelect: function onSelect() {
+              Lampa.Controller.toggle('content');
+              order.forEach(function (n) {
+                if (inFailed(groups[n]) && groups[n].res) again(groups[n].b, false);
+              });
+            }
+          });
+        });
+        scroll.append(failed.wrap);
         if (object.focus_source && groups[object.focus_source]) last = groups[object.focus_source].head[0];
+        var utils = $('<div class="online-mod-variants__utils"></div>');
         if (Lampa.Component.get && Lampa.Component.get('torbox_main')) {
-          var torbox = row('TorBox', '');
+          var torbox = util('TorBox');
           torbox.on('hover:enter', function () {
             Lampa.Activity.push({ component: 'torbox_main', title: 'TorBox - ' + (card.title || card.name || ''), movie: card });
           });
-          scroll.append(torbox);
+          utils.append(torbox);
         }
         var episode = object.episode;
         if (episode && episode.emit) {
           var markTitle = function markTitle() {
             return L(episode.data && episode.data.timeline && episode.data.timeline.percent ? 'episode_mark_unwatched' : 'episode_mark_watched');
           };
-          var mark = row(markTitle(), '');
+          var mark = util(markTitle());
           mark.on('hover:enter', function () {
             trakt.manual = Date.now();
             episode.emit('mark');
-            mark.find('.online-mod-variant__title').text(markTitle());
+            mark.text(markTitle());
+            // the left column and «Продолжить с …» follow the new timeline
+            timeline = episode.data && episode.data.timeline || {};
+            progress(left);
+            summary();
           });
-          scroll.append(mark);
+          utils.append(mark);
         }
-        html.append(scroll.render());
+        if (utils.children().length) scroll.append(utils);
         enabled.forEach(function (b) {
-          groups[b.name].head.find('.online-mod-variant__status').addClass('is-loading');
+          fill(b, null);
         });
+        html.append(left, $('<div class="online-mod-variants__col"></div>').append(colHead, scroll.render()));
         // sources that need the user's IP or the FanSerials mirror get them first, as loadOnline does
         checkMyIp(function () {
           checkCurrentFanserialsHost(function () {
@@ -21952,6 +22196,23 @@
         if (Lampa.Activity.active().activity !== this.activity) return;
         Lampa.Background.immediately(Lampa.Utils.cardImgBackgroundBlur(card));
         if (Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update(html);
+        // back from a playback: Lampa may have put a new timeline object on the episode
+        timeline = object.episode && object.episode.data && object.episode.data.timeline || timeline;
+        progress(left);
+        summary();
+        // back from a playback in another voice: the tiles and «Продолжить» point at it
+        var now = record();
+        if ((now && now.b + '/' + now.v) !== (rec && rec.b + '/' + rec.v)) {
+          rec = now;
+          // the refill rebuilds the tiles: the focus goes back to the same voice of the same source
+          var keep = last && $(last).hasClass('online-mod-variants__voice') ? { block: $(last).closest('.online-mod-variants__voices')[0], name: $(last).find('.online-mod-variants__voice-name').text() } : null;
+          order.forEach(function (n) {
+            if (groups[n].res) fill(groups[n].b, groups[n].res);
+          });
+          if (keep) $(keep.block).find('.online-mod-variants__voice').each(function () {
+            if ($(this).find('.online-mod-variants__voice-name').text() === keep.name) last = this;
+          });
+        }
         Lampa.Controller.add('content', {
           toggle: function toggle() {
             Lampa.Controller.collectionSet(scroll.render());
@@ -21987,6 +22248,101 @@
     }
     // real qualities already asked this session, by request URL
     variantsScreen.checked = {};
+    // flex and margins only, no grid, gap or CSS variables: old TV webviews lack them
+    variantsScreen.css = [
+      '.online-mod-variants{display:flex;padding:0 1.5em 0 2.5em}',
+      '.online-mod-variants__hero{width:30%;flex-shrink:0;margin-right:3em;padding-top:1em}',
+      '.online-mod-variants__still{position:relative;padding-top:56.25%;border-radius:1em;overflow:hidden;background:#1b2a3d center/cover no-repeat;box-shadow:0 1.5em 3em rgba(0,0,0,.45)}',
+      '.online-mod-variants__still-top{position:absolute;top:.8em;left:.8em;right:.8em;display:flex;justify-content:space-between}',
+      '.online-mod-variants__still-top span{font-size:.85em;font-weight:700;padding:.3em .6em;border-radius:.4em;background:rgba(0,0,0,.6)}',
+      '.online-mod-variants__still-bar{position:absolute;left:0;right:0;bottom:0;height:.25em;background:rgba(255,255,255,.2)}',
+      '.online-mod-variants__still-bar i{display:block;height:100%;background:#fff}',
+      '.online-mod-variants__stopped{margin-top:.6em;font-size:.9em;opacity:.55}',
+      '.online-mod-variants__series{margin-top:1.2em;font-size:.9em;font-weight:600;letter-spacing:.08em;text-transform:uppercase;opacity:.6}',
+      '.online-mod-variants__title{font-size:2.1em;font-weight:800;line-height:1.1;margin:.3em 0 .5em}',
+      '.online-mod-variants__meta span{display:inline-block;font-size:.9em;padding:.25em .6em;margin:0 .4em .4em 0;border-radius:.4em;background:rgba(255,255,255,.08)}',
+      '.online-mod-variants__overview{margin-top:.6em;line-height:1.45;opacity:.68;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}',
+      '.online-mod-variants__stopped:empty,.online-mod-variants__series:empty,.online-mod-variants__overview:empty{display:none}',
+      '.online-mod-variants__stats{display:flex;margin-top:1.2em}',
+      '.online-mod-variants__stats>div{flex:1;padding:.8em 1em;border-radius:.8em;background:rgba(255,255,255,.06)}',
+      '.online-mod-variants__stats>div+div{margin-left:.6em}',
+      '.online-mod-variants__stats b{display:block;font-size:1.5em;font-weight:800}',
+      '.online-mod-variants__stats span{font-size:.85em;opacity:.6}',
+      '.online-mod-variants__hint{margin-top:1.5em;font-size:.9em;opacity:.65}',
+      '.online-mod-variants__hint div{margin-bottom:.5em}',
+      '.online-mod-variants__hint i{font-style:normal;font-weight:800;font-size:.85em;padding:.15em .45em;border-radius:.35em;background:rgba(255,255,255,.15);margin-right:.5em}',
+      '.online-mod-variants__col{flex:1;min-width:0}',
+      '.online-mod-variants__colhead{display:flex;align-items:flex-end;justify-content:space-between;padding:1em 1em .8em 0}',
+      '.online-mod-variants__where{font-size:1.6em;font-weight:800}',
+      '.online-mod-variants__count{font-size:.85em;opacity:.5;margin-top:.2em}',
+      '.online-mod-variants__progress{width:16em;margin-left:2em}',
+      '.online-mod-variants__progress-text{font-size:.9em;opacity:.8;text-align:right;margin-bottom:.4em}',
+      '.online-mod-variants__progress-bar{height:.25em;border-radius:1em;background:rgba(255,255,255,.1);overflow:hidden}',
+      '.online-mod-variants__progress-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#5b9cff,#3ddc84);transition:width .4s}',
+      '.online-mod-variants__body{padding:.5em 1em 3em .3em}',
+      '.online-mod-variants__resume{display:flex;align-items:center;padding:.9em 1.2em;margin-bottom:.9em;border-radius:1em;background:rgba(255,255,255,.1)}',
+      '.online-mod-variants__resume b{display:block;font-size:1.2em}',
+      '.online-mod-variants__resume small{display:block;margin-top:.2em;font-size:.9em;opacity:.65}',
+      '.online-mod-variants__resume--wait{opacity:.7}',
+      '.online-mod-variants__play{width:2.6em;height:2.6em;margin-right:1em;border-radius:50%;background:#fff;color:#000;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-sizing:border-box}',
+      '.online-mod-variants__play:before{content:"\\25B6";font-size:.9em;margin-left:.15em}',
+      '.online-mod-variants__play.is-loading{background:none;border:.2em solid rgba(255,255,255,.25);border-top-color:#fff;animation:online-mod-spin 1s linear infinite}',
+      '.online-mod-variants__play.is-loading:before{content:none}',
+      '.online-mod-variants__resume.focus .online-mod-variants__play{background:#000;color:#fff}',
+      '.online-mod-variants__resume.focus .online-mod-variants__play.is-loading{background:none;border-color:rgba(0,0,0,.2);border-top-color:#000}',
+      '.online-mod-variant{position:relative;display:flex;align-items:center;padding:.85em 1.1em;margin-bottom:.5em;border-radius:.9em;background:rgba(255,255,255,.06)}',
+      '.online-mod-variant:before{content:"";position:absolute;left:0;top:.9em;bottom:.9em;width:.2em;border-radius:0 .3em .3em 0}',
+      '.online-mod-variant--loading:before{background:#5b9cff}',
+      '.online-mod-variant--ok:before{background:#3ddc84}',
+      '.online-mod-variant--choose:before{background:#ffb020}',
+      '.online-mod-variant--error:before{background:#ff5d63}',
+      '.online-mod-variant--empty:before{background:#8a93a6}',
+      '.online-mod-variants__failed .online-mod-variant{opacity:.6}',
+      '.online-mod-variant__mono{width:2.5em;height:2.5em;margin-right:1em;border-radius:.6em;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.9em;flex-shrink:0;color:#fff;background:rgba(255,255,255,.12)}',
+      '.online-mod-variant--loading .online-mod-variant__mono{opacity:.5}',
+      '.online-mod-variant__text{flex:1;min-width:0}',
+      '.online-mod-variant__title{font-size:1.25em;font-weight:600}',
+      '.online-mod-variant__subtitle{margin-top:.2em;font-size:.9em;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.online-mod-variant__subtitle:empty{display:none}',
+      '.online-mod-variant__right{display:flex;align-items:center;flex-shrink:0;margin-left:.8em}',
+      '.online-mod-variant__right .online-mod-variants__chip+.online-mod-variants__chip{margin-left:.4em}',
+      '.online-mod-variant__status{width:1.3em;height:1.3em;margin-left:.8em;flex-shrink:0;text-align:center;font-size:1.3em;line-height:1.2em;box-sizing:border-box;transition:transform .2s}',
+      '.online-mod-variant__status.is-loading{border:.15em solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:online-mod-spin 1s linear infinite}',
+      '.online-mod-variant--folded .online-mod-variant__status:after,.online-mod-variant--open .online-mod-variant__status:after{content:"\\203A";opacity:.6}',
+      '.online-mod-variant--open .online-mod-variant__status{transform:rotate(90deg)}',
+      '.online-mod-variants__shimmer{display:block;height:.7em;width:50%;margin-top:.3em;border-radius:.35em;background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.2),rgba(255,255,255,.06));background-size:200% 100%;animation:online-mod-shimmer 1.3s linear infinite}',
+      '.online-mod-variants__voices{position:relative;display:flex;flex-wrap:wrap;margin:0 0 .8em 3.5em;padding-top:.6em}',
+      '.online-mod-variants__voices:before{content:"";position:absolute;left:-1.7em;top:-.5em;bottom:.8em;width:2px;background:rgba(61,220,132,.35)}',
+      '.online-mod-variants__voice{position:relative;width:32.3%;margin:0 1% .5em 0;box-sizing:border-box;display:flex;align-items:center;padding:.7em .8em;border-radius:.7em;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)}',
+      '.online-mod-variants__voice-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:1.05em}',
+      '.online-mod-variants__voice .online-mod-variants__chip{margin-left:.5em}',
+      '.online-mod-variants__dot{width:.45em;height:.45em;margin-left:.5em;border-radius:50%;background:#ffb020;flex-shrink:0}',
+      '.online-mod-variants__voice--mine{border-color:rgba(61,220,132,.6);background:rgba(61,220,132,.1)}',
+      '.online-mod-variants__tag{position:absolute;top:-.7em;left:.7em;font-size:.6em;font-weight:800;letter-spacing:.05em;text-transform:uppercase;background:#3ddc84;color:#03210f;padding:.15em .4em;border-radius:.3em}',
+      '.online-mod-variants__failed{margin-left:3.5em}',
+      '.online-mod-variants__utils{display:flex;margin-top:1em;padding-top:1em;border-top:1px solid rgba(255,255,255,.08)}',
+      '.online-mod-variants__util{padding:.8em 1.2em;margin-right:.6em;border-radius:.8em;background:rgba(255,255,255,.06);font-weight:600}',
+      '.online-mod-variants__chip{font-size:.75em;font-weight:700;padding:.3em .55em;border-radius:.4em;line-height:1;white-space:nowrap;background:rgba(255,255,255,.12)}',
+      '.online-mod-variants__chip--4k{background:#f5b82e;color:#2a1a00}',
+      '.online-mod-variants__chip--fhd{background:rgba(91,156,255,.25);color:#b5d0ff}',
+      '.online-mod-variants__chip--sd{opacity:.7}',
+      '.online-mod-variants__chip--choose{background:#ffb020;color:#241700}',
+      '.online-mod-variants__chip--error{background:rgba(255,93,99,.2);color:#ff9a9e}',
+      '.online-mod-variant,.online-mod-variants__voice,.online-mod-variants__resume,.online-mod-variants__util{transition:transform .15s,background-color .15s}',
+      '.online-mod-variant.focus,.online-mod-variants__voice.focus,.online-mod-variants__resume.focus,.online-mod-variants__util.focus{background:#fff;color:#000;opacity:1;transform:scale(1.015);box-shadow:0 .8em 2em rgba(0,0,0,.4)}',
+      '.online-mod-variant.focus .online-mod-variant__status.is-loading{border-color:rgba(0,0,0,.2);border-top-color:#000}',
+      '.online-mod-variant.focus .online-mod-variants__shimmer{background-image:linear-gradient(90deg,rgba(0,0,0,.05),rgba(0,0,0,.14),rgba(0,0,0,.05))}',
+      '.focus .online-mod-variants__chip{background:rgba(0,0,0,.08);color:#222}',
+      '.focus .online-mod-variants__chip--4k{background:#f5b82e;color:#2a1a00}',
+      '.focus .online-mod-variants__chip--fhd{background:#2f6fe4;color:#fff}',
+      '.focus .online-mod-variants__chip--choose{background:#ffb020;color:#241700}',
+      '.focus .online-mod-variants__chip--error{background:#ff5d63;color:#fff}',
+      '.online-mod-variants--static *{animation:none!important;transition:none!important}',
+      '.online-mod-variants--static .focus{transform:none!important}',
+      '@media screen and (max-width:767px){.online-mod-variants{padding:0 1em}.online-mod-variants__hero{display:none}.online-mod-variants__voices,.online-mod-variants__failed{margin-left:1em}.online-mod-variants__voice{width:49%}.online-mod-variants__progress{width:10em}}',
+      '@keyframes online-mod-spin{to{transform:rotate(360deg)}}',
+      '@keyframes online-mod-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}'
+    ].join('');
 
     // "По сериям": Lampa's own episodes screen (stills, progress, its split of a single season), built the
     // same way; an episode opens variantsScreen instead of Lampa's watch/mark menu
