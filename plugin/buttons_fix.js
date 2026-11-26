@@ -11,7 +11,6 @@
     + '.full-start-new__buttons::-webkit-scrollbar,.full-start__buttons::-webkit-scrollbar{display:none !important}'
     + '.full-start-new__buttons>*,.full-start__buttons>*{flex-shrink:0 !important}'
     + '.full-start-new__buttons .full-start__button,.full-start__buttons .full-start__button,.full-start-new__buttons .full-start__button span,.full-start__buttons .full-start__button span{white-space:nowrap !important}'
-    + '.full-start-new__buttons.has-overflow-right,.full-start__buttons.has-overflow-right{-webkit-mask-image:linear-gradient(to right,#000 72%,transparent 100%) !important;mask-image:linear-gradient(to right,#000 72%,transparent 100%) !important}'
     + '</style>');
 
   function fixRow(row) {
@@ -29,9 +28,14 @@
 
   function updateFade(row) {
     if (!row) return;
-    var more = row.scrollLeft + row.clientWidth < row.scrollWidth - 2;
-    if (more) row.classList.add('has-overflow-right');
-    else row.classList.remove('has-overflow-right');
+    var left = row.scrollLeft > 2;
+    var right = row.scrollLeft + row.clientWidth < row.scrollWidth - 2;
+    var mask = 'none';
+    if (left && right) mask = 'linear-gradient(to right, transparent 0%, #000 8%, #000 92%, transparent 100%)';
+    else if (right) mask = 'linear-gradient(to right, #000 88%, transparent 100%)';
+    else if (left) mask = 'linear-gradient(to right, transparent 0%, #000 12%)';
+    row.style.setProperty('-webkit-mask-image', mask, 'important');
+    row.style.setProperty('mask-image', mask, 'important');
   }
 
   function reveal(row, el) {
