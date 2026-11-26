@@ -165,6 +165,8 @@ try {
 
   // User-entered connection values (stored below) always take precedence.
   const DEFAULT_PROXY_URL = 'https://my-torbox-proxy.slonce70.workers.dev';
+  // Lampa shows a param's default for a stored '', so the default proxy is written once instead.
+  if (Store.get('torbox_proxy_url') === null) Store.set('torbox_proxy_url', DEFAULT_PROXY_URL);
 
   // Without a scheme the helper URL would be relative and the API key would go to the Lampa host.
   const normalizeHelperServer = (v) => {
@@ -4813,7 +4815,7 @@ try {
           name: translate('torbox_settings_proxy_name'),
           desc: translate('torbox_settings_proxy_desc'),
           type: 'input',
-          default: DEFAULT_PROXY_URL,
+          default: '',
           get: () => Config.proxyUrl,
           set: (v) => (Config.proxyUrl = String(v || '').trim()),
         },
