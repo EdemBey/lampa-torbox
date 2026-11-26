@@ -245,7 +245,8 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   ];
   const tv = ['58811', '63181'];
   const real = watch.kodikPart(seasons, items, tv, 4);
-  assert.deepStrictEqual(real, { index: 1, bounds: [0, 24, 32], first: 1 });
+  assert.deepStrictEqual({ index: real.index, bounds: real.bounds, first: real.first }, { index: 1, bounds: [0, 24, 32], first: 1 });
+  assert.deepStrictEqual(real.all, [{ shiki: '58811', n: 24, first: 1 }, { shiki: '63181', n: 8, first: 1 }]);
   assert.strictEqual(watch.kodikPart(seasons, items, tv, 3).index, -1);
   assert.strictEqual(watch.kodikPart(seasons, items, tv, 1).index, 0);
   assert.strictEqual(watch.kodikPart(seasons, items, 0, 4).index, -2);
@@ -258,6 +259,135 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
 {
   const part = { index: 1, bounds: [0, 12, 25], first: 1 };
   assert.strictEqual(watch.stacked(part, 0, { 1: 25 }), false);
+}
+
+// Kodik parts YummyAnime does not list: arm.haglund.dev gives their TMDB season (JoJo, TMDB 45790)
+{
+  const eps = (n) => { const o = {}; for (let i = 1; i <= n; i++) o[i] = 'x'; return o; };
+  const counts = { 1: 26, 2: 48, 3: 39, 4: 39, 5: 38, 6: 12 };
+  // viewing order: [shikimori id, episodes, arm TMDB season]
+  const list = [[14719, 26, 1], [20899, 24, 2], [26055, 24, 2], [31933, 39, 3], [37991, 39, 4], [665, 7, 0], [48661, 12, 5], [51367, 12, 5], [53273, 14, 5], [61469, 10, 6]];
+  const seasons = list.map((p, i) => ({ id: i + 1, title: String(p[0]) }));
+  const items = list.map((p, i) => ({ shikimori_id: p[0], seasons: { [i + 1]: { episodes: eps(p[1]) } } }));
+  const idOf = (shiki) => seasons[list.findIndex((p) => p[0] === shiki)].id;
+  const ys = ['14719', '20899', '26055', '31933', '37991'];
+  const fill = (tmdb, over) => {
+    watch.arms = null;
+    store.online_mod_watch_arm = {};
+    list.forEach((p) => { store.online_mod_watch_arm['m' + p[0]] = Object.assign({ t: Date.now(), d: tmdb, s: p[2] }, over && over[p[0]]); });
+  };
+  const at = (shiki, episode, o) => {
+    const part = watch.kodikPart(seasons, items, o && o.ys !== undefined ? o.ys : ys, idOf(shiki));
+    const mal = { src: 'shiki:' + shiki, part, balancer: 'kodik', season: idOf(shiki), episode, min: 1, max: 14, seasons: seasons.length, tmdb: 45790 };
+    return watch.place({}, o && o.counts || counts, true, Object.assign(mal, o && o.q), { y: [26, 24, 24, 39, 39], ys });
+  };
+  fill(45790);
+  assert.deepStrictEqual(at(48661, 1), { season: 5, episode: 1 });
+  assert.deepStrictEqual(at(51367, 1), { season: 5, episode: 13 });
+  assert.deepStrictEqual(at(53273, 1), { season: 5, episode: 25 });
+  assert.deepStrictEqual(at(53273, 14), { season: 5, episode: 38 });
+  assert.deepStrictEqual(at(61469, 2), { season: 6, episode: 2 });
+  // an episode past the part's own list
+  assert.strictEqual(at(61469, 11), false);
+  // parts alt lists keep the existing rule: YummyAnime's place wins, arm is not asked
+  assert.deepStrictEqual(at(20899, 1), { season: 2, episode: 1 });
+  assert.deepStrictEqual(at(26055, 1), { season: 2, episode: 25 });
+  // an OVA arm puts in the show's season 0
+  assert.strictEqual(at(665, 1), false);
+  // arm's show is another one
+  fill(99);
+  assert.strictEqual(at(48661, 1), false);
+  // the parts of the season outrun it
+  fill(45790);
+  assert.strictEqual(at(48661, 1, { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 37, 6: 12 } }), false);
+  // a season the parts do not fill is not the last one
+  assert.strictEqual(at(48661, 1, { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 40, 6: 12 } }), false);
+  // the running last season may be shorter than TMDB's plan
+  assert.deepStrictEqual(at(61469, 10, { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 38, 6: 24 } }), { season: 6, episode: 10 });
+  // Lampa's split of a season, and a saved answer
+  assert.strictEqual(at(48661, 1, { q: { split: true } }), false);
+  assert.strictEqual(watch.place({ 'shiki:48661:7': 0 }, counts, true, { src: 'shiki:48661', part: watch.kodikPart(seasons, items, ys, idOf(48661)), season: idOf(48661), episode: 1, min: 1, max: 12, tmdb: 45790 }), false);
+  // not answered yet: pending (null), and a failed lookup is not retried at once
+  watch.arms = null;
+  store.online_mod_watch_arm = { m48661: { t: Date.now(), d: 45790, s: 5 } };
+  assert.strictEqual(at(48661, 1), null);
+  // an earlier part of the season not answered yet: pending; arm failed for it: not placed; a later one failed: the earlier stand
+  fill(45790, { 48661: { t: 0 } });
+  assert.strictEqual(at(51367, 1), null);
+  fill(45790, { 48661: { e: 1, d: 0, s: 0 } });
+  assert.strictEqual(at(51367, 1), false);
+  assert.strictEqual(at(48661, 1), false);
+  fill(45790, { 51367: { e: 1, d: 0, s: 0 } });
+  assert.strictEqual(watch.armOf(51367).e, 1);
+  assert.strictEqual(at(48661, 1), false);
+  assert.strictEqual(at(53273, 1), false);
+  // an earlier part arm has no mapping for (u) is skipped, a failed one still blocks
+  const short = { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 26 } };
+  fill(45790, { 48661: { e: 1, u: 1, d: 0, s: 0 } });
+  assert.deepStrictEqual(at(51367, 1, short), { season: 5, episode: 1 });
+  fill(45790, { 48661: { e: 1, d: 0, s: 0 } });
+  assert.strictEqual(at(51367, 1, short), false);
+  // a season short of TMDB's count (running, last) is only known from its first part
+  fill(45790);
+  assert.strictEqual(at(51367, 1, { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 40 } }), false);
+  assert.deepStrictEqual(at(48661, 1, { counts: { 1: 26, 2: 48, 3: 39, 4: 39, 5: 40 } }), { season: 5, episode: 1 });
+  // alt not loaded yet (-2): never armed, stays pending; no TMDB card: not armed
+  assert.strictEqual(at(48661, 1, { ys: 0 }), null);
+  assert.strictEqual(at(48661, 1, { q: { tmdb: 0 } }), false);
+  // answers expire: 7 days, a failure after 10 min
+  store.online_mod_watch_arm.m48661.t = Date.now() - 7 * 864e5 - 1;
+  assert.strictEqual(watch.armOf(48661), null);
+  store.online_mod_watch_arm.m51367 = { t: Date.now() - 601000, e: 1, d: 0, s: 0 };
+  assert.strictEqual(watch.armOf(51367), null);
+  // no part list (an older cached row): the old answer
+  assert.strictEqual(watch.place({}, counts, true, { src: 'shiki:48661', part: { index: -1, bounds: [0], first: 0 }, season: 7, episode: 1, min: 1, max: 12 }), false);
+}
+
+// arm(): one request per id, cached, a failure never throws, the card's rows are forgotten once
+{
+  const urls = [];
+  let forgot = [];
+  const own = Lampa.Reguest;
+  globalThis.episodeVariants = { forgetCard: (id) => forgot.push(id) };
+  Lampa.Reguest = function () {
+    this.timeout = () => {};
+    this.silent = (url, ok, err) => {
+      urls.push(url);
+      if (/id=2$/.test(url)) return err();
+      // a 200 without a TMDB mapping
+      if (/id=4$/.test(url)) return ok({ themoviedb: null, 'themoviedb-season': null });
+      ok({ themoviedb: 45790, 'themoviedb-season': 5 });
+    };
+  };
+  watch.arms = null;
+  store.online_mod_watch_arm = {};
+  const card = { id: 45790 };
+  watch.arm(card, [{ shiki: '1', n: 1 }, { shiki: '2', n: 1 }, { shiki: '1', n: 1 }]);
+  assert.deepStrictEqual(urls.sort(), ['https://arm.haglund.dev/api/v2/ids?source=myanimelist&id=1', 'https://arm.haglund.dev/api/v2/ids?source=myanimelist&id=2']);
+  assert.deepStrictEqual(forgot, ['tmdb_45790']);
+  assert.deepStrictEqual([watch.armOf(1).s, watch.armOf(1).d, watch.armOf(2).e], [5, 45790, 1]);
+  assert.strictEqual(store.online_mod_watch_arm.m1.s, 5);
+  watch.arm(card, [{ shiki: '1', n: 1 }, { shiki: '2', n: 1 }]);
+  assert.strictEqual(urls.length, 2);
+  // not a TMDB card
+  watch.arm({ id: 5, source: 'kp' }, [{ shiki: '3', n: 1 }]);
+  assert.strictEqual(urls.length, 2);
+  // nothing placed (a failure, an unmapped id): the rows are not forgotten; the unmapped one counts as failed
+  forgot = [];
+  watch.arm(card, [{ shiki: '4', n: 1 }]);
+  assert.strictEqual(urls.length, 3);
+  assert.deepStrictEqual([watch.armOf(4).e, watch.armOf(4).u, watch.armOf(4).d, watch.armOf(4).s], [1, 1, 0, 0]);
+  assert.strictEqual(watch.armOf(2).u, undefined);
+  assert.deepStrictEqual(forgot, []);
+  // the oldest answers go first
+  for (let i = 0; i < 510; i++) store.online_mod_watch_arm['m' + (1000 + i)] = { t: Date.now(), d: 1, s: 1 };
+  watch.arm(card, [{ shiki: '6', n: 1 }]);
+  assert.strictEqual(Object.keys(store.online_mod_watch_arm).length, 500);
+  assert.strictEqual(watch.armOf(6).s, 5);
+  assert.strictEqual(watch.armOf(1000), null);
+  Lampa.Reguest = own;
+  delete globalThis.episodeVariants;
+  watch.arms = null;
 }
 
 // view + link + migration

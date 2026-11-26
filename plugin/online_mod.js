@@ -496,7 +496,8 @@
         // the title's season list picked in the match menu
         var listed = this.byParts(map.parts, counts, q);
         if (listed) return listed;
-        if (q.part) return this.stacked(q.part, q.episode, counts);
+        // -2: YummyAnime's parts are not known yet, they may prove the part (asked again by view)
+        if (q.part) return q.part.index === -1 && q.part.all ? this.armed(q.part, q, counts) : this.stacked(q.part, q.episode, counts);
         if (q.src) return null;
         var same = { season: q.season, episode: q.episode };
         // no TMDB list to check against: today's behaviour
@@ -546,7 +547,9 @@
         var bounds = [0];
         var index = -1;
         var first = 0;
-        if (!tv) return { index: -2, bounds: bounds, first: first };
+        // every part with its episode count, for armed(): the parts YummyAnime does not list are placed by arm
+        var all = [];
+        var at = -1;
         seasons.forEach(function (season) {
           // Kodik's season "0" is the part's specials, never a TV season
           if (season.single || season.kodik_key === '0') return;
@@ -560,15 +563,103 @@
               if (e >= 1) seen[e] = true;
             });
           });
-          if (!shiki || tv.indexOf(shiki) < 0) return;
+          if (!shiki) return;
           var keys = Object.keys(seen).map(Number);
+          var low = keys.length ? Math.min.apply(null, keys) : 0;
+          if (season.id == season_id) at = all.length;
+          all.push({ shiki: shiki, n: keys.length, first: low });
+          if (!tv || tv.indexOf(shiki) < 0) return;
           if (season.id == season_id) {
             index = bounds.length - 1;
-            first = keys.length ? Math.min.apply(null, keys) : 0;
+            first = low;
           }
           bounds.push(bounds[bounds.length - 1] + keys.length);
         });
-        return { index: index, bounds: bounds, first: first };
+        return { index: tv ? index : -2, bounds: tv ? bounds : [0], first: tv ? first : 0, all: all, at: at };
+      },
+      // MAL id -> TMDB show and season (arm.haglund.dev), per Kodik part: lookups made by arm()
+      arms: null,
+      armWait: {},
+      armOf: function armOf(mal) {
+        if (!this.arms) this.arms = Lampa.Storage.get('online_mod_watch_arm', '{}');
+        if (!this.arms || typeof this.arms != 'object') this.arms = {};
+        // 'm' keeps the insertion order (for the trim below) that numeric keys would lose
+        var a = this.arms['m' + mal];
+        // shortcut: an answer lives 7 days, a failed or unmapped lookup is asked again after 10 min
+        return a && Date.now() - a.t < (a.e ? 600000 : 604800000) ? a : null;
+      },
+      arm: function arm(card, all) {
+        var self = this;
+        if (this.id(card).indexOf('tmdb_') !== 0) return;
+        var todo = {};
+        all.forEach(function (c) {
+          if (!self.armOf(c.shiki) && !self.armWait[c.shiki]) todo[c.shiki] = 1;
+        });
+        var mals = Object.keys(todo);
+        var left = mals.length;
+        var placed = false;
+        mals.forEach(function (mal) {
+          self.armWait[mal] = true;
+          var done = function done(entry) {
+            delete self.armWait[mal];
+            delete self.arms['m' + mal];
+            self.arms['m' + mal] = entry;
+            if (entry.s >= 1) placed = true;
+            if (--left) return;
+            var keys = Object.keys(self.arms);
+            // shortcut: keeps the 500 newest answers
+            keys.slice(0, Math.max(0, keys.length - 500)).forEach(function (k) {
+              delete self.arms[k];
+            });
+            Lampa.Storage.set('online_mod_watch_arm', self.arms);
+            // «По сериям» rows of this card were placed without these answers
+            if (placed && typeof episodeVariants != 'undefined') episodeVariants.forgetCard(self.id(card));
+          };
+          var net = new Lampa.Reguest();
+          net.timeout(5000);
+          net.silent('https://arm.haglund.dev/api/v2/ids?source=myanimelist&id=' + encodeURIComponent(mal), function (ids) {
+            var d = ids && +ids.themoviedb || 0;
+            // no TMDB mapping: asked again soon, but not a failure (u): armed() skips such a part
+            done(d ? { t: Date.now(), d: d, s: +ids['themoviedb-season'] || 0 } : { t: Date.now(), e: 1, u: 1, d: 0, s: 0 });
+          }, function () {
+            done({ t: Date.now(), e: 1, d: 0, s: 0 });
+          });
+        });
+      },
+      // A Kodik part YummyAnime does not list: arm says which TMDB season it belongs to, and the parts of that
+      // season are laid end to end. Proven when they fill the season (or, for the last, running one, do not exceed it).
+      // null: arm not answered yet
+      armed: function armed(part, q, counts) {
+        var self = this;
+        var me = part.all[part.at];
+        // shortcut: a Lampa-split season, run-on numbering and an entry with several seasons are not placed here
+        if (!me || q.split || !(q.tmdb > 0) || q.episode < 1 || me.first > 1 || part.all.some(function (c, i) {
+          return i !== part.at && c.shiki === me.shiki;
+        })) return false;
+        var mine = this.armOf(me.shiki);
+        if (!mine) return null;
+        if (mine.d !== +q.tmdb || !(mine.s >= 1)) return false;
+        var before = 0;
+        var sum = 0;
+        var wait = false;
+        var lost = false;
+        part.all.forEach(function (c, i) {
+          var a = self.armOf(c.shiki);
+          if (!a) wait = true;
+          // an earlier part arm failed on may sit in this season: the offset is unknown
+          // shortcut: a part arm has no mapping for (u) is skipped; if it sits in this season the offsets shift, accepted
+          if (a && a.e && !a.u && i < part.at) lost = true;
+          if (!a || a.d !== mine.d || a.s !== mine.s) return;
+          if (i < part.at) before += c.n;
+          sum += c.n;
+        });
+        if (wait) return null;
+        if (lost) return false;
+        var total = counts[mine.s];
+        // shortcut: order inside a season is Kodik's (YummyAnime's) part order, not checked against aired_at
+        // a short last season (running) is only known to start at its first part
+        if (!total || sum > total || sum < total && (counts[mine.s + 1] || before) || q.episode > me.n) return false;
+        return { season: mine.s, episode: before + q.episode };
       },
       // rule() first; what it cannot prove is checked against the other sources' season lists (alt)
       place: function place(map, counts, anime, q, alt) {
@@ -1141,12 +1232,14 @@
           min: Math.min.apply(null, nums),
           max: Math.max.apply(null, nums),
           split: !!(split && Object.keys(split).length >= 2),
-          seasons: seasons
+          seasons: seasons,
+          tmdb: this.id(card).indexOf('tmdb_') === 0 ? card.id : 0
         };
         var anime = animeSkip.isAnime(card, skipOf(element));
         var place = this.place(this.cachedMap, this.cachedCounts, anime, q, this.cachedAlt);
         // what the rules cannot prove another source may: fetched once, used when the list is placed again
         if (place === null && anime && (!q.src || /^shiki:/.test(q.src)) && items) this.alt(card);
+        if (place === null && q.part && q.part.index < 0 && q.part.all && items) this.arm(card, q.part.all);
         // read by the match menu (phase 2c)
         element.watch_q = q;
         // one file without its list (TorBox) proves no run-on numbering: only its own numbers
@@ -21452,7 +21545,11 @@
         var entry = { res: res, labels: labels && labels.season ? labels.season.slice() : [], done: walked, all: status === 'none' || status === 'ok' && !cut };
         // a list placed before Lampa split a single TMDB season keeps TMDB's numbers, an anime's before the other
         // sources' season lists came (watch.alt) is not placed yet: neither is kept
-        var unsure = Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) || altLate;
+        // a list with a row still waiting for arm's answer (a Kodik part YummyAnime does not list) is not kept either
+        var unsure = Lampa.Utils.countSeasons && Lampa.Utils.countSeasons(card) === 1 && !watch.splitOf(card) || altLate || rows.some(function (r) {
+          var e = r.element || {};
+          return e.watch_pending && e.watch_q && e.watch_q.part && e.watch_q.part.index === -1;
+        });
         if ((status === 'ok' || status === 'none') && !unsure) {
           episodeVariants.cache[key] = entry;
           try {
@@ -21630,7 +21727,7 @@
     // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
     episodeVariants.store = 'online_mod_variants_v2';
     // bump when the placement rules change: answers saved under older rules are not reused
-    episodeVariants.rules = 2;
+    episodeVariants.rules = 3;
     episodeVariants.all = function () {
       if (!episodeVariants.mem) {
         var old = Lampa.Storage.get('online_mod_variants', '{}');
