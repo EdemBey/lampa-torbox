@@ -22572,6 +22572,36 @@
             go.on('hover:focus', function () {
               setLabel(label(resume()));
             });
+            var lastOf = function lastOf() {
+              return Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
+            };
+            // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
+            var sourceOf = function sourceOf(r) {
+              return r.rec ? r.rec.b : r.src && r.src.b || lastOf()[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
+            };
+            // shortcut: temporary TV diagnostics (long press), read on screen; remove once «Продолжить» works on the TV
+            go.on('hover:long', function () {
+              var t = function t(f) {
+                try {
+                  return f();
+                } catch (e) {
+                  return '?';
+                }
+              };
+              var se = function se(s, e) {
+                return s > 0 && e > 0 ? 'С' + s + 'Э' + e : '—';
+              };
+              var text = t(function () {
+                var rec = (Lampa.Storage.get('online_mod_resume', '{}') || {})[watch.id(card)];
+                var seen = watch.lastSeen(card);
+                var r = resume();
+                var raw = rec ? rec.b + (rec.v ? '/' + rec.v : '') + ' ' + (rec.p ? se(rec.p.season, rec.p.episode) : 'С—') + ' s' + rec.s : 'нет';
+                var branch = !r ? 'нет' : r.rec ? 'rec' : r.src ? 'src' : '?';
+                var target = r && r.target ? se(r.target.pin.season, r.target.pin.episode) : '—';
+                return 'Продолжить: запись ' + raw + ' · id ' + watch.id(card) + ' · Lampa ' + (seen ? se(seen.season, seen.episode) + ' ' + Math.round(seen.percent) + '%' : '—') + ' · ветка ' + branch + ' → ' + target + ' · источник ' + (r ? sourceOf(r) : '—') + ' · глобальный ' + Lampa.Storage.get('online_mod_balanser', '') + ' · last=' + (Lampa.Storage.field('online_mod_save_last_balanser') === true ? 'вкл' : 'выкл');
+              });
+              Lampa.Noty.show(text);
+            });
             go.on('hover:enter', function () {
               var r = resume();
               if (!r) {
@@ -22579,9 +22609,8 @@
                 var p = { season: +Object.keys(watch.counts(card))[0] || 1, episode: 1 };
                 return Lampa.Activity.push({ url: '', title: watch.title(p), component: 'online_mod_variants', card: card, pin: p, name: '', page: 1 });
               }
-              // only Lampa's timeline knows the episode: the source this title last used (or the last one at all), its restored voice
-              var last = Lampa.Storage.field('online_mod_save_last_balanser') === true ? Lampa.Storage.get('online_mod_last_balanser', '{}') || {} : {};
-              var b = r.rec ? r.rec.b : r.src && r.src.b || last[card.id] || Lampa.Storage.get('online_mod_balanser', default_balanser) + '';
+              var b = sourceOf(r);
+              var last = lastOf();
               // a source is known but no episode: its screen opens
               if (!r.target) return loadOnline(card, b);
               var pick = r.rec ? r.pick : r.src && r.src.v ? { scan: true, voice_name: r.src.v } : { scan: true };
