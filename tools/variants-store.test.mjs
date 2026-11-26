@@ -1,16 +1,13 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { read, slice } from './_slice.mjs';
 
-const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf("    episodeVariants.store = 'online_mod_variants_v2';");
-const to = src.indexOf('    episodeVariants.clear = function () {');
-assert(from > 0 && to > from, 'the «По сериям» store not found in plugin/online_mod.js');
+const src = read('online_mod.js');
+const code = slice(src, 'variants-store');
 
 const disk = {};
 const Lampa = { Storage: { get: (k, d) => (k in disk ? JSON.parse(disk[k]) : d === '{}' ? {} : d), set: (k, v) => { disk[k] = JSON.stringify(v); } } };
 const episodeVariants = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(episodeVariants, Lampa);
+new Function('episodeVariants', 'Lampa', code)(episodeVariants, Lampa);
 
 // a row as the probe leaves it, a proven one and one of a source numbering by its own releases
 const entry = {
@@ -24,7 +21,7 @@ const entry = {
 episodeVariants.save('kodik:tmdb_1', entry);
 // a new session reads it back from the storage
 const fresh = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(fresh, Lampa);
+new Function('episodeVariants', 'Lampa', code)(fresh, Lampa);
 const back = fresh.load('kodik:tmdb_1');
 assert.deepStrictEqual(back.res.rows.map((r) => [r.season, r.voice, r.element.season, r.element.episode, r.element.quality, r.element.watch_place, !!(r.element.watch_info && r.element.watch_info.src)]), [
   [1, 'AniLibria', '2', 11, '1080p', { season: 2, episode: 11 }, false],
@@ -42,7 +39,7 @@ const stored = JSON.parse(disk.online_mod_variants_v2);
 stored['kodik:tmdb_1'].t = Date.now() - 7 * 3600 * 1000;
 disk.online_mod_variants_v2 = JSON.stringify(stored);
 const later = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(later, Lampa);
+new Function('episodeVariants', 'Lampa', code)(later, Lampa);
 assert.strictEqual(later.load('kodik:tmdb_1'), null);
 // forget drops it from the memory copy and the storage
 episodeVariants.forget('kodik:tmdb_1');
@@ -55,24 +52,24 @@ assert.strictEqual(JSON.parse(disk.online_mod_variants_v2)['alloha:tmdb_2'], und
 // the old store (before the v2 key) is emptied once on the first read
 disk.online_mod_variants = JSON.stringify({ 'kodik:tmdb_1': { r: [] } });
 const old = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(old, Lampa);
+new Function('episodeVariants', 'Lampa', code)(old, Lampa);
 old.all();
 assert.strictEqual(disk.online_mod_variants, '{}');
 // a v2 read ignores whatever sits under the old key
 disk.online_mod_variants = JSON.stringify({ 'kodik:tmdb_1': { t: Date.now(), r: [], s: 'ok', q: [], v: [], l: [], d: {} } });
 const v2 = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(v2, Lampa);
+new Function('episodeVariants', 'Lampa', code)(v2, Lampa);
 assert.strictEqual(v2.load('kodik:tmdb_1'), null);
 // answers saved under other placement rules are not reused
 episodeVariants.save('kodik:tmdb_3', entry);
 const rules = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(rules, Lampa);
+new Function('episodeVariants', 'Lampa', code)(rules, Lampa);
 assert(rules.load('kodik:tmdb_3'));
 const kept = JSON.parse(disk.online_mod_variants_v2);
 assert.strictEqual(kept['kodik:tmdb_3'].w, rules.rules);
 delete kept['kodik:tmdb_3'].w;
 disk.online_mod_variants_v2 = JSON.stringify(kept);
 const nowRules = { cache: {} };
-new Function('episodeVariants', 'Lampa', src.slice(from, to))(nowRules, Lampa);
+new Function('episodeVariants', 'Lampa', code)(nowRules, Lampa);
 assert.strictEqual(nowRules.load('kodik:tmdb_3'), null);
 console.log('variants-store OK');

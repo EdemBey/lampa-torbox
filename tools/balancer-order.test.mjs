@@ -1,12 +1,8 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { read, slice } from './_slice.mjs';
 
-const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf('    // The user\'s order of the sources (the «По сериям» screen, the source list): their names in Lampa\'s storage,');
-const to = src.indexOf('    function component(object) {');
-assert(from > 0 && to > from, 'balancer code not found in plugin/online_mod.js');
-const code = src.slice(from, to);
+const src = read('online_mod.js');
+const code = slice(src, 'balancer-order');
 
 const store = {};
 const Lampa = {

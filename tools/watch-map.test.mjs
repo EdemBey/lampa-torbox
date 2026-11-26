@@ -1,12 +1,8 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { read, slice } from './_slice.mjs';
 
-const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf('    var watch = {');
-const to = src.indexOf('    // Season/episode of a playlist item');
-assert(from > 0 && to > from, 'watch code not found in plugin/online_mod.js');
-const code = src.slice(from, to);
+const src = read('online_mod.js');
+const code = slice(src, 'watch');
 
 const store = {};
 let updateCalls = 0;

@@ -1,12 +1,8 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { read, slice } from './_slice.mjs';
 
-const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf('    function skipOf(el)');
-const to = src.indexOf('    function startPlayer(first, playlist)');
-assert(from > 0 && to > from, 'skip code not found in plugin/online_mod.js');
-const code = src.slice(from, to);
+const src = read('online_mod.js');
+const code = slice(src, 'skip');
 
 function load(fixtures, card) {
   const headers = [];
@@ -266,7 +262,7 @@ const prepared = function (api, list) {
   fixtures[tvdb] = { intro: [{ start_ms: 314517, end_ms: 331147 }], recap: [{ start_ms: 0, end_ms: 0 }, { start_ms: 10000, end_ms: null }], credits: [{ start_ms: 2848346, end_ms: null }] };
   fixtures['https://h/skips'] = { intro: [], credits: [{ start_ms: 1345000, end_ms: 1441000 }] };
   let calls = 0;
-  const api = new Function('Lampa', code.slice(code.indexOf('    var browserSkip = {'), code.indexOf('    // X-DDD-Segments, indexed')) + '\nreturn browserSkip;')({
+  const api = new Function('Lampa', slice(src, 'browser-skip') + '\nreturn browserSkip;')({
     Reguest: function () {
       this.timeout = function () {};
       this.silent = function (url, ok, fail) { calls++; Promise.resolve().then(function () { if (url in fixtures) ok(fixtures[url]); else fail(); }); };
