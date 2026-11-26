@@ -990,7 +990,7 @@
         var old = all[id];
         delete all[id];
         // the place is not proven: the title's source and voice are still its own; the old place stays only for the same source
-        var place = element && element.season && element.watch_place;
+        var place = element.watch_place;
         var rec = { b: balancer, v: voice_name || '', s: season_index || 0, t: Date.now() };
         if (place) rec.p = { season: place.season, episode: place.episode };else if (old && old.p && old.b === balancer) {
           rec.p = old.p;
@@ -21556,6 +21556,7 @@
         stop();
         fallback();
       };
+      // shortcut: two passes over seasons (with the voice, then without) can hit this 30 s timer on long series; raise it if they time out
       var timer = setTimeout(fail, 30000);
       // the probe's component would take over the screen's refresh hook
       var hook = watch.refresh;
@@ -21626,6 +21627,7 @@
         if (si >= labels.season.length) return false;
         stage = 'season';
         scanned[si] = true;
+        voiceRetried = false;
         next('season', si);
         return true;
       };
@@ -21660,8 +21662,8 @@
         }
         stage = 'play';
         var row = watch.pinRow(pin, rows);
-        // only Lampa's timeline knows the episode: look for it in the source's other seasons, one redraw each
-        if (!row && pick.scan && scanNext()) return;
+        // only Lampa's timeline knows the episode: look for it in the source's other seasons; if the voice's seasons lack it, once more without the voice
+        if (!row && pick.scan && (scanNext() || want != null && (want = null, scanned = {}, scanNext()))) return;
         if (!row) return fail();
         var rowEntry = rows.filter(function (r) { return r.item === row; })[0];
         // its place is not proven: the source's own screen asks, a guess would write a wrong watched mark
