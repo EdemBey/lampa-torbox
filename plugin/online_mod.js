@@ -16567,8 +16567,27 @@
         return filtred;
       }
 
+      // Obrut's last path segment is the CDN path reversed and base64-encoded; its -aN suffix is the voice track.
+      function obrutTrack(file) {
+        var parts = String(file || '').split(',').map(function (p) {
+          return p.match(/^\s*\[([^\]]+)\]\s*(\S+)/);
+        }).filter(Boolean);
+        var pick = parts.filter(function (m) {
+          return /auto/i.test(m[1]);
+        })[0] || parts[0];
+        if (!pick) return null;
+        var s = pick[2].split('/').pop().split('').reverse().join('');
+        while (s.length % 4) s += '=';
+        var path;
+        try { path = atob(s); } catch (e) { return null; }
+        if (path.charAt(0) !== '/' || !/\.m3u8$/.test(path)) return null;
+        var n = (path.match(/-v\d+-a(\d+)\.m3u8$/) || [])[1];
+        return { dir: path.slice(0, path.lastIndexOf('/') + 1), n: n ? parseInt(n, 10) : 1 };
+      }
+
       // The player's voice menu lists the episode's voices; picking one resolves its file and swaps the stream in place.
       function voiceoversFor(element, data, items) {
+        if (element.multi_audio) return undefined;
         var list = (element.voices || []).filter(function (v) {
           return v.file;
         });
@@ -16705,6 +16724,31 @@
             else map[p.label] = base + n + '.mp4:hls:manifest' + track + '.m3u8';
           });
           if (!pickIsAuto && hasAutoPart) auto = base + 'hls' + track + '.m3u8';
+          var own = element.voices && Lampa.Platform.is('browser') ? obrutTrack(element.file) : null;
+          var group = [];
+          if (own) {
+            var seen = {};
+            element.voices.forEach(function (v) {
+              var t = v.file && obrutTrack(v.file);
+              if (!t || t.dir !== own.dir || seen[t.n]) return;
+              seen[t.n] = true;
+              group.push({ n: t.n, title: v.title });
+            });
+          }
+          // The helper knows the CDN's bitrates for these qualities only.
+          var qlabels = parts.map(function (p) { return p.label; }).filter(function (l) { return [240, 360, 480, 720, 1080].indexOf(parseInt(l, 10)) !== -1; });
+          var qs = qlabels.map(function (l) { return parseInt(l, 10); }).sort(function (a, b) { return a - b; });
+          // Every voice must be a track of this file, or the ones on other files would vanish from the player.
+          element.multi_audio = group.length >= 2 && qs.length > 0 && group.length === element.voices.filter(function (v) { return v.file; }).length;
+          if (element.multi_audio) {
+            // shortcut: only hls.js was tested with the master playlist; other players keep the per-voice streams.
+            // shortcut: a track picked in the player is not saved as the voice, so the next episode starts in the filter's voice; hook hls.js's audio track switch if users mind.
+            var dir = res.url.split('?')[0];
+            var common = server + '/turbo/master.m3u8?base=' + encodeURIComponent(dir.slice(0, dir.lastIndexOf('/') + 1)) + group.map(function (a) { return '&a=' + encodeURIComponent(a.n + ':' + a.title); }).join('') + '&d=' + own.n + '&aq=' + qs[0];
+            map = {};
+            qlabels.forEach(function (l) { map[l] = common + '&q=' + parseInt(l, 10); });
+            auto = common + '&qs=' + qs.join(',');
+          }
           var labels = Object.keys(map).sort(function (a, b) {
             return parseInt(b, 10) - parseInt(a, 10);
           });
