@@ -947,16 +947,35 @@
         if (counts[p.season + 1]) return { pin: { season: p.season + 1, episode: 1 }, s: rec.s + 1 };
         return { pin: { season: p.season, episode: p.episode }, s: rec.s };
       },
+      // Lampa's own timeline: the card's most recently watched episode, by its card link and by its title key
+      // (an external player's position may come back with the title key only); a tie goes to the later episode
+      lastSeen: function lastSeen(card) {
+        var all = card && Lampa.Timeline && Lampa.Timeline.filename ? Lampa.Storage.get(Lampa.Timeline.filename(), '{}') : null;
+        if (!all || typeof all != 'object') return null;
+        var ln = Lampa.Timeline.link ? Lampa.Timeline.link(card, 1, 1) : null;
+        var best = null;
+        var take = function take(v, season, episode) {
+          if (!v || typeof v != 'object' || !(v.percent > 0) || !(season > 0) || !(episode > 0)) return;
+          var u = v.updated || 0;
+          if (best && (u < best.updated || u === best.updated && season * 1000 + episode <= best.season * 1000 + best.episode)) return;
+          best = { season: season, episode: episode, percent: v.percent, updated: u };
+        };
+        Object.keys(all).forEach(function (h) {
+          var v = all[h];
+          if (ln && v && v.card === ln.card) take(v, parseInt(v.season), parseInt(v.episode));
+        });
+        var counts = this.counts(card);
+        [card.original_title, card.original_name].forEach(function (name, i, names) {
+          if (!name || i && name === names[0]) return;
+          Object.keys(counts).forEach(function (s) {
+            for (var e = 1; e <= counts[s]; e++) take(all[Lampa.Utils.hash([s, s > 10 ? ':' : '', e, name].join(''))], +s, e);
+          });
+        });
+        return best;
+      },
       // what «Продолжить» replays: the source, voice, season index and canonical place of the last played series episode
       remember: function remember(card, balancer, voice_name, season_index, element) {
-        // shortcut: temporary TV diagnostics for «Продолжить», remove once the cause is known
-        var why = !card ? 'no card' : !element ? 'no element' : !element.season ? 'no season' : !element.watch_place ? 'no place' : '';
-        try {
-          var diag = 'resume: ' + (why ? why + ' | b=' + balancer + ' pending=' + !!(element && element.watch_pending) + ' q=' + (element && element.watch_q ? JSON.stringify(element.watch_q) : 'none') + ' ot=' + !!(card && card.original_title) + ' cs=' + (card && Lampa.Utils.countSeasons ? Lampa.Utils.countSeasons(card) : '-') + ' alt=' + !!(card && watch.altOf(card)) : 'saved S' + element.watch_place.season + 'E' + element.watch_place.episode);
-          Lampa.Storage.set('online_mod_resume_diag', new Date().toTimeString().slice(0, 8) + ' ' + diag);
-          Lampa.Noty.show(diag);
-        } catch (e) {}
-        if (why) return;
+        if (!card || !element || !element.season || !element.watch_place) return;
         var all = Lampa.Storage.get('online_mod_resume', '{}');
         if (!all || typeof all != 'object') all = {};
         var id = this.id(card);
@@ -22106,14 +22125,6 @@
           // "Выбор плеера" (episodes screen) next to it, on series cards only
           var card = e.data.movie;
           if (card && (card.original_name || card.number_of_seasons)) {
-            // shortcut: temporary TV diagnostics — DDD covers the toast, so the last one is shown when a series card opens
-            try {
-              var diag = Lampa.Storage.get('online_mod_resume_diag', '');
-              if (diag) {
-                Lampa.Noty.show(diag);
-                Lampa.Storage.set('online_mod_resume_diag', '');
-              }
-            } catch (err) {}
             var by = $('<div class="full-start__button selector view--online_mod_episodes"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="currentColor"/></svg><span>' + Lampa.Lang.translate('online_mod_by_episodes') + '</span></div>');
             by.on('hover:enter', function () {
               Lampa.Activity.push({ url: '', title: Lampa.Lang.translate('online_mod_by_episodes'), component: 'online_mod_episodes', card: card, page: 1 });
@@ -22123,9 +22134,15 @@
             var resume = function resume() {
               var all = Lampa.Storage.get('online_mod_resume', '{}');
               var rec = all && typeof all == 'object' ? all[watch.id(card)] : null;
-              if (!rec || !rec.p || !rec.b) return null;
+              if (!rec || !rec.p || !rec.b) rec = null;
+              var seen = watch.lastSeen(card);
+              // an episode Lampa saw played after our record (not from our list) wins; it has no source, so it opens the list on it
+              if (seen && (!rec || seen.updated > (rec.t || 0) && (seen.season != rec.p.season || seen.episode != rec.p.episode))) {
+                return { rec: null, target: watch.resumeTarget({ p: { season: seen.season, episode: seen.episode }, s: 0 }, watch.counts(card), seen.percent) };
+              }
+              if (!rec) return null;
               var tl = Lampa.Timeline.view(Lampa.Utils.hash(watch.key(card, rec.p.season, rec.p.episode)));
-              var target = watch.resumeTarget(rec, watch.counts(card), tl && tl.percent);
+              var target = watch.resumeTarget(rec, watch.counts(card), tl && tl.percent || (seen && seen.season == rec.p.season && seen.episode == rec.p.episode ? seen.percent : undefined));
               return { rec: rec, target: target, pick: { season: target.s, voice_name: rec.v } };
             };
             var label = function label(r) {
@@ -22140,9 +22157,9 @@
               });
               go.on('hover:enter', function () {
                 var r = resume();
-                if (!r) {
+                if (!r || !r.rec) {
                   online_loading = false;
-                  return loadOnline(card);
+                  return loadOnline(card, undefined, r && r.target.pin);
                 }
                 Utils.setMyIp('');
                 checkMyIp(function () {

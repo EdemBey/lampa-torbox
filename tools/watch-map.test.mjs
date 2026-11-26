@@ -140,6 +140,23 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   assert.deepStrictEqual(watch.resumeTarget(rec(3, 10, 2), counts, 100), { pin: { season: 3, episode: 10 }, s: 2 });
 }
 
+// lastSeen: Lampa's timeline by card link and by title key; the newest wins, a tie goes to the later episode
+{
+  for (const k in viewed) delete viewed[k];
+  const card = { id: 7, original_name: 'X', seasons: [{ season_number: 1, episode_count: 5 }, { season_number: 2, episode_count: 5 }] };
+  assert.strictEqual(watch.lastSeen(card), null);
+  viewed.a = { percent: 40, card: 'tv_7', season: 1, episode: 5, updated: 100 };
+  viewed['h:23X'] = { percent: 26, updated: 200 };
+  assert.deepStrictEqual(watch.lastSeen(card), { season: 2, episode: 3, percent: 26, updated: 200 });
+  viewed.a.updated = 0;
+  viewed['h:23X'].updated = 0;
+  viewed['h:14X'] = { percent: 10 };
+  assert.deepStrictEqual(watch.lastSeen(card), { season: 2, episode: 3, percent: 26, updated: 0 });
+  viewed.b = { percent: 50, card: 'tv_8', season: 2, episode: 5, updated: 999 };
+  assert.deepStrictEqual(watch.lastSeen(card), { season: 2, episode: 3, percent: 26, updated: 0 });
+  for (const k in viewed) delete viewed[k];
+}
+
 // remember
 {
   store.online_mod_resume = undefined;
