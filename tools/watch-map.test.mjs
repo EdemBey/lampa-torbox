@@ -1,12 +1,8 @@
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { read, slice } from './_slice.mjs';
 
-const src = readFileSync(fileURLToPath(new URL('../plugin/online_mod.js', import.meta.url)), 'utf8');
-const from = src.indexOf('    var watch = {');
-const to = src.indexOf('    // Season/episode of a playlist item');
-assert(from > 0 && to > from, 'watch code not found in plugin/online_mod.js');
-const code = src.slice(from, to);
+const src = read('online_mod.js');
+const code = slice(src, 'watch');
 
 const store = {};
 let updateCalls = 0;
@@ -1390,6 +1386,24 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
       assert.strictEqual(updateCalls, calls);
       for (const k in viewed) delete viewed[k];
       watch.alts = keepV[0];
+      watch.cached = null;
+    }
+
+    // a chain whose own numbers can be a real episode (a per-season show's S2 E15 placed at S2 E3) keeps the guard
+    {
+      for (const k in viewed) delete viewed[k];
+      const cardP = { id: 9001, original_title: 'PS', original_name: 'PS', anime: true, number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 24 }] };
+      const keepP = [watch.alts, watch.cached];
+      watch.alts = { tmdb_9001: { t: 1, a: [[1, 1, 1, 12], [13, 2, 1, 24]], ys: [] } };
+      const row = { season: '2', episode: '15', watch_info: { span: () => [[1, 12], [13, 36]] } };
+      const legacyP = Lampa.Utils.hash('215PS');
+      viewed[legacyP] = { percent: 40, time: 300, duration: 1400, updated: 9 };
+      watch.view(cardP, 'rezka2', row, legacyP, [row], 2);
+      assert.deepStrictEqual(row.watch_place, { season: 2, episode: 3 });
+      assert.strictEqual(viewed['h:23PS'], undefined);
+      assert.strictEqual(viewed[legacyP].percent, 40);
+      for (const k in viewed) delete viewed[k];
+      watch.alts = keepP[0];
       watch.cached = null;
     }
 

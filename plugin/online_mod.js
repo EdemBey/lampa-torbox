@@ -393,6 +393,7 @@
      * Lampa's own card uses, with Timeline.link so the TimeCode server can tell the episode. A source whose
      * numbering is not proven to match keeps its own key, so a guessed mark is never written.
      */
+    // @module watch
     var watch = {
       store: 'online_mod_watch_map',
       links: {},
@@ -1540,8 +1541,9 @@
         if (stored && typeof stored == 'object' && !stored.card && (stored.percent || stored.time)) {
           Lampa.Timeline.update({ hash: hash, percent: stored.percent, time: stored.time, duration: stored.duration, profile: stored.profile, updated: stored.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
         }
-        // a row placed among seasons that are chunks of one run-on count: its own key cannot be another episode's real one
-        var chained = !!element.watch_q && this.chain(element.watch_q.span, element.watch_q.seasons);
+        // a row placed among seasons that are chunks of one run-on count: its own key is no real episode's when its number
+        // is past what TMDB has in that season (HDrezka S21 E1112); within it, it may be (a per-season show's S2 E15)
+        var chained = !!element.watch_q && this.chain(element.watch_q.span, element.watch_q.seasons) && !(this.counts(card)[parseInt(element.season)] >= parseInt(element.episode));
         if (hash && hash !== legacy && !view.percent && !view.time && (chained || legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode))))) {
           var old = Lampa.Timeline.view(legacy);
           if (old.percent || old.time) {
@@ -1558,7 +1560,9 @@
       }
     };
     window.online_mod_watch = watch;
+    // @end watch
 
+    // @module skip
     // Season/episode of a playlist item, and the anime id when the balancer knows it (Kodik, Naruto Based).
     function skipOf(el) {
       if (!el || !el.episode) return null;
@@ -1770,6 +1774,7 @@
      * the episode first, neighbours only for types it lacks), TheIntroDB for series (IntroDB sends no CORS header).
      * Marks go on Lampa's timeline; the button (or Enter with the panel hidden) jumps to the segment's end.
      */
+    // @module browser-skip
     var browserSkip = {
       cache: {},
       names: { op: 'online_mod_skip_op', ed: 'online_mod_skip_ed', recap: 'online_mod_skip_recap' },
@@ -1950,6 +1955,7 @@
       }
     };
 
+    // @end browser-skip
     // X-DDD-Segments, indexed like the playlist DDD gets (sanitizePlaylist drops entries without url).
     function attachSkipSegments(first, playlist) {
       var out = {};
@@ -1966,6 +1972,7 @@
       if (have) setDddHeader(first, 'X-DDD-Segments', JSON.stringify(out));
     }
 
+    // @end skip
     function startPlayer(first, playlist) {
       if (!first) return;
 
@@ -19348,6 +19355,7 @@
     var proxyCalls = {};
     var default_balanser = 'cdnvideohub';
 
+    // @module balancer-order
     // The user's order of the sources (the «По сериям» screen, the source list): their names in Lampa's storage,
     // a source not listed keeps the plugin's order after them
     function applyOrder() {
@@ -19388,6 +19396,7 @@
       applyOrder();
     }
 
+    // @end balancer-order
     function component(object) {
       var _this = this;
 
@@ -22027,6 +22036,7 @@
     // the source's own numbers, the place on Lampa's numbering, whether the source numbers by its own releases.
     // Read from Lampa's storage once per session, then kept in memory.
     // a new version of the rows (Alloha's quality fields) starts a new store; the old one is emptied once
+    // @module variants-store
     episodeVariants.store = 'online_mod_variants_v2';
     // bump when the placement rules change: answers saved under older rules are not reused
     episodeVariants.rules = 6;
@@ -22111,6 +22121,7 @@
       });
       if (hit) Lampa.Storage.set(episodeVariants.store, all);
     };
+    // @end variants-store
     episodeVariants.clear = function () {
       episodeVariants.cache = {};
       episodeVariants.mem = {};
