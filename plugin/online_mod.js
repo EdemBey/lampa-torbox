@@ -22115,7 +22115,7 @@
         scroll.append(cont);
         scroll.append(main);
         enabled.forEach(function (b) {
-          var g = groups[b.name] = { b: b, head: row(b.title, initials(b.title)), box: $('<div class="online-mod-variants__voices"></div>').hide(), block: $('<div></div>'), rows: [], res: null, found: [], st: 'loading', collapsed: false };
+          var g = groups[b.name] = { b: b, head: row(b.title, initials(b.title)), box: $('<div class="online-mod-variants__voices"></div>').hide(), block: $('<div></div>'), rows: [], res: null, found: [], st: 'loading', collapsed: true };
           g.head.find('.online-mod-variant__mono').css('background-color', 'hsl(' + hue(b.name) + ',50%,40%)');
           // OK folds/unfolds the voices; without voices it opens the source; hold: open, forget the title, reload
           g.head.on('hover:enter', function () {
