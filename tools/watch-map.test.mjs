@@ -1322,6 +1322,77 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
     assert.deepStrictEqual(watch.place({ 'x:2': [1, 2, 1] }, counts, true, { src: '', balancer: 'x', season: 2, seasons: 2, episode: 1, min: 1, max: 12 }, { a: runs }), { season: 2, episode: 62 });
     assert.strictEqual(watch.chain([[1, 1], [1, 12]], 2), false);
 
+    // HDrezka: its own 22 seasons are chunks of the absolute count; the span is the union of the voices' lists
+    {
+      const R = [[1, 61], [62, 77], [78, 91], [92, 130], [131, 144], [145, 195], [196, 228], [229, 263], [264, 336], [337, 381], [382, 407], [408, 421], [422, 456], [457, 516], [517, 578], [579, 628], [629, 746], [747, 782], [783, 889], [890, 1088], [1089, 1155], [1156, 1180]];
+      const eps = (from, to, sid) => { const l = []; for (let n = from; n <= to; n++) l.push({ season_id: String(sid), episode_id: String(n) }); return l; };
+      // voice A has everything but starts S20 at 892, B starts it at 890, C is a short dub of S21 only
+      const full = [];
+      R.forEach((r, i) => full.push(...eps(i === 19 ? 892 : r[0], r[1], i + 1)));
+      const ids = R.map((r, i) => String(i + 1));
+      const lists = [full, eps(890, 1088, 20), eps(1089, 1101, 21), undefined, 'x'];
+      const span = watch.spanOf(ids, lists);
+      assert.deepStrictEqual(span, R);
+      assert.strictEqual(watch.chain(span, 22), true);
+      // the numbers are read as numbers, season ids as keys
+      assert.deepStrictEqual(watch.spanOf([2], [[{ season_id: 2, episode_id: '9' }, { season_id: '2', episode_id: 10 }, { season_id: '2', episode_id: 'x' }]]), [[9, 10]]);
+      assert.deepStrictEqual(watch.spanOf(['1', '2'], [eps(1, 3, 1)]), [[1, 3], null]);
+      assert.deepStrictEqual(watch.spanOf(null, null), []);
+
+      const rz = (extra) => Object.assign({ src: '', balancer: 'rezka2', season: 21, seasons: 22, episode: 1112, min: 1089, max: 1155, split: false, span }, extra);
+      assert.deepStrictEqual(watch.place({}, counts, true, rz(), alt), { season: 22, episode: 1112 });
+      assert.deepStrictEqual(watch.place({}, counts, true, rz({ min: 1089, max: 1140 }), alt), { season: 22, episode: 1112 });
+      assert.deepStrictEqual(watch.place({}, counts, true, rz({ season: 2, episode: 66, min: 62, max: 77 }), alt), { season: 2, episode: 66 });
+      assert.deepStrictEqual(watch.place({}, counts, true, rz({ season: 5, episode: 144, min: 131, max: 144 }), alt), { season: 6, episode: 144 });
+      // a season nobody lists, or a gap: nothing is guessed
+      const hole = watch.spanOf(ids, [full.filter((e) => e.season_id !== '14')]);
+      assert.strictEqual(hole[13], null);
+      assert.strictEqual(watch.place({}, counts, true, rz({ span: hole }), alt), null);
+      const gap = watch.spanOf(ids, [full.filter((e) => e.season_id !== '14' || +e.episode_id >= 500)]);
+      assert.deepStrictEqual(gap[13], [500, 516]);
+      assert.strictEqual(watch.place({}, counts, true, rz({ span: gap }), alt), null);
+      // seasons that restart from 1 are no chain
+      const restart = watch.spanOf(ids, [R.flatMap((r, i) => eps(1, r[1] - r[0] + 1, i + 1))]);
+      assert.strictEqual(watch.chain(restart, 22), false);
+      assert.strictEqual(watch.place({}, counts, true, rz({ span: restart, min: 1, max: 67, season: 21, episode: 12 }), alt), null);
+      // without the group, or with another count of seasons, the old rules stand
+      assert.strictEqual(watch.place({}, counts, true, rz({ seasons: 23 }), alt), null);
+      assert.strictEqual(watch.place({}, counts, true, rz(), { a: 0, ys: [] }), null);
+    }
+
+    // HDrezka's run-on row (S21 E1112 = TMDB S22E1112): its own key is no other episode's, the legacy mark moves once
+    {
+      for (const k in viewed) delete viewed[k];
+      const R2 = [[1, 61], [62, 77], [78, 91], [92, 130], [131, 144], [145, 195], [196, 228], [229, 263], [264, 336], [337, 381], [382, 407], [408, 421], [422, 456], [457, 516], [517, 578], [579, 628], [629, 746], [747, 782], [783, 889], [890, 1088], [1089, 1155], [1156, 1180]];
+      const cardV = { id: 37854, original_title: 'OP', original_name: 'OP', anime: true, number_of_seasons: 23, seasons: sizes.map((n, i) => ({ season_number: i + 1, episode_count: n })) };
+      const keepV = [watch.alts, watch.cached];
+      watch.alts = { tmdb_37854: { t: 1, a: runs, ys: ['21'] } };
+      const rowOf = (withSpan) => ({ season: '21', episode: '1112', watch_info: withSpan ? { span: () => R2 } : null });
+      const legacy21 = Lampa.Utils.hash('21:1112OP');
+      viewed[legacy21] = { percent: 42, time: 595, duration: 1423, updated: 111 };
+      updateCalls = 0;
+      const first = rowOf(true);
+      const v1 = watch.view(cardV, 'rezka2', first, legacy21, [first], 22);
+      assert.deepStrictEqual(first.watch_place, { season: 22, episode: 1112 });
+      assert.strictEqual(v1.percent, 42);
+      assert.strictEqual(viewed['h:22:1112OP'].percent, 42);
+      const copies = updateCalls;
+      const again = rowOf(true);
+      watch.view(cardV, 'rezka2', again, legacy21, [again], 22);
+      assert.strictEqual(updateCalls, copies);
+      // without the span the row is not placed at all: nothing moves
+      delete viewed['h:22:1112OP'];
+      const calls = updateCalls;
+      const plain = rowOf(false);
+      watch.view(cardV, 'rezka2', plain, legacy21, [plain], 22);
+      assert.strictEqual(plain.watch_place, null);
+      assert.strictEqual(viewed['h:22:1112OP'], undefined);
+      assert.strictEqual(updateCalls, calls);
+      for (const k in viewed) delete viewed[k];
+      watch.alts = keepV[0];
+      watch.cached = null;
+    }
+
     // an old «Продолжить» record (counted from 1) is read as TMDB's number
     {
       const cardR = { id: 37854, original_title: 'OP', anime: true, seasons: sizes.map((n, i) => ({ season_number: i + 1, episode_count: n })) };

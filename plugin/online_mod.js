@@ -721,6 +721,22 @@
         out.p = this.tmdb(this.altOf(card), { season: +rec.p.season, episode: +rec.p.episode }, this.counts(card));
         return out;
       },
+      // [min, max] of the episode numbers of each season id over the lists of several voices ({season_id, episode_id}); null for a season nobody has
+      spanOf: function spanOf(ids, lists) {
+        var by = {};
+        (lists || []).forEach(function (list) {
+          (Array.isArray(list) ? list : []).forEach(function (e) {
+            var n = parseInt(e && e.episode_id);
+            if (!(n >= 0)) return;
+            var r = by[e.season_id] || (by[e.season_id] = [n, n]);
+            r[0] = Math.min(r[0], n);
+            r[1] = Math.max(r[1], n);
+          });
+        });
+        return (ids || []).map(function (id) {
+          return by[id] || null;
+        });
+      },
       // a source's own seasons (span: [min, max] of each, from its whole list) are consecutive chunks of one absolute
       // numbering: the first starts at 1, each next starts where the one before ended (a missing number is tolerated)
       chain: function chain(span, seasons) {
@@ -1524,7 +1540,9 @@
         if (stored && typeof stored == 'object' && !stored.card && (stored.percent || stored.time)) {
           Lampa.Timeline.update({ hash: hash, percent: stored.percent, time: stored.time, duration: stored.duration, profile: stored.profile, updated: stored.updated, received: true, card: meta.card, season: meta.season, episode: meta.episode });
         }
-        if (hash && hash !== legacy && !view.percent && !view.time && legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode)))) {
+        // a row placed among seasons that are chunks of one run-on count: its own key cannot be another episode's real one
+        var chained = !!element.watch_q && this.chain(element.watch_q.span, element.watch_q.seasons);
+        if (hash && hash !== legacy && !view.percent && !view.time && (chained || legacy !== Lampa.Utils.hash(this.key(card, parseInt(element.season), parseInt(element.episode))))) {
           var old = Lampa.Timeline.view(legacy);
           if (old.percent || old.time) {
             view.percent = old.percent;
@@ -5003,6 +5021,26 @@
        */
 
 
+      var span_for = null;
+      var span_val = null;
+      // [min, max] of every season over all voices (a list holds one season, watch.chain needs them all); merged parts number their own seasons.
+      // filter() compares a voice's season_id with extract.season[i].id (==), so the union is read the same way
+      function seasonSpan() {
+        // destroy() sets extract to null and span() is called lazily; a voice whose episodes did not load would leave a season out
+        if (!extract || !extract.is_series || parts || !extract.all_loaded || !Array.isArray(extract.season) || !Array.isArray(extract.voice) || !extract.voice.every(function (v) {
+          return extract.voice_data && extract.voice_data[v.id];
+        })) return null;
+        if (span_for !== extract.season) {
+          span_for = extract.season;
+          span_val = watch.spanOf(span_for.map(function (s) {
+            return s.id;
+          }), extract.voice.map(function (v) {
+            return (extract.voice_data[v.id] || {}).episode;
+          }));
+        }
+        return span_val;
+      }
+
       function filtred() {
         var filtred = [];
 
@@ -5022,7 +5060,8 @@
                 info: ' / ' + voice,
                 season: season_num || parseInt(episode.season_id),
                 episode: parseInt(episode.episode_id),
-                media: episode
+                media: episode,
+                watch_info: { span: seasonSpan }
               });
             }
           });
@@ -21793,8 +21832,8 @@
           try {
             episodeVariants.save(key, entry);
           } catch (e) {}
-        // the list to pick from is kept for the session only (not stored): reopening does not search again
-        } else if (status === 'choose') episodeVariants.cache[key] = entry;
+        // the list to pick from is kept for the session only (not stored): reopening does not search again; a cut one is not kept
+        } else if (status === 'choose' && !cut) episodeVariants.cache[key] = entry;
         delete episodeVariants.pending[key];
         try {
           probe.destroy();
@@ -21902,7 +21941,11 @@
       probe.empty = function (message) {
         if (step) return stepDone(false);
         if (seasons) return;
-        if (held) return finish('choose', { similars: held });
+        // a «Show more» page that failed: the list held is cut
+        if (held) {
+          cut = true;
+          return finish('choose', { similars: held });
+        }
         finish('error', { message: typeof message == 'string' ? message : '' });
       };
       // several titles: the user settles it once (watch.similarSave), the next probe goes straight to it
