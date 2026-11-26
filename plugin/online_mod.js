@@ -22534,9 +22534,19 @@
               if (!r) return Lampa.Lang.translate('online_mod_start');
               return Lampa.Lang.translate('online_mod_resume') + ' · ' + Lampa.Lang.translate('online_mod_season_short') + r.target.pin.season + ' ' + Lampa.Lang.translate('online_mod_episode_short') + r.target.pin.episode;
             };
-            var go = $('<div class="full-start__button selector view--online_mod_resume"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg><span>' + label(resume()) + '</span></div>');
+            // button-order plugins key buttons by span text; the visible label changes per episode, so it is drawn from data-label
+            if (!$('#online-mod-resume-css').length) $('head').append('<style id="online-mod-resume-css">.online-mod-resume-label:after{content:attr(data-label)}</style>');
+            var labelHtml = '<span class="online-mod-resume-label"><i style="display:none">' + Lampa.Lang.translate('online_mod_resume') + '</i></span>';
+            var go = $('<div class="full-start__button selector view--online_mod_resume"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>' + labelHtml + '</div>');
+            // a button-order plugin may unwrap our span: put it back
+            var setLabel = function setLabel(text) {
+              var span = go.find('.online-mod-resume-label');
+              if (!span.length) span = $(labelHtml).appendTo(go);
+              span.attr('data-label', text);
+            };
+            setLabel(label(resume()));
             go.on('hover:focus', function () {
-              go.find('span').text(label(resume()));
+              setLabel(label(resume()));
             });
             go.on('hover:enter', function () {
               var r = resume();
