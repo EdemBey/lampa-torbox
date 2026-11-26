@@ -1,6 +1,7 @@
 // Fork of https://tvigl.github.io/plugins/seasons.js (tvigl), fetched 25.11.2026.
 // Changed: only TMDB ids go to TMDB. YummyAnime cards (source 'yani') use the matched show in card.tmdb,
 // cards from other non-TMDB sources get no badge; before, yani id 13079 showed the season of TMDB tv/13079.
+// Changed: anime seasons Lampa splits by air date (online_mod_watch.splitOf) get Lampa's season number on the badge.
 (function () {
     'use strict';
 
@@ -183,15 +184,28 @@
         // Якщо сезон не знайдено
         if (!currentSeason) return false;
         
+        var seasonNumber = lastEpisode.season_number;
+
         // Загальна кількість епізодів в сезоні
         var totalEpisodes = currentSeason.episode_count || 0;
         
         // Кількість випущених епізодів
         var airedEpisodes = lastEpisode.episode_number || 0;
+
+        // shortcut: the split exists only after the card was opened once (online_mod prefetch); until then TMDB's single season is shown; YummyAnime cards are stored under yani_<id> and keep TMDB numbering
+        var watch = window.online_mod_watch;
+        var split = watch && watch.splitOf && watch.splitOf(tmdbData);
+        if (split && Object.keys(split).length >= 2 && seasonNumber === 1) {
+            var p = watch.lampaOf(tmdbData, 1, airedEpisodes);
+            seasonNumber = p.season;
+            airedEpisodes = p.episode;
+            var t = watch.lampaOf(tmdbData, 1, totalEpisodes);
+            totalEpisodes = t.season === p.season ? t.episode : split[p.season];
+        }
         
         // Повертаємо об'єкт з детальною інформацією про прогрес
         return {
-            seasonNumber: lastEpisode.season_number,  // Номер поточного сезону
+            seasonNumber: seasonNumber,               // Номер поточного сезону
             airedEpisodes: airedEpisodes,             // Кількість випущених епізодів
             totalEpisodes: totalEpisodes,             // Загальна кількість епізодів
             isComplete: airedEpisodes >= totalEpisodes  // Чи завершений сезон
