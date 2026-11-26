@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { decodePlaylist, browserCookie, isCdnHost } from './turbo.mjs';
+import { decodePlaylist, browserCookie, isCdnHost, masterPlaylist } from './turbo.mjs';
 
 // Build a PlayerJS-style blob: junk prefix + base64 JSON with "//" + btoa("c/c/c") markers spliced in.
 const cfg = { lang: 'en', file: [{ title: 'Season 1', folder: [{ title: 'Episode 1', folder: [{ title: '(RU) DUB', file: '[720p]https://cdn-x.obrut.show/stream/a,[Auto]https://cdn-x.obrut.show/stream/b' }] }] }] };
@@ -26,3 +26,18 @@ console.log('turbo browserCookie OK');
 // CDN host check for the redirect hop
 assert.ok(isCdnHost('lucky.z.superdupercdn.com') && !isCdnHost('superdupercdn.com.evil.com'));
 console.log('turbo isCdnHost OK');
+
+// masterPlaylist
+const B = 'https://lucky.z.superdupercdn.com/tvseries/abc/sig:2026/';
+const master = masterPlaylist({ base: B, tracks: [{ n: 1, name: 'TVShows' }, { n: 3, name: 'Original "x"' }], def: 3, qualities: [720, 1080], audioQ: 240 });
+assert.equal(master, [
+  '#EXTM3U',
+  '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="TVShows",DEFAULT=NO,AUTOSELECT=YES,URI="' + B + '240.mp4:hls:manifest-v1-a1.m3u8"',
+  '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Original  x",DEFAULT=YES,AUTOSELECT=YES,URI="' + B + '240.mp4:hls:manifest-v1-a3.m3u8"',
+  '#EXT-X-STREAM-INF:BANDWIDTH=2892000,RESOLUTION=1280x720,AUDIO="aud"',
+  B + '720.mp4:hls:manifest-v1.m3u8',
+  '#EXT-X-STREAM-INF:BANDWIDTH=5592000,RESOLUTION=1920x1080,AUDIO="aud"',
+  B + '1080.mp4:hls:manifest-v1.m3u8',
+].join('\n') + '\n');
+assert.equal(masterPlaylist({ base: B, tracks: [{ n: 1, name: 'TVShows' }, { n: 3, name: 'Original "x"' }], def: 3, qualities: [720, 999, 1080], audioQ: 240 }), master, 'unknown quality skipped');
+console.log('turbo master OK');

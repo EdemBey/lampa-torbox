@@ -99,6 +99,24 @@ const json = (res, status, body) => {
   res.end(JSON.stringify(body));
 };
 
+// Bandwidth and resolution from the CDN's own hls.m3u8.
+const QUALITY = { 240: [406000, '426x240'], 360: [696000, '640x360'], 480: [1328000, '854x480'], 720: [2892000, '1280x720'], 1080: [5592000, '1920x1080'] };
+
+// One master playlist: each voice is an audio rendition of the same file, each quality a video variant.
+export function masterPlaylist({ base, tracks, def, qualities, audioQ }) {
+  const lines = ['#EXTM3U'];
+  for (const t of tracks) {
+    const name = String(t.name).replace(/["\r\n,]/g, ' ').trim().slice(0, 80);
+    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="${name}",DEFAULT=${t.n === def ? 'YES' : 'NO'},AUTOSELECT=YES,URI="${base}${audioQ}.mp4:hls:manifest-v1-a${t.n}.m3u8"`);
+  }
+  for (const q of [...qualities].sort((a, b) => a - b)) {
+    if (!QUALITY[q]) continue;
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${QUALITY[q][0]},RESOLUTION=${QUALITY[q][1]},AUDIO="aud"`);
+    lines.push(`${base}${q}.mp4:hls:manifest-v1.m3u8`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 // Returns true when the request was a Turbo one.
 export async function handleTurbo(req, res, url, base) {
   try {
@@ -156,6 +174,22 @@ export async function handleTurbo(req, res, url, base) {
         return true;
       }
       json(res, 502, { error: 'stream: ' + up.status });
+      return true;
+    }
+
+    if (path === '/turbo/master.m3u8') {
+      let b;
+      try { b = new URL(q.get('base') || ''); } catch { b = null; }
+      if (!b || b.protocol !== 'https:' || !isCdnHost(b.hostname) || !b.pathname.endsWith('/') || b.search || b.hash) { json(res, 400, { error: 'bad base' }); return true; }
+      const tracks = q.getAll('a').map((a) => { const m = a.match(/^(\d{1,2}):([\s\S]*)$/); return m && { n: Number(m[1]), name: m[2] }; });
+      if (!tracks.length || tracks.length > 32 || tracks.some((t) => !t)) { json(res, 400, { error: 'bad tracks' }); return true; }
+      const def = Number(q.get('d') ?? tracks[0].n);
+      const audioQ = Number(q.get('aq') ?? 240);
+      const qualities = (q.get('q') !== null ? [q.get('q')] : (q.get('qs') ?? '240,360,480,720,1080').split(',')).map(Number);
+      const known = [240, 360, 480, 720, 1080];
+      if (!/^\d{1,2}$/.test(q.get('d') ?? '0') || !known.includes(audioQ) || !qualities.every((x) => known.includes(x))) { json(res, 400, { error: 'bad quality' }); return true; }
+      res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+      res.end(masterPlaylist({ base: b.href, tracks, def, qualities, audioQ }));
       return true;
     }
 
