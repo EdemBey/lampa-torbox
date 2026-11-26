@@ -689,7 +689,7 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   const own = [watch.yummy, watch.groups];
   let calls = 0;
   watch.yummy = (c, call) => { calls++; call([24, 13, 13, 13]); };
-  watch.groups = (c, call) => { call([24, 13, 13, 13]); call([1]); };
+  watch.groups = (c, all, call) => { call([24, 13, 13, 13]); call([1]); };
   const card = { id: 60, original_name: 'T', original_title: 'T', source: 'tmdb', anime: true, number_of_seasons: 1, seasons: [{ season_number: 1, episode_count: 63 }] };
   const items = [];
   for (let i = 1; i <= 13; i++) items.push({ season: '2', episode: String(i) });
@@ -745,7 +745,7 @@ function q(extra) { return Object.assign({ src: '', balancer: 'rezka2' }, extra)
   for (const k in store) delete store[k];
   watch.alts = null;
   const ownGet = animeSkip.get, ownG = watch.groups;
-  watch.groups = (c, call) => call(0);
+  watch.groups = (c, all, call) => call(0);
   const eps = { '/anime/a1?need_videos=false': 24, '/anime/a2?need_videos=false': 13, '/anime/3?need_videos=false': 13, '/anime/a4?need_videos=false': 0 };
   animeSkip.get = (path, ok, fail) => {
     if (path === '/anime?limit=1&kp_ids=77') return ok([{ anime_id: 1, anime_url: 'a1' }]);
@@ -774,7 +774,7 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   let altCalls = 0;
   const ownY = watch.yummy; const ownG = watch.groups;
   watch.yummy = (c, call) => { altCalls++; call(0); };
-  watch.groups = (c, call) => { altCalls++; call(0); };
+  watch.groups = (c, all, call) => { altCalls++; call(0); };
   const card = { id: 77, original_name: 'N', original_title: 'N', source: 'tmdb', seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
   const element = { season: '1', episode: '13' };
   const items = [element];
@@ -788,7 +788,7 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   for (const k in viewed) delete viewed[k];
   for (const k in store) delete store[k];
   const ownY = watch.yummy, ownG = watch.groups;
-  watch.yummy = (c, call) => call(0); watch.groups = (c, call) => call(0);
+  watch.yummy = (c, call) => call(0); watch.groups = (c, all, call) => call(0);
   watch.splits = null; watch.alts = null; watch.cached = undefined; watch.asks = [];
   const card = { id: 70, original_title: 'R', anime: true, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
   const items = [{ season: '2', episode: '1' }, { season: '2', episode: '2' }];
@@ -845,7 +845,7 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   store['online_mod_watch_map'] = { tmdb_81: { std: 1, t: 1, c: [12, 12] } };
   const card81 = { id: 81, original_title: 'N', anime: true, number_of_seasons: 2, seasons: [{ season_number: 1, episode_count: 12 }, { season_number: 2, episode_count: 12 }] };
   const ownY = watch.yummy, ownG = watch.groups;
-  watch.yummy = (c, call) => call(0); watch.groups = (c, call) => call(0);
+  watch.yummy = (c, call) => call(0); watch.groups = (c, all, call) => call(0);
   const el = { season: '2', episode: '3' };
   assert.strictEqual(watch.hashOf(card81, 'x', el, [el], 2), 'h:23N');
   card81.seasons[0].episode_count = 13;
@@ -1089,7 +1089,7 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   for (const s in store) delete store[s];
   watch.alts = null;
   const ownGet = animeSkip.get, ownG = watch.groups;
-  watch.groups = (c, call) => call(0);
+  watch.groups = (c, all, call) => call(0);
   const eps = { '/anime/p1?need_videos=false': [24, 100], '/anime/p2?need_videos=false': [13, 200] };
   animeSkip.get = (path, ok, fail) => {
     if (path === '/anime?limit=1&kp_ids=88') return ok([{ anime_id: 1, anime_url: 'p1' }]);
@@ -1212,6 +1212,124 @@ assert.strictEqual(watch.place({}, { 1: 24, 2: 13 }, true, { src: '', balancer: 
   assert.deepStrictEqual(watch.splits, {});
   assert.strictEqual(watch.altOf({ id: 1 }), null);
   assert.deepStrictEqual(watch.alts, {});
+}
+
+// TMDB's Absolute episode group places a one-season, absolutely numbered source (One Piece)
+{
+  const runs = [[1,1,1,4],[5,1,6,1],[6,1,5,1],[7,1,7,8],[15,1,19,1],[16,1,15,1],[17,1,17,1],[18,1,16,1],[19,1,18,1],[20,1,20,42],[62,2,62,16],[78,3,78,14],[92,4,92,39],[131,5,131,13],[144,6,144,52],[196,7,196,33],[229,8,229,35],[264,9,264,73],[337,10,337,45],[382,11,382,26],[408,12,408,14],[422,13,422,101],[523,14,523,58],[581,15,581,62],[643,16,643,50],[693,17,693,56],[749,18,749,55],[804,19,804,74],[878,20,878,14],[892,21,892,197],[1089,22,1089,43],[1132,22,1133,1],[1133,22,1132,1],[1134,22,1134,22],[1156,23,1156,25]];
+  const sizes = [61, 16, 14, 39, 13, 52, 33, 35, 73, 45, 26, 14, 101, 58, 62, 50, 56, 55, 74, 14, 197, 67, 25];
+  const counts = {};
+  sizes.forEach((n, i) => { counts[i + 1] = n; });
+
+  // absolute(): position -> TMDB season and episode_number
+  assert.deepStrictEqual(watch.absolute(runs, 1112), { season: 22, episode: 1112 });
+  assert.deepStrictEqual(watch.absolute(runs, 66), { season: 2, episode: 66 });
+  assert.deepStrictEqual(watch.absolute(runs, 1180, counts), { season: 23, episode: 1180 });
+  assert.deepStrictEqual(watch.absolute(runs, 1181, counts), { season: 23, episode: 1181 });
+  // a group that ends before TMDB's last season is stale: beyond it is unknown
+  assert.strictEqual(watch.absolute(runs.filter((r) => r[1] <= 20), 1181, counts), null);
+  assert.deepStrictEqual(watch.absolute(runs.filter((r) => r[1] <= 20), 877, counts), { season: 19, episode: 877 });
+  assert.deepStrictEqual(watch.absolute(runs, 5), { season: 1, episode: 6 });
+  assert.strictEqual(watch.absolute(runs, 0), false);
+  assert.deepStrictEqual(watch.absolute([[1, 1, 1, 26], [27, 2, 1, 24]], 30), { season: 2, episode: 4 });
+
+  const alt = { a: runs, ys: ['21', '60108'], y: [1180, 21], g: 0 };
+  const one = (extra) => Object.assign({ src: '', balancer: 'alloha', season: 1, episode: 1112, min: 1, max: 1155, seasons: 1, split: false }, extra);
+  assert.deepStrictEqual(watch.place({}, counts, true, one(), alt), { season: 22, episode: 1112 });
+  assert.deepStrictEqual(watch.place({}, counts, true, one({ episode: 66 }), alt), { season: 2, episode: 66 });
+  // Kodik's entry of the main TV part, not another one
+  assert.deepStrictEqual(watch.place({}, counts, true, one({ src: 'shiki:21', balancer: 'kodik' }), alt), { season: 22, episode: 1112 });
+  assert.strictEqual(watch.place({}, counts, true, one({ src: 'shiki:60108', balancer: 'kodik' }), alt), null);
+  // a saved answer still wins
+  assert.strictEqual(watch.place({ 'alloha:1': 0 }, counts, true, one(), alt), false);
+  // not through absolute (max 1150 is no whole run of seasons, so the old rules give null): two seasons, a franchise part,
+  // a Lampa split, a season not counted from 1, a short list
+  assert.strictEqual(watch.place({}, counts, true, one({ seasons: 2, max: 1150 }), alt), null);
+  assert.strictEqual(watch.place({}, counts, true, one({ part: { index: -2 }, max: 1150 }), alt), null);
+  assert.strictEqual(watch.place({}, counts, true, one({ split: true, max: 1150 }), alt), null);
+  assert.strictEqual(watch.place({}, counts, true, one({ min: 2, max: 1150 }), alt), null);
+  assert.deepStrictEqual(watch.place({}, counts, true, one({ max: 40, episode: 3 }), alt), { season: 1, episode: 3 });
+  // a short count that is no whole run of seasons is not taken as absolute numbering
+  assert.strictEqual(watch.place({}, { 1: 12, 2: 12 }, true, one({ episode: 13, max: 14 }), { a: [[1, 1, 1, 12], [13, 2, 1, 12]] }), null);
+  // without the group: the old behaviour (a count that is not a whole season run is not proven)
+  // (a count that is a whole run of seasons still gets canon()'s per-season number, as before)
+  assert.strictEqual(watch.place({}, counts, true, one({ max: 1150 }), { a: 0, ys: ['21'], y: [1180] }), null);
+  assert.strictEqual(watch.place({}, counts, true, one({ max: 1150 })), null);
+  assert.deepStrictEqual(watch.place({}, counts, true, one(), { a: 0 }), { season: 22, episode: 24 });
+
+  // «Продолжить» on absolutely numbered seasons (S22 = 1089..1155): the next number, not S23E1
+  {
+    const rec = (s, e) => ({ p: { season: s, episode: e }, s: s - 1 });
+    assert.deepStrictEqual(watch.resumeTarget(rec(22, 1112), counts, 95, runs), { pin: { season: 22, episode: 1113 }, s: 21 });
+    assert.deepStrictEqual(watch.resumeTarget(rec(1, 61), counts, 95, runs), { pin: { season: 2, episode: 62 }, s: 0 });
+    assert.deepStrictEqual(watch.resumeTarget(rec(22, 1155), counts, 95, runs), { pin: { season: 23, episode: 1156 }, s: 21 });
+    assert.deepStrictEqual(watch.resumeTarget(rec(22, 1112), counts, 40, runs), { pin: { season: 22, episode: 1112 }, s: 21 });
+    assert.deepStrictEqual(watch.resumeTarget(rec(22, 1112), counts, 95), { pin: { season: 22, episode: 1113 }, s: 21 });
+    // the last season runs on past what TMDB knows
+    assert.deepStrictEqual(watch.resumeTarget(rec(23, 1180), counts, 95, runs), { pin: { season: 23, episode: 1181 }, s: 22 });
+    // a per-season show is unchanged, with or without runs
+    assert.deepStrictEqual(watch.resumeTarget(rec(2, 12, 1), { 1: 12, 2: 12, 3: 10 }, 95, [[1, 1, 1, 12], [13, 2, 1, 12], [25, 3, 1, 10]]), { pin: { season: 3, episode: 1 }, s: 2 });
+
+    // startSeason opens on the same season for a finished S22E1112 and on the next for a finished S22E1155
+    for (const k in viewed) delete viewed[k];
+    const card = { id: 37854, original_title: 'OP', seasons: sizes.map((n, i) => ({ season_number: i + 1, episode_count: n })) };
+    const saved = watch.alts;
+    watch.alts = { tmdb_37854: { t: 1, a: runs } };
+    store.online_mod_resume = { tmdb_37854: { b: 'kodik', v: '', s: 0, p: { season: 22, episode: 1112 }, t: 500 } };
+    viewed['h:22:1112OP'] = { percent: 95 };
+    assert.strictEqual(watch.startSeason(card), 22);
+    store.online_mod_resume = { tmdb_37854: { b: 'kodik', v: '', s: 0, p: { season: 22, episode: 1155 }, t: 500 } };
+    viewed['h:22:1155OP'] = { percent: 95 };
+    assert.strictEqual(watch.startSeason(card), 23);
+    watch.alts = { tmdb_37854: { t: 1, a: 0 } };
+    assert.strictEqual(watch.startSeason(card), 22);
+    watch.alts = saved;
+    for (const k in viewed) delete viewed[k];
+    store.online_mod_resume = undefined;
+  }
+
+  // runs(): the smallest type 2 group, season 0 left out, positions not raw orders (a repeated order keeps TMDB's sequence)
+  const net = {
+    'tv/7/episode_groups': { results: [{ id: 'x6', type: 6 }, { id: 'big', type: 2, episode_count: 9 }, { id: 'abs', type: 2, episode_count: 5 }] },
+    'tv/episode_group/abs': { groups: [
+      { episodes: [{ order: 0, season_number: 0, episode_number: 1 }] },
+      { episodes: [
+        { order: 2, season_number: 2, episode_number: 1 },
+        { order: 0, season_number: 1, episode_number: 1 },
+        { order: 1, season_number: 1, episode_number: 2 },
+        { order: 1, season_number: 1, episode_number: 3 },
+        { order: 5, season_number: 2, episode_number: 2 }
+      ] }
+    ] }
+  };
+  const asked = [];
+  Lampa.TMDB = { api: (p) => p, key: () => 'k' };
+  Lampa.Reguest = function () {
+    this.timeout = () => {};
+    this.silent = (url, ok, fail) => { const k = url.replace(/\?api_key=k$/, ''); asked.push(k); if (net[k]) ok(net[k]); else fail(); };
+  };
+  const two = [{ season_number: 1, episode_count: 3 }, { season_number: 2, episode_count: 2 }];
+  const card7 = { id: 7, source: 'tmdb', seasons: two, original_name: 'X', original_title: 'X' };
+  let got;
+  const list = net['tv/7/episode_groups'].results;
+  watch.runs(card7, list, (r) => { got = r; });
+  assert.deepStrictEqual(got, [[1, 1, 1, 3], [4, 2, 1, 2]]);
+  // one TMDB season, no type 2 group, a failed request: 0
+  watch.runs({ id: 7, source: 'tmdb', seasons: [two[0]] }, list, (r) => { got = r; });
+  assert.strictEqual(got, 0);
+  watch.runs(card7, [{ id: 'x6', type: 6 }], (r) => { got = r; });
+  assert.strictEqual(got, 0);
+  watch.runs(card7, [{ id: 'gone', type: 2, episode_count: 1 }], (r) => { got = r; });
+  assert.strictEqual(got, 0);
+
+  // alt() asks the group list once for the Seasons group and the Absolute runs
+  watch.alts = {};
+  asked.length = 0;
+  watch.alt(card7);
+  assert.strictEqual(asked.filter((k) => k === 'tv/7/episode_groups').length, 1);
+  assert.deepStrictEqual(watch.altOf(card7).a, [[1, 1, 1, 3], [4, 2, 1, 2]]);
+  assert.strictEqual(watch.altOf(card7).g, 0);
+  watch.alts = null;
 }
 
 // plugin URL parameters (ultra?lampac=…&alloha=…), also when Lampa appends its own query after them
