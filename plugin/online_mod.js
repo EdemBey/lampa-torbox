@@ -16547,7 +16547,9 @@
               info: ' / ' + Lampa.Utils.shortText(voice, 50),
               season: choice.season + 1,
               episode: n,
-              file: media.file
+              file: media.file,
+              voices: ep.folder || [],
+              voice: voice
             });
           });
         } else if (extract.movie) {
@@ -16563,6 +16565,93 @@
         }
 
         return filtred;
+      }
+
+      // The player's voice menu lists the episode's voices; picking one resolves its file and swaps the stream in place.
+      function voiceoversFor(element, data, items) {
+        var list = (element.voices || []).filter(function (v) {
+          return v.file;
+        });
+        if (list.length < 2) return undefined;
+        var cur = -1;
+        list.forEach(function (v, i) {
+          if (cur == -1 && v.title === element.voice) cur = i;
+        });
+        return list.map(function (m, i) {
+          var track = {
+            name: m.title,
+            selected: i == cur
+          };
+          // Same `enabled` handling as Alloha's audio tracks: the menu moves the check mark itself.
+          Object.defineProperty(track, 'enabled', {
+            set: function set(v) {
+              if (!v || i == cur) return;
+              var prev = cur;
+              cur = i;
+              switchVoice(element, data, items, m, function () { cur = prev; });
+            },
+            get: function get() {
+              return i == cur;
+            }
+          });
+          return track;
+        });
+      }
+
+      function switchVoice(element, data, items, v, revert) {
+        if (!(Lampa.PlayerPanel && Lampa.PlayerPanel.listener)) return;
+        var t = data.voiceReq = {};
+        var now = Lampa.Player.playdata && Lampa.Player.playdata() ? Lampa.Player.playdata().url : data.url;
+        getStream({ file: v.file }, function (res) {
+          if (data.voiceReq !== t) return;
+          var q = component.renameQualityMap(res.qualitys) || {};
+          var quality = data.quality || {};
+          var hit = '';
+          Object.keys(quality).forEach(function (k) {
+            if (!hit && quality[k] === now) hit = k;
+          });
+          Object.keys(quality).forEach(function (k) {
+            if (!hit && quality[k] === data.url) hit = k;
+          });
+          // The player's quality menu holds this object by reference, so it is updated in place.
+          Object.keys(quality).forEach(function (k) {
+            if (k in q) quality[k] = q[k];
+            else delete quality[k];
+          });
+          var url = hit && q[hit] ? q[hit] : component.getDefaultQuality(res.qualitys, res.stream, undefined, true);
+          data.url = url;
+          element.file = v.file;
+          element.voice = v.title;
+          element.stream = res.stream;
+          element.stream_time = res.stream_time;
+          element.qualitys = res.qualitys;
+          // Playlist entries already resolved get their url function back, so they resolve again with this voice.
+          items.forEach(function (e) {
+            if (e === element) return;
+            var m = (e.voices || []).filter(function (x) {
+              return x.title === v.title;
+            })[0];
+            if (!m) return;
+            e.file = m.file;
+            e.voice = v.title;
+            e.stream = null;
+            if (e.cell && e.cell.resolve) {
+              e.cell.url = e.cell.resolve;
+              e.cell.voiceovers = voiceoversFor(e, e.cell, items);
+            }
+          });
+          var inx = filter_items.voice.indexOf(v.title);
+          if (inx !== -1) {
+            choice.voice = inx;
+            choice.voice_name = v.title;
+            component.saveChoice(choice);
+          }
+          Lampa.PlayerPanel.listener.send('quality', { name: hit || 'auto', url: url });
+        }, function () {
+          if (data.voiceReq !== t) return;
+          if (revert) revert();
+          Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+        });
       }
 
       // "[720p]url,[Auto]url" → one link is resolved and the other qualities are derived from it; the player loads it directly.
@@ -16663,6 +16752,8 @@
                 timeline: element.timeline,
                 title: element.season ? element.title : select_title + (element.title == select_title ? '' : ' / ' + element.title)
               };
+              // shortcut: `first` has no resolver, so a voice picked on a later episode reaches it only after reopening from the list; give it one if users go back in the player.
+              first.voiceovers = voiceoversFor(element, first, items);
 
               if (element.season && Lampa.Platform.version) {
                 var playlist = [];
@@ -16673,12 +16764,20 @@
                     var cell = {
                       anime_skip: skipOf(elem),
                       url: function url(call) {
+                        var f = elem.file;
                         getStream(elem, function (elem) {
+                          // The voice changed while this resolved: resolve again with the new file.
+                          if (elem.file !== f) {
+                            elem.stream = null;
+                            return cell.resolve(call);
+                          }
                           cell.url = component.getDefaultQuality(elem.qualitys, elem.stream, undefined, true);
                           cell.quality = component.renameQualityMap(elem.qualitys);
                           cell.subtitles = elem.subtitles;
+                          cell.voiceovers = voiceoversFor(elem, cell, items);
                           call();
                         }, function () {
+                          if (elem.file !== f) return cell.resolve(call);
                           cell.url = '';
                           call();
                         });
@@ -16686,6 +16785,9 @@
                       timeline: elem.timeline,
                       title: elem.title
                     };
+                    cell.resolve = cell.url;
+                    cell.voiceovers = voiceoversFor(elem, cell, items);
+                    elem.cell = cell;
                     playlist.push(cell);
                   }
                 });
