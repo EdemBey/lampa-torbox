@@ -13,7 +13,7 @@
     { "src": "seasons.js", "about": "Сезон и серия на карточках сериалов; наша копия tvigl seasons.js (YummyAnime через TMDB id), локально" },
     { "src": "https://tvigl.github.io/plugins/WikiFind.js", "about": "Wiki о фильме; tvigl, с его сайта" },
     { "src": "snow.js", "about": "Снег, оседающий на карточках; наша копия tvigl new_year2.js, локально" },
-    { "src": "https://tvigl.github.io/plugins/new_year3.js", "about": "Новогодняя гирлянда; tvigl, с его сайта" },
+    { "src": "garland.js", "about": "Новогодняя гирлянда; наша копия tvigl new_year3.js, локально" },
     { "src": "https://hub.alcopa.cc/dl/opensubs_menu/v1.2.9/plugin.js", "about": "Субтитры OpenSubtitles в плеере (v1.2.9); hub.alcopa.cc, с их сайта" },
     { "src": "https://mylampa1.github.io/buttons.js", "about": "Редактор кнопок в карточке: порядок, скрытие, вид, папки; mylampa1, с его сайта" },
     { "src": "buttons_fix.js", "about": "Кнопки в карточке в один ряд с прокруткой, постер не прыгает; наш, локально" },
