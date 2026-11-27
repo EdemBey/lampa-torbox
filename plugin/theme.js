@@ -36,6 +36,7 @@
     np.disabled = !(isOn() && !poster);
     if (!isOn() && document.body) document.body.classList.remove('lampa-theme--card-down');
     bbSync();
+    diagApply(); // DIAG-TEMP
   }
 
   function addSetting() {
@@ -63,7 +64,66 @@
       field: { name: 'Афиша на главной', description: 'Описание и рейтинги выбранной карточки над рядами' },
       onChange: apply
     });
+    // DIAG-TEMP begin
+    Lampa.SettingsApi.addParam({
+      component: 'lampa_theme',
+      param: {
+        name: DIAG_KEY,
+        type: 'select',
+        values: { off: 'Выкл', mask: 'Без маски прокрутки', shadow: 'Без теней карточек', filter: 'Без фильтра фона', backdrop: 'Без размытия', grad: 'Без градиентных слоёв', radius: 'Без скруглений и рамки фокуса', bgfast: 'Без быстрой смены фона', all: 'Без всего перечисленного' },
+        default: 'off'
+      },
+      field: { name: 'Диагностика (временно)', description: 'Отключает части оформления для замера производительности на ТВ' },
+      onChange: apply
+    });
+    // DIAG-TEMP end
   }
+
+  // DIAG-TEMP begin
+  // Each group cancels theme rules only; classes sit on body, selectors repeat the originals with one more class (billboard rules are injected later with !important).
+  var DIAG_KEY = 'lampa_theme_diag';
+  var DIAG_GROUPS = ['mask', 'shadow', 'filter', 'backdrop', 'grad', 'radius'];
+  var DIAG_CSS = [
+    // mask: theme mask-image on the card page backdrop and on the billboard row scroller
+    'body.lampa-theme-diag--mask .full-start__background.loaded,body.lampa-theme-diag--mask .full-start__background{-webkit-mask-image:none!important;mask-image:none!important}',
+    'body.lampa-theme-diag--mask.lampa-theme--billboard .activity--active .activity__body>div>.scroll{-webkit-mask-image:none!important;mask-image:none!important}',
+    // shadow: card and row-title shadows, focus shadow and the box-shadow transition
+    'body.lampa-theme-diag--shadow .card__view,body.lampa-theme-diag--shadow .card.focus .card__view{box-shadow:none!important;-webkit-transition:none!important;transition:none!important}',
+    'body.lampa-theme-diag--shadow .card__title,body.lampa-theme-diag--shadow .card__age,body.lampa-theme-diag--shadow .items-line__title{text-shadow:none!important}',
+    'body.lampa-theme-diag--shadow .items-line__title:before{box-shadow:none!important}',
+    // filter: brightness/saturate on the background layers and the card page backdrop
+    'body.lampa-theme-diag--filter .background__one,body.lampa-theme-diag--filter .background__two,body.lampa-theme-diag--filter .background__fade,body.lampa-theme-diag--filter .full-start__background.loaded,body.lampa-theme-diag--filter .full-start__background{-webkit-filter:none!important;filter:none!important}',
+    // backdrop: every backdrop-filter of the theme
+    'body.lampa-theme-diag--backdrop .wrap__left:before,body.lampa-theme-diag--backdrop .full-descr__text,body.lampa-theme-diag--backdrop .modal.lampa-descr-modal{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}',
+    // grad: fullscreen gradient layers
+    'body.lampa-theme-diag--grad .background:after,body.lampa-theme-diag--grad .lampa-bb-shade{display:none!important}',
+    'body.lampa-theme-diag--grad .full-start-new{background:none!important}',
+    // radius: card rounding, the theme focus-ring geometry and the focus scale
+    'body.lampa-theme-diag--radius .card__view,body.lampa-theme-diag--radius .card__img{border-radius:0!important}',
+    'body.lampa-theme-diag--radius .card.focus .card__view:after{border-radius:0!important}',
+    'body.lampa-theme-diag--radius .card.focus,body.lampa-theme-diag--radius .full-person.focus,body.lampa-theme-diag--radius .full-episode.focus{-webkit-transform:none!important;transform:none!important}',
+    'body.lampa-theme-diag--radius .card{-webkit-transition:none!important;transition:none!important}'
+  ].join('\n');
+
+  function diagVal() {
+    var v = 'off';
+    try { if (window.Lampa && Lampa.Storage) v = String(Lampa.Storage.get(DIAG_KEY, 'off')); } catch (e) {}
+    return v;
+  }
+
+  function diagApply() {
+    if (!document.body || !document.head) return;
+    var st = document.getElementById('lampa-theme-diag-css');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'lampa-theme-diag-css';
+      st.appendChild(document.createTextNode(DIAG_CSS));
+      document.head.appendChild(st);
+    }
+    var v = isOn() ? diagVal() : 'off';
+    for (var i = 0; i < DIAG_GROUPS.length; i++) document.body.classList.toggle('lampa-theme-diag--' + DIAG_GROUPS[i], v === DIAG_GROUPS[i] || v === 'all');
+  }
+  // DIAG-TEMP end
 
   // Background canvases load with crossOrigin; a TMDB URL cached earlier by a plain <img> (card page) then fails CORS.
   // A fixed query param gives the canvas its own cache entry.
@@ -90,6 +150,7 @@
         clearTimeout(timer);
         return origChange.call(B, url);
       }
+      if (diagVal() === 'bgfast' || diagVal() === 'all') { latest = ''; clearTimeout(timer); return origChange.call(B, url); } // DIAG-TEMP
       latest = url;
       clearTimeout(timer);
       timer = setTimeout(function () {
