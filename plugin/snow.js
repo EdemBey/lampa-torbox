@@ -812,6 +812,23 @@ function resetAccumulationHard(reason) {
   }
 
   var PILE_H = 14; var PILE_MAX = 260; var debris = [];
+  // Pile sizes are written for the reference window (Lampa body font 1440 / 84.17 = 17.1 px): they follow the interface scale, so a grain keeps its share of the card
+  var UI_REF = 1440 / 84.17, pileUi = 1, settleMul = 1;
+  function refreshPileScale() {
+    var f = 0, u = 1, m = 1;
+    try { f = parseFloat(document.body.style.fontSize) || parseFloat(getComputedStyle(document.body).fontSize); } catch (e) {}
+    if (f) u = Math.max(0.5, Math.min(2, f / UI_REF));
+    if (Math.abs(u - 1) < 0.03) u = 1;
+    // landings per card follow flake density and card width; grains cover u*u/u of the pile: m keeps the fill time of the reference window
+    try {
+      var den = num(storageGet(KEY_DENSITY, 0), 0) | 0;
+      if (den < 0 || den > 3) den = 0;
+      m = (getTargetByDensity(den, 'desktop') / (1440 * 900)) / (cfg_flakes / ((W || 1) * (H || 1))) / u;
+    } catch (e2) {}
+    if (!(m > 0) || u === 1) m = 1; // reference scale: exactly the old settling, whatever the window area
+    settleMul = Math.abs(m - 1) < 0.03 ? 1 : Math.max(0.25, Math.min(2, m));
+    pileUi = u;
+  }
   var PILE_STORE = 'snowfx_piles_v1'; var PILE_KEYS_MAX = 500; var pileSaved = null; var pileDirty = false; var pileSavedAt = 0;
 
   function pileStore() {
@@ -880,11 +897,12 @@ function resetAccumulationHard(reason) {
 
       var c = document.createElement('canvas');
       c.className = 'snowfx_pile';
-      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:' + PILE_H + 'px;pointer-events:none;z-index:3;';
+      var ui = pileUi, ph = Math.max(4, Math.round(PILE_H * ui)); // whole CSS px: no blur at DPR 2
+      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:' + ph + 'px;pointer-events:none;z-index:3;';
       var dpr2 = (window.devicePixelRatio || 1);
       if (dpr2 > 2) dpr2 = 2;
       c.width = (w * dpr2) | 0;
-      c.height = (PILE_H * dpr2) | 0;
+      c.height = (ph * dpr2) | 0;
       var ctx = c.getContext('2d');
       if (!ctx) return null;
       ctx.setTransform(dpr2, 0, 0, dpr2, 0, 0);
@@ -892,7 +910,7 @@ function resetAccumulationHard(reason) {
       try { el.appendChild(c); } catch (e3) { return null; }
 
       var key = pileKey(el);
-      var pnew = { canvas: c, ctx: ctx, w: w, dots: [], key: key, seed: seedOf(key || 'x') };
+      var pnew = { canvas: c, ctx: ctx, w: w, ui: ui, ph: ph, dots: [], key: key, seed: seedOf(key || 'x') };
       el.__snowfx_pile__ = pnew;
 
       if (key && spriteDot) {
@@ -902,13 +920,13 @@ function resetAccumulationHard(reason) {
           if (cnt > PILE_MAX) cnt = PILE_MAX;
           for (var i = 0; i < cnt; i++) {
             var x = nextRand(pnew) * w;
-            var depth = Math.min(PILE_H - 3, 2 + i / 25);
+            var depth = Math.min(PILE_H - 3, 2 + i / 25) * ui;
             var y = nextRand(pnew) * depth;
             var r = (0.8 + nextRand(pnew) * 1.4) * (cfg_size_mult || 1);
             var a = 0.5 + nextRand(pnew) * 0.4;
             pnew.dots.push({ x: x, y: y, r: r, a: a });
             pnew.ctx.globalAlpha = a;
-            var sz = (r * 2) | 0;
+            var sz = ((r * 2) | 0) * ui;
             pnew.ctx.drawImage(spriteDot, x, y, sz, sz);
             pnew.ctx.globalAlpha = 1;
           }
@@ -925,12 +943,12 @@ function resetAccumulationHard(reason) {
     var p = s.pile || (s.pile = pileOf(s.el));
     if (!p || !spriteDot || p.dots.length >= PILE_MAX) return;
     var lx = x - (s.x1 - 10);
-    var depth = Math.min(PILE_H - 3, 2 + p.dots.length / 25);
+    var ui = p.ui || 1, depth = Math.min(PILE_H - 3, 2 + p.dots.length / 25) * ui;
     var ly = rand(0, depth);
     p.dots.push({ x: lx, y: ly, r: r, a: a });
     p.ctx.globalAlpha = a;
-    var sz = (r * 2) | 0;
-    if (sz > PILE_H - ly) sz = Math.max(1, (PILE_H - ly) | 0);
+    var sz = ((r * 2) | 0) * ui;
+    if (sz > p.ph - ly) sz = Math.max(ui, (((p.ph - ly) / ui) | 0) * ui);
     p.ctx.drawImage(spriteDot, lx, ly, sz, sz);
     p.ctx.globalAlpha = 1;
 
@@ -957,10 +975,10 @@ function resetAccumulationHard(reason) {
     if (p.dots.length > 150) step = Math.ceil(p.dots.length / 150);
     for (var i = 0; i < p.dots.length && debris.length < 600; i += step) {
       var d = p.dots[i];
-      debris.push({ x: rect.left + d.x, y: rect.top + d.y, vx: rand(-0.8, 0.8), vy: rand(0.3, 1.6), r: d.r, a: d.a });
+      debris.push({ x0: rect.left + d.x, y0: rect.top + d.y, t: 0, vx: rand(-0.8, 0.8), vy: rand(0.3, 1.6), r: d.r, u: p.ui || 1, a: d.a });
     }
     p.dots = [];
-    try { p.ctx.clearRect(0, 0, p.w, PILE_H); } catch (e) {}
+    try { p.ctx.clearRect(0, 0, p.w, p.ph); } catch (e) {}
     if (p.key && pileSaved && pileSaved[p.key]) {
       try { delete pileSaved[p.key]; } catch (e2) {}
       pileDirty = true;
@@ -996,6 +1014,7 @@ function resetAccumulationHard(reason) {
   function buildSurfaces() {
     surfaces = [];
     if (cfg_tizen || !cfg_settle) return;
+    refreshPileScale();
 
     var els = getCardElements();
     var max = isAndroid() ? 40 : 55; // ограничиваем, чтобы не жрать CPU
@@ -1143,8 +1162,10 @@ function resetAccumulationHard(reason) {
             if (f.x < s.x1 || f.x > s.x2) continue;
 
             if (f.y >= s.y && f.y <= s.y + 3) {
-              if (allowDeposit(si)) {
+              if (allowDeposit(si * Math.min(1, settleMul))) {
                 depositOnCard(s, f.x, f.r, Math.min(0.9, f.a + 0.15));
+                // smaller grains on a small interface: more of them per landing flake keep the fill time
+                if (settleMul > 1 && Math.random() < settleMul - 1) depositOnCard(s, f.x + rand(-5, 5), f.r * 0.8, Math.min(0.75, f.a));
                 if (Math.random() < settleP(0.55, 0, si)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
                 if (Math.random() < settleP(0.30, 0.85, si)) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.75, Math.min(0.7, f.a));
                 // ускоренное оседание: иногда добавим ещё точку
@@ -1172,19 +1193,19 @@ function resetAccumulationHard(reason) {
     }
 
     if (debris.length && spriteDot) {
-      var k = dt / 16.67;
+      var k = Math.min(dt, 250) / 16.67; // long stall: do not fling the grains out of the screen at once
       for (var di = debris.length - 1; di >= 0; di--) {
         var d = debris[di];
-        d.vy += 0.18 * k;
-        d.x += d.vx * k;
-        d.y += d.vy * k;
-        if (d.y > H + 10) {
+        // age in 60 fps frames; closed form of the old per-frame step (vy += 0.18, y += vy): the same path at any frame rate, a slow frame skips ahead
+        d.t += k;
+        var dy = d.y0 + d.vy * d.t + 0.09 * d.t * (d.t + 1);
+        if (dy > H + 10) {
           debris.splice(di, 1);
           continue;
         }
         fallCtx.globalAlpha = d.a;
-        var ds = (d.r * 2) | 0;
-        fallCtx.drawImage(spriteDot, d.x, d.y, ds, ds);
+        var ds = ((d.r * 2) | 0) * d.u;
+        fallCtx.drawImage(spriteDot, d.x0 + d.vx * d.t, dy, ds, ds);
       }
     }
 
