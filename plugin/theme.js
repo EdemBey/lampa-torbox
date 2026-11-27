@@ -266,7 +266,7 @@
       param: {
         name: DIAG_KEY,
         type: 'select',
-        values: { off: 'Выкл', mask: 'Без маски прокрутки', shadow: 'Без теней карточек', filter: 'Без фильтра фона', backdrop: 'Без размытия', grad: 'Без градиентных слоёв', radius: 'Без скруглений и рамки фокуса', bgfast: 'Без быстрой смены фона', all: 'Без всего перечисленного' },
+        values: { off: 'Выкл', mask: 'Без маски прокрутки', shadow: 'Без теней карточек', filter: 'Без фильтра фона', backdrop: 'Без размытия', grad: 'Без градиентных слоёв', radius: 'Без скруглений и рамки фокуса', bgfast: 'Без быстрой смены фона', all: 'Без всего перечисленного', shade: 'Быстрый режим: без затемнения афиши', tshadow: 'Быстрый режим: без теней текста', rest: 'Быстрый режим: без маски, скруглений, размытия, быстрой смены фона' }, // DIAG-TEMP
         default: 'off'
       },
       field: { name: 'Диагностика (временно)', description: 'Отключает части оформления для замера производительности на ТВ' },
@@ -278,7 +278,7 @@
   // DIAG-TEMP begin
   // Each group cancels theme rules only; classes sit on body, selectors repeat the originals with one more class (billboard rules are injected later with !important).
   var DIAG_KEY = 'lampa_theme_diag';
-  var DIAG_GROUPS = ['mask', 'shadow', 'filter', 'backdrop', 'grad', 'radius'];
+  var DIAG_GROUPS = ['mask', 'shadow', 'filter', 'backdrop', 'grad', 'radius', 'shade', 'tshadow']; // DIAG-TEMP: shade/tshadow are single-purpose groups, 'rest' reuses mask+radius+backdrop (+bgfast in changeHook)
   var DIAG_CSS = [
     // mask: theme mask-image on the card page backdrop and on the billboard row scroller
     'body.lampa-theme-diag--mask .full-start__background.loaded,body.lampa-theme-diag--mask .full-start__background{-webkit-mask-image:none!important;mask-image:none!important}',
@@ -298,7 +298,12 @@
     'body.lampa-theme-diag--radius .card__view,body.lampa-theme-diag--radius .card__img{border-radius:0!important}',
     'body.lampa-theme-diag--radius .card.focus .card__view:after{border-radius:0!important}',
     'body.lampa-theme-diag--radius .card.focus,body.lampa-theme-diag--radius .full-person.focus,body.lampa-theme-diag--radius .full-episode.focus{-webkit-transform:none!important;transform:none!important}',
-    'body.lampa-theme-diag--radius .card{-webkit-transition:none!important;transition:none!important}'
+    'body.lampa-theme-diag--radius .card{-webkit-transition:none!important;transition:none!important}',
+    // shade: only the billboard poster shade layer (fast-mode check)
+    'body.lampa-theme-diag--shade .lampa-bb-shade{display:none!important}',
+    // tshadow: text shadows only, the card sprite shadow stays
+    'body.lampa-theme-diag--tshadow .card__title,body.lampa-theme-diag--tshadow .card__age,body.lampa-theme-diag--tshadow .items-line__title{text-shadow:none!important}',
+    'body.lampa-theme-diag--tshadow .items-line__title:before{box-shadow:none!important}'
   ].join('\n');
 
   function diagVal() {
@@ -317,7 +322,7 @@
       document.head.appendChild(st);
     }
     var v = isOn() ? diagVal() : 'off';
-    for (var i = 0; i < DIAG_GROUPS.length; i++) document.body.classList.toggle('lampa-theme-diag--' + DIAG_GROUPS[i], v === DIAG_GROUPS[i] || v === 'all');
+    for (var i = 0; i < DIAG_GROUPS.length; i++) document.body.classList.toggle('lampa-theme-diag--' + DIAG_GROUPS[i], v === DIAG_GROUPS[i] || v === 'all' || (v === 'rest' && /^(mask|radius|backdrop)$/.test(DIAG_GROUPS[i])));
   }
   // DIAG-TEMP end
 
@@ -346,7 +351,7 @@
         clearTimeout(timer);
         return origChange.call(B, url);
       }
-      if (diagVal() === 'bgfast' || diagVal() === 'all') { latest = ''; clearTimeout(timer); return origChange.call(B, url); } // DIAG-TEMP
+      if (diagVal() === 'bgfast' || diagVal() === 'rest' || diagVal() === 'all') { latest = ''; clearTimeout(timer); return origChange.call(B, url); } // DIAG-TEMP
       latest = url;
       clearTimeout(timer);
       timer = setTimeout(function () {
