@@ -448,19 +448,33 @@
     return isOn() && v && !!document.documentElement.closest;
   }
 
+  // @module theme-bbsize
+  // Sizes follow the window: Lampa sets body font-size (fs) from the window width, so offsets are in fs and only the rows' top and bottom use the height H.
+  // Reference is a 1440x900 window (fs 17.1): rows start 2 fs above .46 H, a row is 5.5 fs of title + 26.4 card-em of card + 1.35 fs of padding, the cards are .68 em of fs.
+  // The old fixed .6 em for H <= 700 (a 1080p TV reports 540 css px at DPR 2) made TV cards 12% smaller than on a Mac.
+  function bbSize(H, fs) {
+    var bottom = Math.round(H * 0.46), rows = Math.round(bottom - 2 * fs);
+    // ck shrinks below .68 only when the row would not fit above .96 H (short or wide windows)
+    var ck = Math.max(0.45, Math.min(0.68, ((H * 0.96 - rows) / fs - 6.85) / 26.4));
+    return { bottom: bottom, rows: rows, ck: Math.round(ck * 100) / 100, gap: Math.round(2 * fs), tail: Math.round(2.4 * fs), lift: Math.round(0.7 * fs), fade: [Math.round(2.1 * fs), Math.round(3.3 * fs), Math.round(1.4 * fs)] };
+  }
+  // @end theme-bbsize
+
   function bbBuild() {
     var H = window.innerHeight, head = (bbQ('.head') || {}).offsetHeight || 66;
-    var bottom = Math.round(H * 0.45), rows = bottom - 34;
+    var fs = parseFloat(window.getComputedStyle(document.body).fontSize) || 17, z = bbSize(H, fs), rows = z.rows;
     var act = bbQ('.activity--active');
     var actTop = act ? act.getBoundingClientRect().top : head;
     var t = bbQ('.activity--active .items-line__title');
-    var left = t ? Math.round(t.getBoundingClientRect().left) : 112;
-    if (left < 90 || left > 300) left = 112;
+    // the hero text starts at the left edge of the row title (the orange mark), the row's own indent from Lampa
+    // the row's own indent is 1.5 em (Lampa's $offset): the fallback when there is no title. The open side menu moves .wrap__content by a transform that .lampa-bb gets from the CSS below, so it is not counted twice
+    var cl = document.body.classList, left = t && t.offsetWidth ? Math.round(t.getBoundingClientRect().left - (cl.contains('menu--open') && !cl.contains('light--version') ? (cl.contains('menu--always') ? 10 : 15) * fs : 0)) : Math.round(1.5 * fs);
+    if (left < 0 || left > 300) left = Math.round(1.5 * fs);
     // the rows area ends right after one (shrunk) row, so the next row's title never peeks in at any window height
     // rows differ by a few px (caption lines): take the shortest, so a taller row loses only its last blank pixels to the fade
-    var lines = bb.on ? document.querySelectorAll('.activity--active .items-line') : [], m = 0, h = H - rows - 34;
+    var lines = bb.on ? document.querySelectorAll('.activity--active .items-line') : [], m = 0, h = H - rows - z.gap;
     for (var i = 0; i < lines.length && i < 8; i++) if (lines[i].offsetHeight && (!m || lines[i].offsetHeight < m)) m = lines[i].offsetHeight;
-    if (m) h = Math.min(h, m + 41);
+    if (m) h = Math.min(h, m + z.tail);
     h = Math.max(80, h);
     var B = 'body.lampa-theme--billboard ';
     bb.style.textContent =
@@ -471,9 +485,13 @@
       '-webkit-linear-gradient(top,rgba(8,10,16,.55) 0%,rgba(8,10,16,0) 25%,rgba(8,10,16,0) 38%,rgba(8,10,16,.88) 62%,rgba(8,10,16,.95) 100%);' +
       'background:linear-gradient(to right,rgba(8,10,16,.92) 0%,rgba(8,10,16,.7) 38%,rgba(8,10,16,0) 78%),' +
       'linear-gradient(to bottom,rgba(8,10,16,.55) 0%,rgba(8,10,16,0) 25%,rgba(8,10,16,0) 38%,rgba(8,10,16,.88) 62%,rgba(8,10,16,.95) 100%)}' +
-      '.lampa-bb{position:fixed;z-index:3;pointer-events:none;left:' + left + 'px;top:' + head + 'px;height:' + (rows + 12 - head) + 'px;width:46em;max-width:60%;' +
+      '.lampa-bb{position:fixed;z-index:3;pointer-events:none;left:' + left + 'px;top:' + head + 'px;height:' + (rows + z.lift - head) + 'px;width:46em;max-width:60%;' +
       '-webkit-flex-direction:column;flex-direction:column;-webkit-justify-content:flex-end;justify-content:flex-end}' +
       B + '.lampa-bb{display:-webkit-flex;display:flex}' +
+      // the open side menu pushes .wrap__content right by 15em (10em with menu--always); the hero follows it
+      '.lampa-bb{-webkit-transition:-webkit-transform .2s;transition:transform .2s}' +
+      'body.menu--open:not(.light--version) .lampa-bb{-webkit-transform:translate3d(15em,0,0);transform:translate3d(15em,0,0)}' +
+      'body.menu--always.menu--open:not(.light--version) .lampa-bb{-webkit-transform:translate3d(10em,0,0);transform:translate3d(10em,0,0)}' +
       '.lampa-bb__in{padding-bottom:.4em;-webkit-transition:opacity .22s ease,-webkit-transform .22s ease;transition:opacity .22s ease,transform .22s ease}' +
       '.lampa-bb--out .lampa-bb__in{opacity:0;-webkit-transform:translateY(10px);transform:translateY(10px)}' +
       '.lampa-bb__chip{display:inline-block;font-size:.72em;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#fff;background:rgba(255,255,255,.16);border-radius:.4em;padding:.35em .8em;margin-bottom:.9em}' +
@@ -483,9 +501,9 @@
       '.lampa-bb__r{margin-right:1.3em}.lampa-bb__r i{font-style:normal;font-weight:800;margin-right:.15em}' +
       '.lampa-bb__text{font-size:1.05em;line-height:1.5;color:rgba(255,255,255,.85);overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;max-width:42em}' +
       B + '.activity--active .activity__body>div>.scroll{margin-top:' + Math.max(0, Math.round(rows - actTop)) + 'px !important;height:' + h + 'px !important;' +
-      '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) 36px,#000 56px,#000 ' + (h - 24) + 'px,rgba(0,0,0,0) ' + h + 'px) !important}' +
+      '-webkit-mask-image:-webkit-linear-gradient(top,rgba(0,0,0,0) 0,rgba(0,0,0,0) ' + z.fade[0] + 'px,#000 ' + z.fade[1] + 'px,#000 ' + (h - z.fade[2]) + 'px,rgba(0,0,0,0) ' + h + 'px) !important}' +
       'body.search--open .lampa-bb,body.search--open .lampa-bb-shade,body.settings--open .lampa-bb,body.settings--open .lampa-bb-shade,body.selectbox--open .lampa-bb,body.selectbox--open .lampa-bb-shade{display:none !important}' +
-      B + '.activity--active .items-line .card{font-size:' + (H > 700 ? '.68em' : '.6em') + '}' +
+      B + '.activity--active .items-line .card{font-size:' + z.ck + 'em' + '}' +
       B + '.activity--active .items-line .card .card__title{-webkit-line-clamp:2 !important;overflow:hidden !important}';
   }
 
@@ -503,6 +521,7 @@
       if (on) bbCaches(true);
       document.body.classList.toggle('lampa-theme--billboard', on);
       if (on) bbBuild();
+      shadowSync(); // card em changes with the class
       // the rows change height with the class, but Lampa has already scrolled for the old height (stale offset, e.g. back from a card page): make it realign the focused row
       try { Lampa.Activity.active().activity.resize(); } catch (e) {}
       var c = on && bbQ('.activity--active .items-line .card.focus');
@@ -607,6 +626,7 @@
   function bbRebuild() {
     if (!bb.on) return;
     bbBuild();
+    shadowSync();
     try { Lampa.Activity.active().activity.resize(); } catch (e) {}
   }
 
