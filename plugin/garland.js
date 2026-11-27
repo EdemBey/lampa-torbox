@@ -76,6 +76,16 @@
     return isNaN(v) ? def : v;
   }
 
+  // @module garland-flag
+  // Yes/no items are Lampa triggers: stored as 'true'/'false' (read back as a boolean); the old select item stored 0/1
+  function flagOf(v, def) {
+    if (v === true || v === 'true') return 1;
+    if (v === false || v === 'false') return 0;
+    return num(v, def) ? 1 : 0;
+  }
+  // @end garland-flag
+  function flag(key, def) { return flagOf(storageGet(key, def), def); }
+
   // ======= Icon CSS (как snow) =======
   function injectGarlandIconCSS() {
     try {
@@ -257,6 +267,12 @@
     injectGarlandIconCSS();
     if (!window.Lampa || !Lampa.SettingsApi) return;
 
+    // one-time: an old 0/1 value becomes 'true'/'false', so the trigger shows it and the toggle works from it
+    try {
+      var old = Lampa.Storage.get(KEY_ENABLED, '');
+      if (old === 0 || old === 1) Lampa.Storage.set(KEY_ENABLED, old ? 'true' : 'false');
+    } catch (eM) {}
+
     try {
       Lampa.SettingsApi.addComponent({
         component: 'garlandfx',
@@ -268,9 +284,8 @@
         component: 'garlandfx',
         param: {
           name: KEY_ENABLED,
-          type: 'select',
-          values: { 0: tr('off'), 1: tr('on') },
-          "default": 1
+          type: 'trigger',
+          "default": true
         },
         field: {
           name: tr('enabled_name'),
@@ -383,7 +398,7 @@
   var current_key = null;
 
   function chooseMode() {
-    var enabled = num(storageGet(KEY_ENABLED, 1), 1) ? 1 : 0;
+    var enabled = flag(KEY_ENABLED, 1) ? 1 : 0;
     if (!enabled) return 'off';
 
     if (prefersReduceMotion()) return 'canvas';
@@ -987,7 +1002,7 @@ function drawBulb(b, w, now) {
     var last_quality = null;
 
     setInterval(function () {
-      var en = num(storageGet(KEY_ENABLED, 1), 1) | 0;
+      var en = flag(KEY_ENABLED, 1) | 0;
       var mo = num(storageGet(KEY_MODE, 0), 0) | 0;
       var qu = num(storageGet(KEY_QUALITY, 0), 0) | 0;
 

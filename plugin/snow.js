@@ -72,6 +72,27 @@
     return isNaN(v) ? def : v;
   }
 
+  // @module snow-flag
+  // Yes/no items are Lampa triggers: stored as 'true'/'false' (read back as a boolean); the old select items stored 0/1
+  function flagOf(v, def) {
+    if (v === true || v === 'true') return 1;
+    if (v === false || v === 'false') return 0;
+    return num(v, def) ? 1 : 0;
+  }
+  // @end snow-flag
+  function flag(key, def) { return flagOf(storageGet(key, def), def); }
+
+  // one-time: an old 0/1 value becomes 'true'/'false', so the trigger shows it and the toggle works from it
+  function migrateFlags() {
+    try {
+      var ks = [KEY_ENABLED, KEY_IN_CARD, KEY_SETTLE, KEY_SHAKE];
+      for (var i = 0; i < ks.length; i++) {
+        var v = Lampa.Storage.get(ks[i], '');
+        if (v === 0 || v === 1) Lampa.Storage.set(ks[i], v ? 'true' : 'false');
+      }
+    } catch (e) {}
+  }
+
 function isElVisible(el) {
   if (!el) return false;
 
@@ -333,7 +354,7 @@ function isElVisible(el) {
 
     // Оседание: по умолчанию Вкл на Android/ПК, Выкл на Tizen
     var settleDefault = tizen ? 0 : 1;
-    var settle = num(storageGet(KEY_SETTLE, settleDefault), settleDefault) ? 1 : 0;
+    var settle = flag(KEY_SETTLE, settleDefault) ? 1 : 0;
 
     // Тип снежинок: 0 авто, 1 точки, 2 снежинки, 3 смешанные
     var flakeDefault = 0;
@@ -354,7 +375,7 @@ function isElVisible(el) {
 
     // Снег в карточке (детали)
     var inCardDefault = 1;
-    var in_card = num(storageGet(KEY_IN_CARD, inCardDefault), inCardDefault) ? 1 : 0;
+    var in_card = flag(KEY_IN_CARD, inCardDefault) ? 1 : 0;
 
     // Размер снежинок
     var sizeDefault = 0;
@@ -394,7 +415,7 @@ function isElVisible(el) {
   }
 
   function shouldRunNow() {
-    var enabled = num(storageGet(KEY_ENABLED, 1), 1) ? 1 : 0;
+    var enabled = flag(KEY_ENABLED, 1) ? 1 : 0;
     if (!enabled) return false;
     if (in_player) return false;
     if (overlay_open) return false;      // ключевой фикс: не перекрывать настройки
@@ -635,7 +656,7 @@ function resetAccumulationHard(reason) {
 
     stopCaps();
 
-    if (!(num(storageGet(KEY_ENABLED, 1), 1))) { try { removePiles(); } catch (e9) {} }
+    if (!(flag(KEY_ENABLED, 1))) { try { removePiles(); } catch (e9) {} }
 
     // экономим батарею на мобилках
     stopMotion();
@@ -742,10 +763,12 @@ function resetAccumulationHard(reason) {
       if (!r || r.width < 90 || r.height < 90) return false;
 
       // если внутри есть крупная картинка — почти наверняка карточка
-      if (el.querySelector) {
-        var img = el.querySelector('img');
-        if (img) {
-          var ir = img.getBoundingClientRect();
+      // the poster size alone decides for a card view: badges/icons added by plugins or the theme must not hide the card
+      if (el.classList && el.classList.contains('card__view')) return true;
+      if (el.querySelectorAll) {
+        var imgs = el.querySelectorAll('img');
+        for (var q = 0; q < imgs.length; q++) {
+          var ir = imgs[q].getBoundingClientRect();
           if (ir && ir.width > 70 && ir.height > 70) return true;
         }
       }
@@ -972,7 +995,6 @@ function resetAccumulationHard(reason) {
 
   function buildSurfaces() {
     surfaces = [];
-    surfLastBuild = Date.now();
     if (cfg_tizen || !cfg_settle) return;
 
     var els = getCardElements();
@@ -1242,15 +1264,11 @@ function resetAccumulationHard(reason) {
   // 2) плюс "пробник" на случай если Лампа скроллит transform-ом (без scroll event)
   var scrollDebounce = 0;
   var surfTick = 0;
-  // surfaces are rebuilt only while "dirty" (shortly after focus/scroll/key/activity/resize), plus a rare safety rebuild
-  var surfDirtyUntil = 0, surfLastBuild = 0;
-  function markSurfDirty() { surfDirtyUntil = Date.now() + 1500; }
 
   function onAnyScrollLike() {
     if (cfg_tizen || !cfg_settle) return;
     if (!running) return;
 
-    markSurfDirty();
     if (scrollDebounce) return;
     scrollDebounce = setTimeout(function () {
       scrollDebounce = 0;
@@ -1265,8 +1283,6 @@ function resetAccumulationHard(reason) {
     try { document.addEventListener('scroll', onAnyScrollLike, true); } catch (e1) {}
     try { document.addEventListener('wheel', onAnyScrollLike, { passive: true }); } catch (e2) {}
     try { document.addEventListener('touchmove', onAnyScrollLike, { passive: true }); } catch (e3) {}
-    try { document.addEventListener('hover:focus', markSurfDirty, true); } catch (e4) {}
-    try { document.addEventListener('keydown', markSurfDirty, true); } catch (e5) {}
 
     // probe interval
     setInterval(function () {
@@ -1283,10 +1299,8 @@ function resetAccumulationHard(reason) {
       } catch (e) {}
 
       // rects follow cards moved by transform in any direction
-      if (++surfTick % 2 === 0) {
-        var now = Date.now();
-        if (now < surfDirtyUntil || now - surfLastBuild > 5000) buildSurfaces();
-      }
+      // every 500 ms as before: a dirty-flag rebuild left stale surfaces while the TV animated the scroll slowly
+      if (++surfTick % 2 === 0) buildSurfaces();
     }, 250);
   }
   function injectSnowIconCSS() {
@@ -1722,8 +1736,7 @@ function resetAccumulationHard(reason) {
     injectSnowIconCSS();
     if (!window.Lampa || !Lampa.SettingsApi) return;
 
-    var onoff = { 0: snowfx_t('off'), 1: snowfx_t('on') };
-    var yesno = { 0: snowfx_t('no'), 1: snowfx_t('yes') };
+    migrateFlags();
     var density_vals = { 0: snowfx_t('auto'), 1: snowfx_t('density_low'), 2: snowfx_t('density_mid'), 3: snowfx_t('density_high') };
     var style_vals = { 0: snowfx_t('auto'), 1: snowfx_t('style_dots'), 2: snowfx_t('style_flakes'), 3: snowfx_t('style_mixed') };
     var size_vals = { 0: snowfx_t('auto'), 1: snowfx_t('size_small'), 2: snowfx_t('size_medium'), 3: snowfx_t('size_large'), 4: snowfx_t('size_huge') };
@@ -1740,9 +1753,8 @@ function resetAccumulationHard(reason) {
         component: 'snowfx',
         param: {
           name: KEY_ENABLED,
-          type: 'select',
-          values: onoff,
-          "default": 1
+          type: 'trigger',
+          "default": true
         },
         field: {
           name: snowfx_t('enabled_name'),
@@ -1754,9 +1766,8 @@ function resetAccumulationHard(reason) {
         component: 'snowfx',
         param: {
           name: KEY_IN_CARD,
-          type: 'select',
-          values: yesno,
-          "default": 1
+          type: 'trigger',
+          "default": true
         },
         field: {
           name: snowfx_t('in_card_name'),
@@ -1824,9 +1835,8 @@ function resetAccumulationHard(reason) {
         component: 'snowfx',
         param: {
           name: KEY_SETTLE,
-          type: 'select',
-          values: onoff,
-          "default": 1
+          type: 'trigger',
+          "default": !isTizen()
         },
         field: {
           name: snowfx_t('settle_name'),
@@ -1852,9 +1862,8 @@ function resetAccumulationHard(reason) {
         component: 'snowfx',
         param: {
           name: KEY_SHAKE,
-          type: 'select',
-          values: onoff,
-          "default": 1
+          type: 'trigger',
+          "default": !isTizen() && isMobileUA()
         },
         field: {
           name: snowfx_t('shake_name'),
@@ -1877,7 +1886,6 @@ function resetAccumulationHard(reason) {
 
           // save remembered snow on every screen change
           flushPiles(true);
-          markSurfDirty();
 
           // leaving a details page drops poster snow (card snow stays)
           try { eachPile(function (el, c) { var pp = el.__snowfx_pile__; if (!pp || !pp.key) { try { el.removeChild(c); } catch (e) {} el.__snowfx_pile__ = null; } }); } catch (eP) {}
@@ -1888,7 +1896,7 @@ function resetAccumulationHard(reason) {
           try {
             var t = isTizen();
             var sd = (!t && isMobileUA()) ? 1 : 0;
-            var shv = num(storageGet(KEY_SHAKE, sd), sd) | 0;
+            var shv = flag(KEY_SHAKE, sd) | 0;
             setShakeEnabled(!!shv);
           } catch (e3) {}
         });
@@ -1944,7 +1952,7 @@ function resetAccumulationHard(reason) {
     // синхронизируем настройку \"Стряхивание\" (важно: если включили в настройках, когда оверлей открыт, эффект временно выключен и слушатель иначе не стартанёт)
     try {
       var sd = (!cfg_tizen && isMobileUA()) ? 1 : 0;
-      var shv = num(storageGet(KEY_SHAKE, sd), sd) ? 1 : 0;
+      var shv = flag(KEY_SHAKE, sd) ? 1 : 0;
       setShakeEnabled(shv);
     } catch (e0) {}
 
@@ -2036,7 +2044,7 @@ function resetAccumulationHard(reason) {
     setInterval(function () {
       // safety net: loop paused on hidden, but no visibilitychange arrived
       if (running && !rafId && !document.hidden) { lastTs = 0; rafId = requestAnimationFrame(loop); }
-      var en = num(storageGet(KEY_ENABLED, 1), 1) | 0;
+      var en = flag(KEY_ENABLED, 1) | 0;
       // snow is off and was already handled: no layout reads, only the cheap "was it turned on" check
       if (!en && last_enabled === 0) return;
 
@@ -2052,7 +2060,7 @@ function resetAccumulationHard(reason) {
       if (fl > 3) fl = 3;
       // На Tizen по умолчанию "Точки", но пользователь может выбрать "Снежинки/Смешанные" (с ограничениями)
       if (tizen && fl === 0) fl = 1;
-      var se = num(storageGet(KEY_SETTLE, settleDefault), settleDefault) | 0;
+      var se = flag(KEY_SETTLE, settleDefault) | 0;
 
       var sz = num(storageGet(KEY_SIZE, 0), 0) | 0;
       if (sz < 0) sz = 0;
@@ -2068,8 +2076,8 @@ function resetAccumulationHard(reason) {
       if (fs > 3) fs = 3;
 
       var sd = (!tizen && isMobileUA()) ? 1 : 0;
-      var sh = num(storageGet(KEY_SHAKE, sd), sd) | 0;
-      var ic = num(storageGet(KEY_IN_CARD, 1), 1) | 0;
+      var sh = flag(KEY_SHAKE, sd) | 0;
+      var ic = flag(KEY_IN_CARD, 1) | 0;
       ic = ic ? 1 : 0;
       var ov = overlay_open ? 1 : 0;
 
@@ -2159,7 +2167,7 @@ function resetAccumulationHard(reason) {
     try {
       var t = isTizen();
       var sd = (!t && isMobileUA()) ? 1 : 0;
-      setShakeEnabled(!!num(storageGet(KEY_SHAKE, sd), sd));
+      setShakeEnabled(!!flag(KEY_SHAKE, sd));
     } catch (e) {}
 
     if (!window.Lampa && tries < 20) setTimeout(boot, 300);
