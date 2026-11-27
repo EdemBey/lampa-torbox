@@ -430,7 +430,7 @@
     ru: 'Боевик|Приключения|Мультфильм|Комедия|Криминал|Документальный|Драма|Семейный|Фэнтези|История|Ужасы|Музыка|Детектив|Мелодрама|Фантастика|ТВ фильм|Триллер|Военный|Вестерн|Боевик и приключения|Детский|Новости|Реалити|НФ и фэнтези|Мыльная опера|Ток-шоу|Война и политика',
     en: 'Action|Adventure|Animation|Comedy|Crime|Documentary|Drama|Family|Fantasy|History|Horror|Music|Mystery|Romance|Sci-Fi|TV Movie|Thriller|War|Western|Action & Adventure|Kids|News|Reality|Sci-Fi & Fantasy|Soap|Talk|War & Politics'
   };
-  var bb = { root: null, shade: null, style: null, timer: 0, last: null, on: false, genres: {}, kp: {}, sh: {}, cacheAt: 0, rt1: 0, rt2: 0 };
+  var bb = { lines: [], root: null, shade: null, style: null, timer: 0, last: null, on: false, genres: {}, kp: {}, sh: {}, cacheAt: 0, rt1: 0, rt2: 0 };
 
   function bbQ(s, c) { return (c || document).querySelector(s); }
 
@@ -451,6 +451,8 @@
     var ck = Math.max(0.45, Math.min(0.68, ((H * 0.96 - rows) / fs - 6.85) / 26.4));
     return { bottom: bottom, rows: rows, ck: Math.round(ck * 100) / 100, gap: Math.round(2 * fs), tail: Math.round(2.4 * fs), lift: Math.round(0.7 * fs), fade: [Math.round(2.1 * fs), Math.round(3.3 * fs), Math.round(1.4 * fs)] };
   }
+  // cards to have in a row: the window width over the card width (13.8 card-em, measured), rounded up (the last one peeks in), plus one more
+  function bbCount(W, em) { return em > 0 && W > 0 ? Math.min(20, Math.ceil(W / (13.8 * em)) + 1) : 0; }
   // @end theme-bbsize
 
   function bbBuild() {
@@ -515,6 +517,7 @@
       document.body.classList.toggle('lampa-theme--billboard', on);
       if (on) bbBuild();
       shadowSync(); // card em changes with the class
+      if (on) bbFillAll();
       // the rows change height with the class, but Lampa has already scrolled for the old height (stale offset, e.g. back from a card page): make it realign the focused row
       try { Lampa.Activity.active().activity.resize(); } catch (e) {}
       var c = on && bbQ('.activity--active .items-line .card.focus');
@@ -616,10 +619,43 @@
     }, 120);
   }
 
+  // Lampa creates only params.items.view (7) cards in a row and adds more on scroll; the smaller billboard cards need more to fill the width.
+  // The core's own 'scroll' handler (TV platform only: elsewhere it loads the whole row) adds cards up to view + 1, so view is raised for that one call.
+  function bbFill(line) {
+    var v = line.view, a = line.active;
+    try {
+      // cheap exits first (no layout reads): off, not the TV branch, or all the cards are already there
+      if (!bb.on || !line.tv || line.data.results.length <= line.items.length || !line.render(true).closest('.activity--active')) return;
+      // the size comes from the formula, not from offsetWidth: the cards may still be in their font-size transition
+      var fs = parseFloat(window.getComputedStyle(document.body).fontSize) || 17;
+      var n = bbCount(window.innerWidth, bbSize(window.innerHeight, fs).ck * fs);
+      if (n > line.items.length) {
+        line.view = n - 1; // the core loads up to view + 1 ...
+        line.active = 0; // ... when active is 0: for a focused card further along it would load a whole extra page
+        line.emit('scroll');
+      }
+    } catch (e) {} finally {
+      line.view = v;
+      line.active = a;
+    }
+  }
+
+  function bbFillAll() {
+    for (var i = 0; i < bb.lines.length; i++) bbFill(bb.lines[i]);
+  }
+
+  function bbOnLine(e) {
+    var l = e.line, i = bb.lines.indexOf(l);
+    if (e.type === 'create' && i < 0) bb.lines.push(l);
+    else if (e.type === 'destroy' && i >= 0) bb.lines.splice(i, 1);
+    else if (e.type === 'visible') bbFill(l); // fires once per row (the core marks it called_visible)
+  }
+
   function bbRebuild() {
     if (!bb.on) return;
     bbBuild();
     shadowSync();
+    bbFillAll();
     try { Lampa.Activity.active().activity.resize(); } catch (e) {}
   }
 
@@ -649,6 +685,7 @@
     // rebuild follows because the rows keep settling after the rescale.
     if (Lampa.Listener) Lampa.Listener.follow('resize_end', bbResize);
     window.addEventListener('resize', bbResize);
+    if (Lampa.Listener) Lampa.Listener.follow('line', bbOnLine);
     if (Lampa.Listener) Lampa.Listener.follow('resize_end', shadowSync);
   }
 
