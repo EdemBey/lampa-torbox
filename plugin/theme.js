@@ -108,7 +108,7 @@
     var v = true, c, ok = false;
     try { v = String(Lampa.Storage.get(BAKE_KEY, 'true')) !== 'false'; } catch (e) {}
     if (!v || !isOn() || bake.broken) return false;
-    if (/^(filter|grad|all)$/.test(diagVal())) return false; // DIAG-TEMP: those switches cancel the CSS layers, a baked copy would ignore them
+    if (fxOff('bg')) return false; // the group is off: the CSS layers are cancelled, there is nothing to bake
     try { if (Lampa.Platform.screen('mobile') || Lampa.Storage.field('light_version')) return false; } catch (e) {}
     // without ctx.filter the CSS path stays
     try {
@@ -136,14 +136,14 @@
   // shortcut: .card__view::before is the only free pseudo, so the focus shadow replaces the rest one at once with a 0.2 s opacity fade-in instead of the old box-shadow growth.
   // Numbers in em: copies of the box-shadow values of .card__view and .card.focus .card__view in CSS below (tools/theme-shadow.test.mjs compares them).
   var SHADOW = { r: 1.1, inset: 0.01, rest: { dy: 0.6, blur: 1.6, a: 0.55 }, focus: { dy: 1.4, blur: 3, a: 0.8 } };
-  var shadow = { em: 0 };
+  var shadow = { em: 0, sq: false };
 
   // sprite of a shadow: a rounded rect with the shadow drawn and the rect itself cut out (box-shadow paints nothing under the box); corner slices hold the whole arc, the stretched middle is wider than 6 sigma so the blur there is the full one
-  function shadowSprite(s, em) {
-    var pad = Math.ceil((s.dy + 1.5 * s.blur) * em - 1e-6), r = SHADOW.r * em, t = pad + Math.ceil(r - 1e-6), n = 2 * t + Math.ceil(3 * s.blur * em), c = document.createElement('canvas'), x = c.getContext('2d'), a = pad, b = n - pad;
+  function shadowSprite(s, em, sq) {
+    var pad = Math.ceil((s.dy + 1.5 * s.blur) * em - 1e-6), r = sq ? 0 : SHADOW.r * em, t = pad + Math.ceil(r - 1e-6), n = 2 * t + Math.ceil(3 * s.blur * em), c = document.createElement('canvas'), x = c.getContext('2d'), a = pad, b = n - pad;
     c.width = c.height = n;
     function path(k) {
-      var l = a + k, h = b - k, q = r - k;
+      var l = a + k, h = b - k, q = Math.max(0, r - k);
       x.beginPath();
       x.moveTo(l + q, l);
       x.arcTo(h, l, h, h, q);
@@ -165,20 +165,20 @@
     return 'url(' + c.toDataURL() + ') ' + t + ' fill/' + t / em + 'em/' + pad / em + 'em';
   }
 
-  function shadowCss(em) {
+  function shadowCss(em, sq) {
     var P = 'body.lampa-theme--shadow .card';
     return P + ' .card__view,' + P + '.focus .card__view{box-shadow:none;-webkit-transition:none;transition:none}' +
-      P + ' .card__view:before{content:"";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;border:0 solid transparent;border-image:' + shadowSprite(SHADOW.rest, em) + '}' +
-      P + '.focus .card__view:before{border-image:' + shadowSprite(SHADOW.focus, em) + ';-webkit-animation:lampa-shadow-in .2s;animation:lampa-shadow-in .2s}' +
+      P + ' .card__view:before{content:"";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;border:0 solid transparent;border-image:' + shadowSprite(SHADOW.rest, em, sq) + '}' +
+      P + '.focus .card__view:before{border-image:' + shadowSprite(SHADOW.focus, em, sq) + ';-webkit-animation:lampa-shadow-in .2s;animation:lampa-shadow-in .2s}' +
       '@-webkit-keyframes lampa-shadow-in{from{opacity:.5}}@keyframes lampa-shadow-in{from{opacity:.5}}';
   }
 
   function shadowSync() {
-    var body = document.body, on = !!body && body.classList.contains('lampa-theme--fast') && !/^(shadow|all)$/.test(diagVal()), c, em, st; // DIAG-TEMP: the diag switch removes shadows
+    var body = document.body, on = !!body && body.classList.contains('lampa-theme--fast') && !fxOff('shadow'), sq = fxOff('radius'), c, em, st;
     if (on) {
       c = document.querySelector('.card') || body;
       em = parseFloat(window.getComputedStyle(c).fontSize) || 16;
-      if (Math.abs(em - shadow.em) > shadow.em * 0.05) {
+      if (Math.abs(em - shadow.em) > shadow.em * 0.05 || sq !== shadow.sq) {
         try {
           st = document.getElementById('lampa-theme-shadow');
           if (!st) {
@@ -186,14 +186,68 @@
             st.id = 'lampa-theme-shadow';
             document.head.appendChild(st);
           }
-          st.textContent = shadowCss(em);
+          st.textContent = shadowCss(em, sq);
           shadow.em = em;
+          shadow.sq = sq;
         } catch (e) { on = false; }
       }
     }
     if (body) body.classList.toggle('lampa-theme--shadow', on && shadow.em > 0);
   }
   // @end theme-shadow
+  // @module theme-fx
+  // User switches of the theme effects (Settings, triggers, default ON). While a switch is OFF body has the class lampa-theme-off--<id>, and the CSS built here cancels the theme rules of the group:
+  // the selectors repeat the originals under that class, with !important. '@' in a selector is the group class on body, otherwise 'body@ ' is put in front. Rule = [selector list, declarations].
+  // Effects made by code follow the same switch: the shadow sprite (fxOff('shadow'), fxOff('radius') in shadowSync) and the baking (fxOff('bg') in bakeWant).
+  // tools/theme-fx.test.mjs checks that every shadow, blur, mask, radius and filter of the theme CSS is listed here or named as an exception there.
+  var FX_PREFIX = 'lampa_theme_fx_', FX_CLASS = 'lampa-theme-off--';
+  var FX = [
+    { id: 'shadow', name: 'Тени', descr: 'Тени карточек, панелей, кнопок и текста', rules: [
+      ['.wrap__left:before,.menu__item.focus,.menu__item.hover,.items-line__title:before,.card__view,.card.focus .card__view,.full-start__button.focus,.simple-button.focus,.full-person__photo,.full-person.focus,.full-episode,.selectbox__content,.online-mod-variants__still,.full-start-new__poster,.full-start-new__left .full-start-new__poster', 'box-shadow:none;-webkit-box-shadow:none'],
+      ['.head__title,.items-line__title,.card__title,.card__age,.full-start-new__title,.lampa-bb__title', 'text-shadow:none']
+    ] },
+    { id: 'blur', name: 'Размытие', descr: 'Размытие фона за панелью меню, описанием и полноэкранным описанием', rules: [
+      ['.wrap__left:before,.full-descr__text,.modal.lampa-descr-modal', 'backdrop-filter:none;-webkit-backdrop-filter:none'],
+      // the panels were nearly see-through because the blur hid what is behind them; without it they get a denser fill
+      ['.wrap__left:before', 'background:rgba(14,16,22,.92)'],
+      ['.full-descr__text', 'background:rgba(10,12,18,.82)'],
+      ['.full-descr__text.focus', 'background:rgba(10,12,18,.9)'],
+      ['.modal.lampa-descr-modal', 'background:rgba(5,6,10,.97)']
+    ] },
+    { id: 'bg', name: 'Эффекты фона', descr: 'Яркость фона и затемняющие градиенты поверх него (в том числе запекание)', rules: [
+      ['.background__one,.background__two,.background__fade,.full-start__background.loaded,.full-start__background', 'filter:none;-webkit-filter:none'],
+      ['.background:after,.lampa-bb-shade', 'display:none'],
+      ['.full-start-new', 'background:none']
+    ] },
+    { id: 'radius', name: 'Скругления', descr: 'Скруглённые углы карточек, кнопок, плашек и рамки фокуса', rules: [
+      ['.head__time,.menu__item,.items-line__title:before,.items-line__more,.card__view,.card__img,.card.focus .card__view:after,.card__vote,.card__quality,.full-start__button,.simple-button,.full-start-new__poster,.full-start__rate,.full-start__pg,.full-start__status,.full-descr__text,.full-person,.full-episode,.full-episode__img,.full-episode__num,.full-episode.focus:after,.selectbox-item,.online-mod-variants__still,.online-mod-variant,.online-mod-variants__voice,.full-start-new__rate-line .full-start__pg,.full-start-new__rate-line .full-start__status,.full-start-new__left .full-start-new__poster,.full-start-new__left .full-start-new__img,.lampa-bb__chip', 'border-radius:0']
+    ] },
+    { id: 'mask', name: 'Маски', descr: 'Плавное растворение края афиши и фона страницы карточки', rules: [
+      ['.full-start__background.loaded,.full-start__background', 'mask-image:none;-webkit-mask-image:none'],
+      ['body@.lampa-theme--billboard .activity--active .activity__body>div>.scroll', 'mask-image:none;-webkit-mask-image:none']
+    ] }
+  ];
+
+  function fxOff(id) {
+    var v = 'true';
+    try { v = String(Lampa.Storage.get(FX_PREFIX + id, 'true')); } catch (e) {}
+    return v === 'false';
+  }
+
+  function fxCss() {
+    return FX.map(function (g) {
+      return g.rules.map(function (r) {
+        var c = '.' + FX_CLASS + g.id;
+        return r[0].split(',').map(function (s) { return s.indexOf('@') < 0 ? 'body' + c + ' ' + s : s.replace('@', c); }).join(',') + '{' + r[1].split(';').map(function (d) { return d + '!important'; }).join(';') + '}';
+      }).join('\n');
+    }).join('\n');
+  }
+
+  function fxApply() {
+    if (!document.body) return;
+    FX.forEach(function (g) { document.body.classList.toggle(FX_CLASS + g.id, fxOff(g.id)); });
+  }
+  // @end theme-fx
   var CSS = "\n/* body + .background: глубокий фон, бэкдроп виднее, сильная виньетка слева и снизу */\nbody{background:#07080c;font-family:\"SegoeUI\",\"Segoe UI\",Roboto,\"Helvetica Neue\",Arial,sans-serif;-webkit-font-smoothing:antialiased}\n.background{background:#07080c}\n.background__one,.background__two,.background__fade{-webkit-filter:" + BG_FILTER + ";filter:" + BG_FILTER + "}\n.background:after{content:\"\";position:absolute;left:0;top:0;right:0;bottom:0;pointer-events:none;background:-webkit-linear-gradient(left,rgba(5,6,10,.85) 0,rgba(5,6,10,.5) 18%,rgba(5,6,10,0) 50%),-webkit-linear-gradient(bottom,rgba(5,6,10,.75) 0,rgba(5,6,10,.55) 25%,rgba(5,6,10,.3) 45%,rgba(5,6,10,0) 62%),-webkit-linear-gradient(top,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%);background:linear-gradient(90deg,rgba(5,6,10,.85) 0,rgba(5,6,10,.5) 18%,rgba(5,6,10,0) 50%),linear-gradient(0deg,rgba(5,6,10,.75) 0,rgba(5,6,10,.55) 25%,rgba(5,6,10,.3) 45%,rgba(5,6,10,0) 62%),linear-gradient(180deg,rgba(5,6,10,.5) 0,rgba(5,6,10,0) 14%)}\n\n/* .head: прозрачная, верхний градиент */\n.head{background:-webkit-linear-gradient(top,rgba(5,6,10,.85),rgba(5,6,10,.7));background:linear-gradient(180deg,rgba(5,6,10,.85),rgba(5,6,10,.7))}\n.head:after{content:\"\";position:absolute;left:0;right:0;top:100%;height:3.2em;pointer-events:none;background:-webkit-linear-gradient(top,rgba(5,6,10,.7),rgba(5,6,10,0));background:linear-gradient(180deg,rgba(5,6,10,.7),rgba(5,6,10,0))}\n.head__title{font-size:1.5em;font-weight:700;letter-spacing:.01em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.head__time{padding:.45em 1em;border-radius:2em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n.head__time-now{font-size:1.25em;font-weight:700}\n.head__time-date{display:none}\n\n/* .wrap__left: стеклянная панель (ширину и сдвиг задаёт Lampa), фокус = белая пилюля */\n.wrap__left:before{content:\"\";position:absolute;z-index:-1;left:0;top:4em;bottom:0;width:100%;background:rgba(14,16,22,.82);border-right:1px solid rgba(255,255,255,.1);box-shadow:.3em 0 2em rgba(0,0,0,.5);-webkit-backdrop-filter:blur(1.2em);backdrop-filter:blur(1.2em)}\nbody.menu--open .wrap__left:before{width:15em}\n.menu__list{padding-left:.7em;padding-right:.7em}\n.menu__item{padding:.95em 1em;margin-bottom:.25em;border-radius:3em;color:rgba(255,255,255,.72);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.menu__item + li{margin-top:0}\n.menu__text{font-weight:500}\n.menu__item.focus,.menu__item.hover{background-color:#fff;color:#000;box-shadow:0 .5em 1.4em rgba(0,0,0,.5)}\n\n/* .items-line: крупные жирные заголовки с акцентной меткой, больше воздуха */\n.items-line{padding-bottom:1em}\n.items-line__head{margin-bottom:-.3em}\n.scroll--horizontal{padding-top:1.9em;padding-bottom:1em}\n.items-line__title{font-size:1.9em;font-weight:700;letter-spacing:.005em;text-shadow:0 .1em .5em rgba(0,0,0,.6)}\n.items-line__title:before{content:\"\";display:inline-block;width:.24em;height:.85em;margin-right:.5em;border-radius:.2em;background:#ffb020;vertical-align:-.08em;box-shadow:0 0 .8em rgba(255,176,32,.55)}\n.items-line__more{padding:.45em 1.2em;border-radius:2em;font-weight:600;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08)}\n\n/* .card: радиус, тень, фокус = белое кольцо + scale + глубокая тень */\n.card{-webkit-transition:-webkit-transform .2s;transition:transform .2s}\n.card__view,.card__img{border-radius:1.1em}\n.card__view{box-shadow:0 .6em 1.6em rgba(0,0,0,.55);-webkit-transition:box-shadow .2s;transition:box-shadow .2s}\n.card__vote{right:.6em;bottom:.6em;font-size:1.1em;font-weight:700;padding:.2em .6em;border-radius:2em;background:rgba(5,6,10,.82);color:#fff;border:1px solid rgba(255,255,255,.16);text-shadow:none}\n.card__vote:before{content:\"\\2605\";margin-right:.3em;font-size:.9em;color:#ffb020}\n.card__quality{left:.6em;top:.6em;bottom:auto;font-size:.8em;font-weight:800;padding:.3em .7em;border-radius:2em;background:#ffb020;color:#000;letter-spacing:.03em}\n.card__icons-inner{background:rgba(5,6,10,.75)}\n.card__title{font-size:1.2em;font-weight:500;margin-top:.6em;color:rgba(255,255,255,.85);text-shadow:0 .1em .4em rgba(0,0,0,.8);-webkit-transition:opacity .2s;transition:opacity .2s}\n.card__age{color:rgba(255,255,255,.55);text-shadow:0 .1em .4em rgba(0,0,0,.8)}\n.items-line .card .card__type{display:none}\n.card.focus{-webkit-transform:scale(1.08);transform:scale(1.08)}\n.card.focus .card__view{box-shadow:0 1.4em 3em rgba(0,0,0,.8)}\n.card.focus .card__view:after{top:-.45em;left:-.45em;right:-.45em;bottom:-.45em;border-width:.28em;border-radius:1.55em}\n.card.focus .card__title{color:#fff;font-weight:700}\n.card.focus .card__age{color:rgba(255,255,255,.7)}\n\n/* .full-start__button + .simple-button: пилюли, фокус = белая заливка */\n.full-start__button,.simple-button{border-radius:3em;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.08);-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.full-start__button{font-size:1.2em;height:2.6em;padding:.3em 1.4em;margin-right:.6em}\n.simple-button{font-size:1.2em;height:2.6em;padding:.3em 1.4em}\n.full-start__button.focus,.simple-button.focus{background-color:#fff;color:#000;box-shadow:0 .6em 1.6em rgba(0,0,0,.4)}\n\n/* .full-start-new + img.full-start__background: большой бэкдроп, диагональная маска */\n.full-start__background.loaded{opacity:1;-webkit-filter:brightness(1.1) saturate(1.2);filter:brightness(1.1) saturate(1.2);-webkit-mask-image:-webkit-linear-gradient(top right,#000 25%,rgba(0,0,0,0) 80%);-webkit-mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%);mask-image:linear-gradient(to bottom left,#000 25%,rgba(0,0,0,0) 80%)}\n.full-start-new__poster{border-radius:1.2em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.08)}\n.full-start-new__head{font-size:1em;letter-spacing:.08em;text-transform:uppercase;opacity:.55}\n.full-start-new__title{font-size:3.6em;font-weight:800;line-height:1.05;letter-spacing:-.015em;-webkit-line-clamp:2;line-clamp:2;text-shadow:0 .1em .6em rgba(0,0,0,.6)}\n.full-start-new__tagline{font-style:italic;opacity:.65}\n.full-start__rate{padding:.4em 1em;border-radius:1.1em;background:rgba(5,6,10,.55);border:1px solid rgba(255,255,255,.12);font-size:1.1em}\n.full-start__rate>div:first-child{font-weight:800;font-size:1.1em}\n.full-start-new__reactions .reaction{background:rgba(5,6,10,.6);border:1px solid rgba(255,255,255,.1)}\n.rate--tmdb>div:first-child{color:#3ecbf5}\n.rate--kp>div:first-child{color:#ff9a3c}\n.rate--imdb>div:first-child{color:#f5c518}\n.source--name{text-transform:uppercase;letter-spacing:.06em;font-size:.7em}\n.full-start__pg,.full-start__status{border:1px solid rgba(255,255,255,.4);border-radius:.4em;font-size:1em}\n.full-start-new__details{opacity:.78}\n.full-start-new__buttons{margin-top:1.8em}\n\n/* .full-descr: стеклянная панель, фокус = белое кольцо */\n.full-descr__text{padding:1.2em 1.5em;border-radius:1.2em;background:rgba(10,12,18,.62);-webkit-backdrop-filter:blur(.8em);backdrop-filter:blur(.8em);border:1px solid rgba(255,255,255,.06);font-weight:400;color:rgba(255,255,255,.92);opacity:1;-webkit-transition:background-color .2s,box-shadow .2s;transition:background-color .2s,box-shadow .2s}\n.full-descr__text.focus{background:rgba(10,12,18,.78);box-shadow:inset 0 0 0 .28em #fff;-webkit-mask-image:none;mask-image:none}\n.full-descr__details{opacity:.5}\n\n/* .full-person: режиссёры и актёры, круглое фото, фокус = белая заливка как у кнопок */\n.full-person{padding:.6em 1.6em .6em .6em;margin-right:1em;border-radius:1.6em;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);-webkit-transition:-webkit-transform .2s,background-color .2s,box-shadow .2s;transition:transform .2s,background-color .2s,box-shadow .2s}\n.full-person__photo{width:6em;height:6em;border-radius:50%;box-shadow:0 .4em 1em rgba(0,0,0,.5)}\n.full-person__photo>img{height:100%;object-fit:cover}\n.full-person__photo>span{color:#333}\n.full-person__body{max-width:11em}\n.full-person__name,.full-person__role{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.full-person__name{font-size:1.25em;font-weight:600}\n.full-person__role{font-size:1em;margin-top:.5em;opacity:.55}\n.full-person.focus{-webkit-transform:scale(1.04);transform:scale(1.04);background-color:#fff;color:#000;box-shadow:0 1em 2.2em rgba(0,0,0,.55)}\n\n/* .items-line__title с иконкой (Lampa рисует его через .full-person--small): выглядит как обычный заголовок */\n.items-line__title{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\n.items-line__title .full-person,.items-line__title .full-person.focus{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;width:auto;font-size:1em;margin:0;padding:0;background:none;color:inherit;border:0;border-radius:0;box-shadow:none;-webkit-transform:none;transform:none;opacity:1}\n.items-line__title .full-person__photo{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center;-webkit-box-pack:center;-webkit-justify-content:center;justify-content:center;width:1.15em;height:1.15em;min-width:0;margin:0 .45em 0 0;border-radius:50%;box-shadow:none;-webkit-flex-shrink:0;flex-shrink:0}\n.items-line__title .full-person--svg .full-person__photo{padding:0!important}.items-line__title .full-person--svg .full-person__photo svg{width:.68em!important;height:.68em!important}\n.items-line__title .full-person__body{font-size:1em;padding:0;margin:0;max-width:none}\n.items-line__title .full-person__name{font-size:1em;font-weight:inherit;line-height:inherit;letter-spacing:inherit;margin:0;white-space:nowrap;overflow:visible}\n.items-line__title .full-person__role{display:none}\n\n/* .full-episode + .time-line: стеклянные строки, акцентный прогресс */\n.full-episode{border-radius:1.2em;background:rgba(255,255,255,.06);box-shadow:0 .5em 1.4em rgba(0,0,0,.35);-webkit-transition:-webkit-transform .2s,background-color .2s;transition:transform .2s,background-color .2s}\n.full-episode__img{border-radius:1.2em 0 0 1.2em}\n.full-episode__num{display:inline-block;padding:.2em .6em;border-radius:2em;background:rgba(255,176,32,.2);color:#ffd27a;font-weight:700;opacity:1;font-size:.8em;letter-spacing:.04em;text-transform:uppercase}\n.full-episode__name{font-size:1.25em;font-weight:600}\n.full-episode__date{opacity:.45}\n.time-line{height:.3em;background:rgba(255,255,255,.18)}\n.time-line>div{background:#ffb020}\n.full-episode.focus{-webkit-transform:scale(1.025);transform:scale(1.025);background:rgba(255,255,255,.12)}\n.full-episode.focus:after{border-width:.25em;border-radius:1.5em}\n.torrent-filter{padding-bottom:1.5em}\n\n/* .selectbox: только цвета и фокус, позицию и анимацию выезда задаёт Lampa */\n.selectbox__layer{background:rgba(0,0,0,.55)}\n.selectbox__content{background:rgba(16,18,24,.94);box-shadow:-2em 0 4em rgba(0,0,0,.5);border-left:1px solid rgba(255,255,255,.08)}\n.selectbox__title{font-weight:700}\n.selectbox-item{margin:0 1em .3em;border-radius:1em;-webkit-transition:background-color .2s,color .2s;transition:background-color .2s,color .2s}\n.selectbox-item.focus{background-color:#fff;color:#000}\n.selectbox-item.focus.selected:after{border-color:#000}\n\n/* .online-mod-variants: только отступы и цвета, структура и белый фокус пользователя сохранены */\n.online-mod-variants__still{border-radius:1.3em;box-shadow:0 1.5em 3.5em rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.08)}\n.online-mod-variants__still-bar{height:.3em}\n.online-mod-variants__still-bar i{background:#ffb020}\n.online-mod-variants__title{letter-spacing:-.01em}\n.online-mod-variants__stats>div{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.06)}\n.online-mod-variants__colhead{padding-bottom:1em}\n.online-mod-variants__resume{background:rgba(255,176,32,.16);border:1px solid rgba(255,176,32,.3)}\n.online-mod-variant{margin-bottom:.6em;border-radius:1em;background:rgba(255,255,255,.07);box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}\n.online-mod-variants__voice{border-radius:.8em;background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.09)}\n.online-mod-variants__util{background:rgba(255,255,255,.08)}\n\n/* описание на весь экран: модалка с классом lampa-descr-modal (ставит JS ниже) */\n.modal.lampa-descr-modal{padding:0;background:rgba(5,6,10,.72);-webkit-backdrop-filter:blur(1.4em);backdrop-filter:blur(1.4em)}\n.modal.lampa-descr-modal .modal__content{max-width:60em;width:100%;background:transparent;padding:0 2em;border-radius:0}\n.lampa-descr-full{font-size:1.3em;line-height:1.6;font-weight:300;padding:3em 0}\n\n\n/* .full-start-new: hero внизу-слева, фон открыт; постер маленький (вкл/выкл в настройках) */\nbody .full-start-new{position:relative;min-height:calc(100vh - 6.5em);box-sizing:border-box;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:end;-webkit-align-items:flex-end;align-items:flex-end;padding-bottom:2.5em;\nbackground:-webkit-radial-gradient(0% 100%,ellipse farthest-side,rgba(5,6,10,.92) 0%,rgba(5,6,10,.6) 45%,rgba(5,6,10,0) 100%);\nbackground:radial-gradient(ellipse 75% 85% at 0% 100%,rgba(5,6,10,.92) 0%,rgba(5,6,10,.6) 45%,rgba(5,6,10,0) 100%)}\nbody .full-start-new__body{-webkit-box-flex:1;-webkit-flex:1 1 auto;flex:1 1 auto;-webkit-box-align:end;-webkit-align-items:flex-end;align-items:flex-end}\nbody .full-start-new__right{max-width:46em;width:100%}\nbody .full-start__background.loaded,body .full-start__background{-webkit-mask-image:-webkit-linear-gradient(top,#000 62%,rgba(0,0,0,0) 100%);mask-image:linear-gradient(to bottom,#000 62%,rgba(0,0,0,0) 100%);filter:none}\nbody .full-start-new__rate-line{margin:0 0 .9em;-webkit-flex-wrap:wrap;flex-wrap:wrap;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\nbody .full-start-new__rate-line .full-start__rate{display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-orient:horizontal;-webkit-box-direction:reverse;-webkit-flex-direction:row-reverse;flex-direction:row-reverse;-webkit-box-align:center;-webkit-align-items:center;align-items:center;background:none!important;border:0!important;box-shadow:none!important;padding:0!important;margin:0 1.1em 0 0!important;font-size:1.05em;font-weight:600}\nbody .full-start-new__rate-line .full-start__rate>div{margin:0!important;padding:0!important;background:none!important}\nbody .full-start-new__rate-line .full-start__rate .rate--icon{width:1em;height:1em;margin:0 .35em 0 0!important;display:-webkit-box;display:-webkit-flex;display:flex;-webkit-box-align:center;-webkit-align-items:center;align-items:center}\nbody .full-start-new__rate-line .full-start__rate .rate--icon svg,body .full-start-new__rate-line .full-start__rate .rate--icon img{width:1em!important;height:1em!important;max-width:1em;max-height:1em}\nbody .full-start-new__rate-line .full-start__pg,body .full-start-new__rate-line .full-start__status{font-size:.75em;padding:.15em .6em;margin:0 .8em 0 0;border-radius:.4em;opacity:.8}\nbody .full-start-new__details{margin-bottom:.8em}\nbody .full-start-new__reactions{display:none}\nbody .full-start-new__buttons{margin-top:1.2em}\nbody .full-start-new__buttons .full-start__button{padding-left:.6em;padding-right:.6em;margin-right:0}\nbody .full-start-new__buttons .full-start__button:first-child{padding-left:1.2em;padding-right:1.2em}\nbody .full-start-new__title{font-size:4.2em}\nbody .full-start__background{left:0!important;width:100%;-webkit-transition:opacity .4s;transition:opacity .4s}\nbody.lampa-theme--card-down .full-start__background.loaded{opacity:.28!important}\n@media (min-width:900px){\nbody .full-start-new__left{display:block;-webkit-box-flex:0;-webkit-flex:0 0 auto;flex:0 0 auto;width:12em;margin:0 2em 0 0;-webkit-align-self:flex-end;align-self:flex-end}\nbody .full-start-new__left .full-start-new__poster{width:100%;margin:0;border-radius:1em;overflow:visible;-webkit-box-shadow:0 .6em 2em rgba(0,0,0,.55);box-shadow:0 .6em 2em rgba(0,0,0,.55)}\nbody .full-start-new__left .full-start-new__img{display:block;width:100%;height:auto;border-radius:1em}\n}\n";
 
   function isOn() {
@@ -207,7 +261,7 @@
     if (!el) {
       el = document.createElement('style');
       el.id = 'lampa-theme-css';
-      el.appendChild(document.createTextNode(CSS + BAKE_CSS));
+      el.appendChild(document.createTextNode(CSS + BAKE_CSS + fxCss()));
       document.head.appendChild(el);
     }
     el.disabled = !isOn();
@@ -223,10 +277,10 @@
     try { if (window.Lampa && Lampa.Storage) poster = String(Lampa.Storage.get('lampa_theme_poster', 'true')) !== 'false'; } catch (e) {}
     np.disabled = !(isOn() && !poster);
     if (!isOn() && document.body) document.body.classList.remove('lampa-theme--card-down');
+    fxApply();
     bbSync();
     bakeSync();
     shadowSync();
-    diagApply(); // DIAG-TEMP
   }
 
   function addSetting() {
@@ -260,71 +314,11 @@
       field: { name: 'Оптимизация отрисовки', description: 'Яркость и затемнение фона запекаются в картинку: плавнее прокрутка на слабых ТВ-приставках' },
       onChange: apply
     });
-    // DIAG-TEMP begin
-    Lampa.SettingsApi.addParam({
-      component: 'lampa_theme',
-      param: {
-        name: DIAG_KEY,
-        type: 'select',
-        values: { off: 'Выкл', mask: 'Без маски прокрутки', shadow: 'Без теней карточек', filter: 'Без фильтра фона', backdrop: 'Без размытия', grad: 'Без градиентных слоёв', radius: 'Без скруглений и рамки фокуса', bgfast: 'Без быстрой смены фона', all: 'Без всего перечисленного', shade: 'Быстрый режим: без затемнения афиши', tshadow: 'Быстрый режим: без теней текста', rest: 'Быстрый режим: без маски, скруглений, размытия, быстрой смены фона' }, // DIAG-TEMP
-        default: 'off'
-      },
-      field: { name: 'Диагностика (временно)', description: 'Отключает части оформления для замера производительности на ТВ' },
-      onChange: apply
+    Lampa.SettingsApi.addParam({ component: 'lampa_theme', param: { name: 'lampa_theme_fx_title', type: 'title' }, field: { name: 'Эффекты оформления' } });
+    FX.forEach(function (g) {
+      Lampa.SettingsApi.addParam({ component: 'lampa_theme', param: { name: FX_PREFIX + g.id, type: 'trigger', default: true }, field: { name: g.name, description: g.descr }, onChange: apply });
     });
-    // DIAG-TEMP end
   }
-
-  // DIAG-TEMP begin
-  // Each group cancels theme rules only; classes sit on body, selectors repeat the originals with one more class (billboard rules are injected later with !important).
-  var DIAG_KEY = 'lampa_theme_diag';
-  var DIAG_GROUPS = ['mask', 'shadow', 'filter', 'backdrop', 'grad', 'radius', 'shade', 'tshadow']; // DIAG-TEMP: shade/tshadow are single-purpose groups, 'rest' reuses mask+radius+backdrop (+bgfast in changeHook)
-  var DIAG_CSS = [
-    // mask: theme mask-image on the card page backdrop and on the billboard row scroller
-    'body.lampa-theme-diag--mask .full-start__background.loaded,body.lampa-theme-diag--mask .full-start__background{-webkit-mask-image:none!important;mask-image:none!important}',
-    'body.lampa-theme-diag--mask.lampa-theme--billboard .activity--active .activity__body>div>.scroll{-webkit-mask-image:none!important;mask-image:none!important}',
-    // shadow: card and row-title shadows, focus shadow and the box-shadow transition
-    'body.lampa-theme-diag--shadow .card__view,body.lampa-theme-diag--shadow .card.focus .card__view{box-shadow:none!important;-webkit-transition:none!important;transition:none!important}',
-    'body.lampa-theme-diag--shadow .card__title,body.lampa-theme-diag--shadow .card__age,body.lampa-theme-diag--shadow .items-line__title{text-shadow:none!important}',
-    'body.lampa-theme-diag--shadow .items-line__title:before{box-shadow:none!important}',
-    // filter: brightness/saturate on the background layers and the card page backdrop
-    'body.lampa-theme-diag--filter .background__one,body.lampa-theme-diag--filter .background__two,body.lampa-theme-diag--filter .background__fade,body.lampa-theme-diag--filter .full-start__background.loaded,body.lampa-theme-diag--filter .full-start__background{-webkit-filter:none!important;filter:none!important}',
-    // backdrop: every backdrop-filter of the theme
-    'body.lampa-theme-diag--backdrop .wrap__left:before,body.lampa-theme-diag--backdrop .full-descr__text,body.lampa-theme-diag--backdrop .modal.lampa-descr-modal{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}',
-    // grad: fullscreen gradient layers
-    'body.lampa-theme-diag--grad .background:after,body.lampa-theme-diag--grad .lampa-bb-shade{display:none!important}',
-    'body.lampa-theme-diag--grad .full-start-new{background:none!important}',
-    // radius: card rounding, the theme focus-ring geometry and the focus scale
-    'body.lampa-theme-diag--radius .card__view,body.lampa-theme-diag--radius .card__img{border-radius:0!important}',
-    'body.lampa-theme-diag--radius .card.focus .card__view:after{border-radius:0!important}',
-    'body.lampa-theme-diag--radius .card.focus,body.lampa-theme-diag--radius .full-person.focus,body.lampa-theme-diag--radius .full-episode.focus{-webkit-transform:none!important;transform:none!important}',
-    'body.lampa-theme-diag--radius .card{-webkit-transition:none!important;transition:none!important}',
-    // shade: only the billboard poster shade layer (fast-mode check)
-    'body.lampa-theme-diag--shade .lampa-bb-shade{display:none!important}',
-    // tshadow: text shadows only, the card sprite shadow stays
-    'body.lampa-theme-diag--tshadow .card__title,body.lampa-theme-diag--tshadow .card__age,body.lampa-theme-diag--tshadow .items-line__title{text-shadow:none!important}',
-    'body.lampa-theme-diag--tshadow .items-line__title:before{box-shadow:none!important}'
-  ].join('\n');
-
-  function diagVal() {
-    var v = 'off';
-    try { if (window.Lampa && Lampa.Storage) v = String(Lampa.Storage.get(DIAG_KEY, 'off')); } catch (e) {}
-    return v;
-  }
-
-  function diagApply() {
-    if (!document.body || !document.head) return;
-    var st = document.getElementById('lampa-theme-diag-css');
-    if (!st) {
-      st = document.createElement('style');
-      st.id = 'lampa-theme-diag-css';
-      st.appendChild(document.createTextNode(DIAG_CSS));
-      document.head.appendChild(st);
-    }
-    var v = isOn() ? diagVal() : 'off';
-    for (var i = 0; i < DIAG_GROUPS.length; i++) document.body.classList.toggle('lampa-theme-diag--' + DIAG_GROUPS[i], v === DIAG_GROUPS[i] || v === 'all' || (v === 'rest' && /^(mask|radius|backdrop)$/.test(DIAG_GROUPS[i])));
-  }
-  // DIAG-TEMP end
 
   // Background canvases load with crossOrigin; a TMDB URL cached earlier by a plain <img> (card page) then fails CORS.
   // A fixed query param gives the canvas its own cache entry.
@@ -351,7 +345,6 @@
         clearTimeout(timer);
         return origChange.call(B, url);
       }
-      if (diagVal() === 'bgfast' || diagVal() === 'rest' || diagVal() === 'all') { latest = ''; clearTimeout(timer); return origChange.call(B, url); } // DIAG-TEMP
       latest = url;
       clearTimeout(timer);
       timer = setTimeout(function () {

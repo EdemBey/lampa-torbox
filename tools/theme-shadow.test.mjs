@@ -4,7 +4,7 @@ import { read, slice } from './_slice.mjs';
 const src = read('theme.js');
 const log = [];
 const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : (...a) => log.push([k, ...a])), set: (t, k, v) => { t[k] = v; log.push([k, v]); return true; } });
-const env = { document: { createElement: () => ({ getContext: () => ctx, toDataURL: () => 'data:X' }) }, diagVal: () => 'off', window: {} };
+const env = { document: { createElement: () => ({ getContext: () => ctx, toDataURL: () => 'data:X' }) }, fxOff: () => false, window: {} };
 const { SHADOW, shadowCss } = new Function(...Object.keys(env), slice(src, 'theme-shadow') + '\nreturn { SHADOW, shadowCss };')(...Object.values(env));
 
 // the numbers equal the box-shadow of the CSS text
@@ -18,4 +18,8 @@ assert.strictEqual(SHADOW.r, Number(/\.card__view,\.card__img\{border-radius:([\
 const out = shadowCss(20);
 assert(out.includes('url(data:X) 82 fill/4.1em/3em'), out);
 assert(out.includes('url(data:X) 140 fill/7em/5.9em'), out); // focus: pad = (1.4 + 4.5) * 20 = 118 -> slice 118 + 22 = 140
+// square corners (radius switch off): the sprite is built with radius 0, nothing is thrown by arcTo, the slice is the shadow pad only
+log.length = 0;
+assert(shadowCss(20, true).includes('url(data:X) 60 fill/3em/3em'), 'square rest sprite');
+assert(log.every((e) => e[0] !== 'arcTo' || e[5] === 0), 'arcTo radius must stay 0');
 console.log('theme-shadow: ok');
