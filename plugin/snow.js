@@ -100,6 +100,8 @@ function isElVisible(el) {
   // --- overlay detection (настройки/меню/модалки) ---
   // цель: НЕ перекрывать настройки — просто гасим снег пока открыт оверлей
  function detectOverlayOpen() {
+  // Lampa screensaver covers everything: treat it like an overlay
+  try { if (window.Lampa && Lampa.Screensaver && Lampa.Screensaver.isWorked && Lampa.Screensaver.isWorked()) return true; } catch (e0) {}
   var Wv = window.innerWidth || 1;
   var Hv = window.innerHeight || 1;
   var viewArea = Wv * Hv;
@@ -414,6 +416,7 @@ function isElVisible(el) {
   var accCanvas  = null, accCtx  = null;
 
   var W = 0, H = 0, dpr = 1;
+  var accH = 12; // height of the bottom strip canvas (dots are drawn in the last 10px)
   var spriteDot = null;
   var spritesFall = null;
 
@@ -451,7 +454,7 @@ function clearAccumulationRuntime(reason) {
   try { if (surfTimer) { clearTimeout(surfTimer); surfTimer = 0; } } catch (e1) {}
   try { if (resetTimer) { clearTimeout(resetTimer); resetTimer = 0; } } catch (e2) {}
   surfaces = [];
-  try { if (accCtx) accCtx.clearRect(0, 0, W, H); } catch (e3) {}
+  try { if (accCtx) accCtx.clearRect(0, 0, W, accH); } catch (e3) {}
   try { stopCaps(); } catch (e4) {}
   if (!cfg_settle_user) { try { removePiles(); } catch (e5) {} }
 }
@@ -466,7 +469,7 @@ function resetAccumulationHard(reason) {
     // если эффект выключен — не слушаем датчики
     if (!running || !shake_enabled) stopMotion();
 
-  try { accCtx.clearRect(0, 0, W, H); } catch (e) {}
+  try { accCtx.clearRect(0, 0, W, accH); } catch (e) {}
   surfaces = [];
 
   if (resetTimer) clearTimeout(resetTimer);
@@ -600,7 +603,7 @@ function resetAccumulationHard(reason) {
       accCanvas = document.createElement('canvas');
       accCanvas.id = 'snowfx_acc';
       accCanvas.style.cssText =
-        'position:fixed;left:0;top:0;width:100%;height:100%;' +
+        'position:fixed;left:0;bottom:0;width:100%;height:' + accH + 'px;' +
         'pointer-events:none;z-index:999998;';
 
       document.body.appendChild(accCanvas);
@@ -628,6 +631,7 @@ function resetAccumulationHard(reason) {
     debris = [];
     running = false;
     lastTs = 0;
+    window.__snowfx_drawn = 0;
 
     stopCaps();
 
@@ -645,13 +649,23 @@ function resetAccumulationHard(reason) {
     W = Math.max(1, window.innerWidth || 1);
     H = Math.max(1, window.innerHeight || 1);
 
-    fallCanvas.width = (W * dpr) | 0;
-    fallCanvas.height = (H * dpr) | 0;
-    accCanvas.width = (W * dpr) | 0;
-    accCanvas.height = (H * dpr) | 0;
+    var oldAccH = accH;
+    accH = Math.min(12, H);
+    var fw = (W * dpr) | 0, fh = (H * dpr) | 0, ah = (accH * dpr) | 0;
+    if (fallCanvas.width !== fw || fallCanvas.height !== fh || accCanvas.width !== fw || accCanvas.height !== ah || oldAccH !== accH) {
+      fallCanvas.width = fw;
+      fallCanvas.height = fh;
+      accCanvas.width = fw;
+      accCanvas.height = ah;
+      accCanvas.style.height = accH + 'px';
 
-    fallCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    accCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      fallCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      accCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } else {
+      // same size: no reallocation, but keep the old "resize clears both canvases" behaviour
+      fallCtx.clearRect(0, 0, W, H);
+      accCtx.clearRect(0, 0, W, accH);
+    }
 
     // при ресайзе лучше сбрасывать оседание, чтобы не "съезжало"
     resetAccumulationHard('resize');
@@ -958,6 +972,7 @@ function resetAccumulationHard(reason) {
 
   function buildSurfaces() {
     surfaces = [];
+    surfLastBuild = Date.now();
     if (cfg_tizen || !cfg_settle) return;
 
     var els = getCardElements();
@@ -1061,6 +1076,16 @@ function resetAccumulationHard(reason) {
   }
 
   // --- loop ---
+  // для "медленного" оседания просто не всегда рисуем накопление
+  function allowDeposit(si) {
+    if (si >= 0.999) return true;
+    return Math.random() < si;
+  }
+  function settleP(base, cap, si) {
+    if (!cap) cap = 0.95;
+    return Math.min(cap, base * si);
+  }
+
   function drawFrame(dt) {
     if (!fallCtx) return;
 
@@ -1078,20 +1103,11 @@ function resetAccumulationHard(reason) {
       if (cfg_settle && !cfg_tizen && accCtx && spriteDot) {
         var si = (cfg_settle_intensity || 1);
         if (si < 0) si = 0;
-        // для "медленного" оседания просто не всегда рисуем накопление
-        function allowDeposit() {
-          if (si >= 0.999) return true;
-          return Math.random() < si;
-        }
-        function p(base, cap) {
-          if (!cap) cap = 0.95;
-          return Math.min(cap, base * si);
-        }
         // низ экрана
         if (f.y >= H - 8) {
-          if (allowDeposit()) {
-            drawAccDot(f.x, H - 10, f.r, Math.min(0.9, f.a + 0.1));
-            if (Math.random() < p(0.18, 0.55)) drawAccDot(f.x + rand(-4, 4), H - 10, f.r * 0.85, Math.min(0.85, f.a + 0.05));
+          if (allowDeposit(si)) {
+            drawAccDot(f.x, accH - 10, f.r, Math.min(0.9, f.a + 0.1));
+            if (Math.random() < settleP(0.18, 0.55, si)) drawAccDot(f.x + rand(-4, 4), accH - 10, f.r * 0.85, Math.min(0.85, f.a + 0.05));
           }
           f.x = rand(0, W);
           f.y = rand(-H, 0);
@@ -1105,10 +1121,10 @@ function resetAccumulationHard(reason) {
             if (f.x < s.x1 || f.x > s.x2) continue;
 
             if (f.y >= s.y && f.y <= s.y + 3) {
-              if (allowDeposit()) {
+              if (allowDeposit(si)) {
                 depositOnCard(s, f.x, f.r, Math.min(0.9, f.a + 0.15));
-                if (Math.random() < p(0.55)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
-                if (Math.random() < p(0.30, 0.85)) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.75, Math.min(0.7, f.a));
+                if (Math.random() < settleP(0.55, 0, si)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
+                if (Math.random() < settleP(0.30, 0.85, si)) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.75, Math.min(0.7, f.a));
                 // ускоренное оседание: иногда добавим ещё точку
                 if (si > 1.25 && Math.random() < Math.min(0.25, (si - 1.0) * 0.18)) {
                   depositOnCard(s, f.x + rand(-7, 7), f.r * 0.65, Math.min(0.65, f.a));
@@ -1153,12 +1169,23 @@ function resetAccumulationHard(reason) {
     fallCtx.globalAlpha = 1;
   }
 
+  // @module snow-interval
+  // actual ms between the two last drawn frames (garland syncs to it); first frame / after a pause: nominal
+  function drawnInterval(ts, prevDrawn, nominal) {
+    if (!(prevDrawn > 0)) return nominal;
+    var iv = ts - prevDrawn;
+    return iv < 16 ? 16 : (iv > 100 ? 100 : iv);
+  }
+  // @end snow-interval
+
   function loop(ts) {
     if (!running) return;
 
     if (document.hidden) {
-      lastTs = ts;
-      rafId = requestAnimationFrame(loop);
+      // paused until visibilitychange -> applyConfigAndState restarts the loop
+      rafId = 0;
+      lastTs = 0;
+      window.__snowfx_drawn = 0;
       return;
     }
 
@@ -1169,6 +1196,8 @@ function resetAccumulationHard(reason) {
     if (dt >= interval) {
       lastTs = ts;
       drawFrame(dt);
+      window.__snowfx_interval = drawnInterval(ts, window.__snowfx_drawn, interval);
+      window.__snowfx_drawn = ts;
     }
 
     rafId = requestAnimationFrame(loop);
@@ -1213,11 +1242,15 @@ function resetAccumulationHard(reason) {
   // 2) плюс "пробник" на случай если Лампа скроллит transform-ом (без scroll event)
   var scrollDebounce = 0;
   var surfTick = 0;
+  // surfaces are rebuilt only while "dirty" (shortly after focus/scroll/key/activity/resize), plus a rare safety rebuild
+  var surfDirtyUntil = 0, surfLastBuild = 0;
+  function markSurfDirty() { surfDirtyUntil = Date.now() + 1500; }
 
   function onAnyScrollLike() {
     if (cfg_tizen || !cfg_settle) return;
     if (!running) return;
 
+    markSurfDirty();
     if (scrollDebounce) return;
     scrollDebounce = setTimeout(function () {
       scrollDebounce = 0;
@@ -1232,6 +1265,8 @@ function resetAccumulationHard(reason) {
     try { document.addEventListener('scroll', onAnyScrollLike, true); } catch (e1) {}
     try { document.addEventListener('wheel', onAnyScrollLike, { passive: true }); } catch (e2) {}
     try { document.addEventListener('touchmove', onAnyScrollLike, { passive: true }); } catch (e3) {}
+    try { document.addEventListener('hover:focus', markSurfDirty, true); } catch (e4) {}
+    try { document.addEventListener('keydown', markSurfDirty, true); } catch (e5) {}
 
     // probe interval
     setInterval(function () {
@@ -1248,7 +1283,10 @@ function resetAccumulationHard(reason) {
       } catch (e) {}
 
       // rects follow cards moved by transform in any direction
-      if (++surfTick % 2 === 0) buildSurfaces();
+      if (++surfTick % 2 === 0) {
+        var now = Date.now();
+        if (now < surfDirtyUntil || now - surfLastBuild > 5000) buildSurfaces();
+      }
     }, 250);
   }
   function injectSnowIconCSS() {
@@ -1839,6 +1877,7 @@ function resetAccumulationHard(reason) {
 
           // save remembered snow on every screen change
           flushPiles(true);
+          markSurfDirty();
 
           // leaving a details page drops poster snow (card snow stays)
           try { eachPile(function (el, c) { var pp = el.__snowfx_pile__; if (!pp || !pp.key) { try { el.removeChild(c); } catch (e) {} el.__snowfx_pile__ = null; } }); } catch (eP) {}
@@ -1855,6 +1894,18 @@ function resetAccumulationHard(reason) {
         });
       }
     } catch (e1) {}
+
+    try {
+      if (Lampa.Screensaver && Lampa.Screensaver.listener && Lampa.Screensaver.listener.follow) {
+        Lampa.Screensaver.listener.follow('start,stop', function () {
+          // 'start' is sent just before isWorked() becomes true
+          setTimeout(function () {
+            overlay_open = detectOverlayOpen();
+            applyConfigAndState(false);
+          }, 50);
+        });
+      }
+    } catch (e4) {}
 
     try {
       if (Lampa.Player && Lampa.Player.listener && Lampa.Player.listener.follow) {
@@ -1887,6 +1938,7 @@ function resetAccumulationHard(reason) {
 
     cfg_tizen = !!cfg.tizen;
     cfg_fps = cfg.fps;
+    if (!window.__snowfx_drawn) window.__snowfx_interval = 1000 / cfg_fps;
     cfg_flakes = cfg.flakes;
 
     // синхронизируем настройку \"Стряхивание\" (важно: если включили в настройках, когда оверлей открыт, эффект временно выключен и слушатель иначе не стартанёт)
@@ -1960,7 +2012,11 @@ function resetAccumulationHard(reason) {
       if (fallCanvas && fallCtx && accCanvas && accCtx) resize();
     }
 
-    if (shouldRunNow()) startEngine();
+    if (shouldRunNow()) {
+      startEngine();
+      // the loop stops itself while the page is hidden: resume it
+      if (running && !rafId && !document.hidden) { lastTs = 0; rafId = requestAnimationFrame(loop); }
+    }
     else stopEngine();
   }
 
@@ -1978,12 +2034,17 @@ function resetAccumulationHard(reason) {
 
   function startWatcher() {
     setInterval(function () {
+      // safety net: loop paused on hidden, but no visibilitychange arrived
+      if (running && !rafId && !document.hidden) { lastTs = 0; rafId = requestAnimationFrame(loop); }
+      var en = num(storageGet(KEY_ENABLED, 1), 1) | 0;
+      // snow is off and was already handled: no layout reads, only the cheap "was it turned on" check
+      if (!en && last_enabled === 0) return;
+
       overlay_open = detectOverlayOpen();
 
       var tizen = isTizen();
       var settleDefault = tizen ? 0 : 1;
 
-      var en = num(storageGet(KEY_ENABLED, 1), 1) | 0;
       var de = num(storageGet(KEY_DENSITY, 0), 0) | 0;
       var fd = tizen ? 1 : 0;
       var fl = num(storageGet(KEY_FLAKE, fd), fd) | 0;
@@ -2060,7 +2121,9 @@ function resetAccumulationHard(reason) {
     if (window.__snowfx_resume_bound__) return;
     window.__snowfx_resume_bound__ = true;
 
-    var onResume = function () {
+    var onResume = function (e) {
+      // window focus in capture phase also catches focus of any element
+      if (e && e.type === 'focus' && e.target !== window) return;
       overlay_open = detectOverlayOpen();
 
       // На resume/focus лучше принудительно пересоздавать канвасы
