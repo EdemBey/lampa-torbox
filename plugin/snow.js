@@ -879,6 +879,18 @@ function resetAccumulationHard(reason) {
     return p.seed / 4294967296;
   }
 
+  // @module snow-grain
+  // Radius of a pile grain, the same for new snow and for a pile redrawn from the remembered count (u in 0..1): fine grain, not the radius of the falling flake
+  function grainR(u, mult) { return (0.8 + u * 1.4) * mult; }
+  // @end snow-grain
+  function drawGrain(p, x, y, r, a) {
+    var ui = p.ui || 1, sz = ((r * 2) | 0) * ui;
+    if (sz > p.ph - y) sz = Math.max(ui, (((p.ph - y) / ui) | 0) * ui);
+    p.ctx.globalAlpha = a;
+    p.ctx.drawImage(spriteDot, x, y, sz, sz);
+    p.ctx.globalAlpha = 1;
+  }
+
   function pileOf(el) {
     if (!el) return null;
     try {
@@ -922,13 +934,10 @@ function resetAccumulationHard(reason) {
             var x = nextRand(pnew) * w;
             var depth = Math.min(PILE_H - 3, 2 + i / 25) * ui;
             var y = nextRand(pnew) * depth;
-            var r = (0.8 + nextRand(pnew) * 1.4) * (cfg_size_mult || 1);
+            var r = grainR(nextRand(pnew), cfg_size_mult || 1);
             var a = 0.5 + nextRand(pnew) * 0.4;
             pnew.dots.push({ x: x, y: y, r: r, a: a });
-            pnew.ctx.globalAlpha = a;
-            var sz = ((r * 2) | 0) * ui;
-            pnew.ctx.drawImage(spriteDot, x, y, sz, sz);
-            pnew.ctx.globalAlpha = 1;
+            drawGrain(pnew, x, y, r, a);
           }
         }
       }
@@ -943,14 +952,11 @@ function resetAccumulationHard(reason) {
     var p = s.pile || (s.pile = pileOf(s.el));
     if (!p || !spriteDot || p.dots.length >= PILE_MAX) return;
     var lx = x - (s.x1 - 10);
+    r = grainR(Math.random(), cfg_size_mult || 1);
     var ui = p.ui || 1, depth = Math.min(PILE_H - 3, 2 + p.dots.length / 25) * ui;
     var ly = rand(0, depth);
     p.dots.push({ x: lx, y: ly, r: r, a: a });
-    p.ctx.globalAlpha = a;
-    var sz = ((r * 2) | 0) * ui;
-    if (sz > p.ph - ly) sz = Math.max(ui, (((p.ph - ly) / ui) | 0) * ui);
-    p.ctx.drawImage(spriteDot, lx, ly, sz, sz);
-    p.ctx.globalAlpha = 1;
+    drawGrain(p, lx, ly, r, a);
 
     if (p.key) {
       try {
