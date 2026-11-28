@@ -1025,40 +1025,6 @@ function resetAccumulationHard(reason) {
     }
   }
 
-  // @module snow-shakewait
-  // The shake-off starts when the main thread is calm: waited = ms the pile has waited (null: nothing waits),
-  // dtA/dtB = the last two frame intervals. A card step makes frames 40-60+ ms long; debris drawn then stutters.
-  var SHAKE_CALM_K = 1.5;   // calm frame: shorter than 1.5 x the normal snow frame interval (TV: 33 ms -> 50 ms)
-  var SHAKE_WAIT_MAX = 600; // ms; never keep a pile longer, whatever the load
-  function shakeNow(waited, dtA, dtB, thr, max) {
-    if (waited == null) return false;
-    return waited > max || (dtA < thr && dtB < thr);
-  }
-  // @end snow-shakewait
-
-  var shakeQueue = [], shakeDt1 = 0, shakeDt2 = 0;
-  function shakeLater(el, now) {
-    var p = el && el.__snowfx_pile__;
-    if (!p || !p.dots.length || p.shakeAt) return;
-    p.shakeAt = now;
-    shakeQueue.push(el);
-  }
-  // the oldest waiting pile, one per frame
-  function shakeStep(now, thr) {
-    var el = shakeQueue[0];
-    if (!el) return;
-    var p = el.__snowfx_pile__;
-    if (!shakeNow(p ? now - p.shakeAt : 0, shakeDt1, shakeDt2, thr, SHAKE_WAIT_MAX)) return;
-    shakeQueue.shift();
-    if (p) { p.shakeAt = 0; shakeOffPile(el); }
-  }
-  function shakeFlush() {
-    while (shakeQueue.length) {
-      var el = shakeQueue.shift(), p = el.__snowfx_pile__;
-      if (p) { p.shakeAt = 0; shakeOffPile(el); }
-    }
-  }
-
   // piles of cards that are still in the document, freed ones too (c is null for them)
   function eachPile(fn) {
     try {
@@ -1349,7 +1315,6 @@ function resetAccumulationHard(reason) {
       rafId = 0;
       lastTs = 0;
       window.__snowfx_drawn = 0;
-      shakeFlush();
       return;
     }
 
@@ -1359,8 +1324,6 @@ function resetAccumulationHard(reason) {
 
     if (dt >= interval) {
       lastTs = ts;
-      shakeDt2 = shakeDt1; shakeDt1 = dt;
-      shakeStep(ts, interval * SHAKE_CALM_K);
       drawFrame(dt);
       window.__snowfx_interval = drawnInterval(ts, window.__snowfx_drawn, interval);
       window.__snowfx_drawn = ts;
@@ -1400,7 +1363,6 @@ function resetAccumulationHard(reason) {
   }
 
   function stopEngine() {
-    shakeFlush();
     removeCanvases();
   }
 
@@ -1440,7 +1402,7 @@ function resetAccumulationHard(reason) {
       // shake off focused cards
       try {
         var fc = document.querySelectorAll('.card.focus .snowfx_pile');
-        for (var i = 0; i < fc.length; i++) shakeLater(fc[i].parentNode, window.performance.now());
+        for (var i = 0; i < fc.length; i++) shakeOffPile(fc[i].parentNode);
       } catch (e) {}
 
       // rects follow cards moved by transform in any direction
