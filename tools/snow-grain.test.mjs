@@ -5,9 +5,9 @@ import { read, slice } from './_slice.mjs';
 // (before: new grains took the radius of the falling flake, 2.7-6.6, so a fresh pile was thick clumps next to fine remembered ones).
 const src = read('snow.js');
 const { grainR } = new Function(slice(src, 'snow-grain') + '\nreturn { grainR };')();
-assert.strictEqual(grainR(0, 1), 0.8);
-assert(Math.abs(grainR(1, 1) - 2.2) < 1e-12);
-assert(Math.abs(grainR(0.5, 1.3) - 1.5 * 1.3) < 1e-12, 'size multiplier');
+assert.strictEqual(grainR(0, 1), 1.1);
+assert(Math.abs(grainR(1, 1) - 3.1) < 1e-12);
+assert(Math.abs(grainR(0.5, 1.3) - 2.1 * 1.3) < 1e-12, 'size multiplier');
 const live = /function depositOnCard\([^)]*\) \{[\s\S]*?\n  \}/.exec(src)[0];
 assert(live.includes('grainR(Math.random()'), 'new snow takes the pile grain radius');
 assert(!/f\.r/.test(live));

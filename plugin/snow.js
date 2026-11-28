@@ -811,7 +811,7 @@ function resetAccumulationHard(reason) {
     accCtx.globalAlpha = 1;
   }
 
-  var PILE_H = 14; var PILE_MAX = 260; var debris = [];
+  var PILE_H = 18; var PILE_MAX = 260; var debris = [];
   // Piles with a card in the document. A pile whose card was not a surface for PILE_FREE_MS and is far off screen gives its canvas back (the grains stay in p.dots);
   // it is redrawn from p.dots when the card is a surface (or a focused card) again. At most PILE_FREE_BATCH piles per 500 ms tick.
   var pileList = [], PILE_FREE_MS = 12000, PILE_FREE_BATCH = 30;
@@ -884,7 +884,8 @@ function resetAccumulationHard(reason) {
 
   // @module snow-grain
   // Radius of a pile grain, the same for new snow and for a pile redrawn from the remembered count (u in 0..1): fine grain, not the radius of the falling flake
-  function grainR(u, mult) { return (0.8 + u * 1.4) * mult; }
+  // radius 1.1-3.1 (mean 2.1): grains were too small next to posters; still finer than the falling flake. One place, so live and restored grains match
+  function grainR(u, mult) { return (1.1 + u * 2.0) * mult; }
   // @end snow-grain
   function drawGrain(p, x, y, r, a) {
     var ui = p.ui || 1, sz = ((r * 2) | 0) * ui;
@@ -1254,6 +1255,9 @@ function resetAccumulationHard(reason) {
                 if (settleMul > 1 && Math.random() < settleMul - 1) depositOnCard(s, f.x + rand(-5, 5), f.r * 0.8, Math.min(0.75, f.a));
                 if (Math.random() < settleP(0.55, 0, si)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
                 if (Math.random() < settleP(0.30, 0.85, si)) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.75, Math.min(0.7, f.a));
+                // pile fills ~2x faster on every speed setting: 1.85 -> ~3.55 grains per landing at "auto"
+                depositOnCard(s, f.x + rand(-6, 6), f.r * 0.8, Math.min(0.75, f.a));
+                if (Math.random() < 0.7) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.7, Math.min(0.7, f.a));
                 // ускоренное оседание: иногда добавим ещё точку
                 if (si > 1.25 && Math.random() < Math.min(0.25, (si - 1.0) * 0.18)) {
                   depositOnCard(s, f.x + rand(-7, 7), f.r * 0.65, Math.min(0.65, f.a));
