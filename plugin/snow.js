@@ -11,6 +11,7 @@
   var KEY_SETTLE  = 'snowfx_settle';  // 0 off, 1 on
   var KEY_SIZE    = 'snowfx_flake_size'; // 0 auto, 1 small, 2 medium, 3 large, 4 huge
   var KEY_SETTLE_SPEED = 'snowfx_settle_speed'; // 0 auto, 1 slow, 2 medium, 3 fast
+  var KEY_PILE_SIZE = 'snowfx_pile_size'; // 1 small, 2 medium, 3 large (default), 4 huge
   var KEY_FALL_SPEED = 'snowfx_fall_speed'; // 0 auto, 1 slow, 2 medium, 3 fast
   var KEY_SHAKE   = 'snowfx_shake';   // 0 off, 1 on (shake to clear on mobile)
   var KEY_FLAKE   = 'snowfx_flake_style'; // 0 auto, 1 dots, 2 flakes, 3 mixed
@@ -318,9 +319,9 @@ function isElVisible(el) {
   function getSettleIntensity(speed, platform) {
     // На Tizen оседание всё равно выключено, но пусть будет безопасное значение
     if (platform === 'tizen') return 0.0;
-    if (speed === 1) return 0.60;
+    if (speed === 1) return 0.40;
     if (speed === 2) return 1.00;
-    if (speed === 3) return 1.55;
+    if (speed === 3) return 1.60;
     // auto
     return 1.00;
   }
@@ -388,6 +389,8 @@ function isElVisible(el) {
     var settle_speed = num(storageGet(KEY_SETTLE_SPEED, settleSpeedDefault), settleSpeedDefault) | 0;
     if (settle_speed < 0) settle_speed = 0;
     if (settle_speed > 3) settle_speed = 3;
+    var pile_size = num(storageGet(KEY_PILE_SIZE, 3), 3) | 0;
+    if (pile_size < 1 || pile_size > 4) pile_size = 3;
     // Скорость падения снежинок
     var fallSpeedDefault = 0;
     var fall_speed = num(storageGet(KEY_FALL_SPEED, fallSpeedDefault), fallSpeedDefault) | 0;
@@ -407,6 +410,7 @@ function isElVisible(el) {
       in_card: in_card,
       flake_size: flake_size,
       settle_speed: settle_speed,
+      pile_size: pile_size,
       fall_speed: fall_speed,
       size_mult: getSizeMult(flake_size, platform),
       fall_mult: getFallSpeedMult(fall_speed, platform),
@@ -811,7 +815,7 @@ function resetAccumulationHard(reason) {
     accCtx.globalAlpha = 1;
   }
 
-  var PILE_H = 18; var PILE_MAX = 260; var debris = [];
+  var PILE_H = 46; var PILE_MAX = 400; // PILE_H: max grain diameter at size 4 (2*3.1*2.6 = 16) + depth, scaled with the grain var debris = [];
   // Piles with a card in the document. A pile whose card was not a surface for PILE_FREE_MS and is far off screen gives its canvas back (the grains stay in p.dots);
   // it is redrawn from p.dots when the card is a surface (or a focused card) again. At most PILE_FREE_BATCH piles per 500 ms tick.
   var pileList = [], PILE_FREE_MS = 12000, PILE_FREE_BATCH = 30;
@@ -885,7 +889,9 @@ function resetAccumulationHard(reason) {
   // @module snow-grain
   // Radius of a pile grain, the same for new snow and for a pile redrawn from the remembered count (u in 0..1): fine grain, not the radius of the falling flake
   // radius 1.1-3.1 (mean 2.1): grains were too small next to posters; still finer than the falling flake. One place, so live and restored grains match
-  function grainR(u, mult) { return (1.1 + u * 2.0) * mult; }
+  // cfg_pile_mult: the "Settle grain size" setting (1 / 1.5 / 2 / 2.6), applied here only
+  var cfg_pile_mult = 2;
+  function grainR(u, mult) { return (1.1 + u * 2.0) * mult * cfg_pile_mult; }
   // @end snow-grain
   function drawGrain(p, x, y, r, a) {
     var ui = p.ui || 1, sz = ((r * 2) | 0) * ui;
@@ -967,7 +973,7 @@ function resetAccumulationHard(reason) {
           if (cnt > PILE_MAX) cnt = PILE_MAX;
           for (var i = 0; i < cnt; i++) {
             var x = nextRand(pnew) * w;
-            var depth = Math.min(PILE_H - 3, 2 + i / 25) * ui;
+            var depth = Math.min(PILE_H - 3, 2 + i / 18) * ui;
             var y = nextRand(pnew) * depth;
             var r = grainR(nextRand(pnew), cfg_size_mult || 1);
             var a = 0.5 + nextRand(pnew) * 0.4;
@@ -988,7 +994,7 @@ function resetAccumulationHard(reason) {
     if (!p || !spriteDot || p.dots.length >= PILE_MAX) return;
     var lx = x - (s.x1 - 10);
     r = grainR(Math.random(), cfg_size_mult || 1);
-    var ui = p.ui || 1, depth = Math.min(PILE_H - 3, 2 + p.dots.length / 25) * ui;
+    var ui = p.ui || 1, depth = Math.min(PILE_H - 3, 2 + p.dots.length / 18) * ui;
     var ly = rand(0, depth);
     p.dots.push({ x: lx, y: ly, r: r, a: a });
     drawGrain(p, lx, ly, r, a);
@@ -1249,19 +1255,14 @@ function resetAccumulationHard(reason) {
             if (cx < s.x1 || cx > s.x2) continue;
 
             if (crossedTop(py, f.y, s.y)) {
-              if (allowDeposit(si * Math.min(1, settleMul))) {
-                depositOnCard(s, cx, f.r, Math.min(0.9, f.a + 0.15));
-                // smaller grains on a small interface: more of them per landing flake keep the fill time
-                if (settleMul > 1 && Math.random() < settleMul - 1) depositOnCard(s, f.x + rand(-5, 5), f.r * 0.8, Math.min(0.75, f.a));
-                if (Math.random() < settleP(0.55, 0, si)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
-                if (Math.random() < settleP(0.30, 0.85, si)) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.75, Math.min(0.7, f.a));
-                // pile fills ~2x faster on every speed setting: 1.85 -> ~3.55 grains per landing at "auto"
-                depositOnCard(s, f.x + rand(-6, 6), f.r * 0.8, Math.min(0.75, f.a));
-                if (Math.random() < 0.7) depositOnCard(s, f.x + rand(-6, 6), f.r * 0.7, Math.min(0.7, f.a));
-                // ускоренное оседание: иногда добавим ещё точку
-                if (si > 1.25 && Math.random() < Math.min(0.25, (si - 1.0) * 0.18)) {
-                  depositOnCard(s, f.x + rand(-7, 7), f.r * 0.65, Math.min(0.65, f.a));
-                }
+              // grains per landing = 7.1 * si (2x the old ~3.55 at "auto"); si is 0.4 / 1 / 1.6 for speed 1 / 2(auto) / 3, so 3 fills 4x faster than 1.
+              // On a small interface (settleMul > 1) more grains per landing keep the fill time; settleMul < 1 thins them out.
+              var ne = 7.1 * si * Math.min(1, settleMul) + (settleMul > 1 ? 2 * (settleMul - 1) * si : 0);
+              var nn = ne | 0;
+              if (Math.random() < ne - nn) nn++;
+              for (var gk = 0; gk < nn; gk++) {
+                if (gk) depositOnCard(s, f.x + rand(-6, 6), f.r, Math.min(0.75, f.a));
+                else depositOnCard(s, cx, f.r, Math.min(0.9, f.a + 0.15));
               }
 
               f.x = rand(0, W);
@@ -1708,6 +1709,9 @@ function resetAccumulationHard(reason) {
       settle_speed_name: 'Скорость оседания',
       settle_speed_desc: 'Скорость накопления "снежных точек" (работает только если оседание включено).',
 
+      pile_size_name: 'Размер снега на карточках',
+      pile_size_desc: 'Размер зёрен снега, оседающего на карточках (новые зёрна).',
+
       shake_name: 'Стряхивание снега',
       shake_desc: 'На смартфоне можно стряхнуть снег потряхиванием',
 
@@ -1762,6 +1766,9 @@ function resetAccumulationHard(reason) {
       settle_speed_name: 'Settle speed',
       settle_speed_desc: 'How fast settled "snow dots" accumulate (works only when settling is enabled).',
 
+      pile_size_name: 'Settle grain size',
+      pile_size_desc: 'Size of the grains of snow settling on cards (applies to new grains).',
+
       shake_name: 'Shake to clear',
       shake_desc: 'On mobile you can shake to clear snow',
 
@@ -1815,6 +1822,9 @@ function resetAccumulationHard(reason) {
 
       settle_speed_name: 'Швидкість осідання',
       settle_speed_desc: 'Швидкість накопичення "снігових точок" (працює лише якщо осідання увімкнено).',
+
+      pile_size_name: 'Розмір снігу на картках',
+      pile_size_desc: 'Розмір зерен снігу, що осідає на картках (нові зерна).',
 
       shake_name: 'Струсити сніг',
       shake_desc: 'На смартфоні можна струсити сніг потряхуванням',
@@ -1979,6 +1989,20 @@ function resetAccumulationHard(reason) {
       Lampa.SettingsApi.addParam({
         component: 'snowfx',
         param: {
+          name: KEY_PILE_SIZE,
+          type: 'select',
+          values: { 1: snowfx_t('size_small'), 2: snowfx_t('size_medium'), 3: snowfx_t('size_large'), 4: snowfx_t('size_huge') },
+          "default": 3
+        },
+        field: {
+          name: snowfx_t('pile_size_name'),
+          description: snowfx_t('pile_size_desc')
+        }
+      });
+
+      Lampa.SettingsApi.addParam({
+        component: 'snowfx',
+        param: {
           name: KEY_SHAKE,
           type: 'trigger',
           "default": !isTizen() && isMobileUA()
@@ -2084,6 +2108,8 @@ function resetAccumulationHard(reason) {
     cfg_fall_mult = (typeof cfg.fall_mult === 'number') ? cfg.fall_mult : 1.0;
     if (!cfg_fall_mult || cfg_fall_mult <= 0) cfg_fall_mult = 1.0;
 
+    cfg_pile_mult = [1, 1, 1.5, 2, 2.6][cfg.pile_size] || 2;
+
     // скорость оседания (интенсивность накопления)
     cfg_settle_intensity = (typeof cfg.settle_intensity === 'number') ? cfg.settle_intensity : 1.0;
     if (cfg_settle_intensity < 0) cfg_settle_intensity = 0;
@@ -2153,6 +2179,7 @@ function resetAccumulationHard(reason) {
   var last_settle = null;
   var last_size = null;
   var last_settle_speed = null;
+  var last_pile_size = null;
   var last_fall_speed = null;
   var last_shake = null;
   var last_in_card = null;
@@ -2189,6 +2216,8 @@ function resetAccumulationHard(reason) {
       if (ss < 0) ss = 0;
       if (ss > 3) ss = 3;
 
+      var ps = num(storageGet(KEY_PILE_SIZE, 3), 3) | 0;
+
       var fs = num(storageGet(KEY_FALL_SPEED, 0), 0) | 0;
       if (fs < 0) fs = 0;
       if (fs > 3) fs = 3;
@@ -2208,13 +2237,14 @@ function resetAccumulationHard(reason) {
         }
       }
 
-      if (en !== last_enabled || de !== last_density || fl !== last_flake || se !== last_settle || sz !== last_size || ss !== last_settle_speed || fs !== last_fall_speed || sh !== last_shake || ic !== last_in_card || ov !== last_overlay || player_fix) {
+      if (en !== last_enabled || de !== last_density || fl !== last_flake || se !== last_settle || sz !== last_size || ss !== last_settle_speed || ps !== last_pile_size || fs !== last_fall_speed || sh !== last_shake || ic !== last_in_card || ov !== last_overlay || player_fix) {
         last_enabled = en;
         last_density = de;
         last_flake = fl;
         last_settle = se;
         last_size = sz;
         last_settle_speed = ss;
+        last_pile_size = ps;
         last_fall_speed = fs;
         last_shake = sh;
         last_in_card = ic;
