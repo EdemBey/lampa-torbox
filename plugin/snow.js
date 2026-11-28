@@ -1069,28 +1069,48 @@ function resetAccumulationHard(reason) {
   }
 
   // Lampa scrolls by setting the final translate3d on .scroll__body and letting a CSS transition get there, so at the moment of focus
-  // the card is still at its old place. The box gets the same remaining shift with the same transition: the snow leaves with the card.
-  // Next frame, not now: the scroll may be started after our focus handler.
+  // the card is still at its old place. The box rides with the card: its shift is always (where the scrolls are heading now) minus
+  // (where they were when the snow left the card), played with the scroll's own transition. Every new focus retargets the scrolls,
+  // so every focus retargets the live boxes too: with a shift taken once, the snow ran ahead of the card on a fast scroll.
+  function scrollSum(el, target) {
+    var x = 0, y = 0, tr = '';
+    for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
+      if (!b.classList.contains('scroll__body')) continue;
+      var cs = getComputedStyle(b);
+      var to = target && /translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(b.style.webkitTransform || b.style.transform || '');
+      if (to) { x += +to[1]; y += +to[2]; }
+      else {
+        var m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || '');
+        if (m) { m = m[1].split(','); x += +m[4]; y += +m[5]; }
+      }
+      if (!tr) tr = cs.transitionDuration.split(',')[0] + ' ' + cs.transitionTimingFunction.split(/,(?![^(]*\))/)[0];
+    }
+    return { x: x, y: y, tr: tr };
+  }
   function followScroll(box, el) {
-    requestAnimationFrame(function () {
-      try {
-        var dx = 0, dy = 0, tr = '';
-        for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
-          if (!b.classList.contains('scroll__body')) continue;
-          var to = /translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(b.style.webkitTransform || b.style.transform || '');
-          if (!to) continue;
-          var cs = getComputedStyle(b), m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || ''), now = m ? m[1].split(',') : [0, 0, 0, 0, 0, 0];
-          var mx = to[1] - now[4], my = to[2] - now[5];
-          if (!mx && !my) continue;
-          dx += mx; dy += my;
-          tr = cs.transitionDuration.split(',')[0] + ' ' + cs.transitionTimingFunction.split(/,(?![^(]*\))/)[0];
-        }
-        if (!tr) return;
-        getComputedStyle(box).transform; // the start state must be computed before the transition is set
-        box.style.transition = 'transform ' + tr;
-        box.style.transform = 'translate3d(' + dx + 'px,' + dy + 'px,0)';
-      } catch (e) {}
-    });
+    box.__snowfx_el = el;
+    box.__snowfx_from = scrollSum(el, false);
+    getComputedStyle(box).transform; // the start state must be computed before a transition is set
+    syncBoxesSoon();
+  }
+  function syncBoxes() {
+    try {
+      var boxes = document.querySelectorAll('.snowfx_fall_layer');
+      for (var i = 0; i < boxes.length; i++) {
+        var box = boxes[i], from = box.__snowfx_from;
+        if (!from) continue;
+        var to = scrollSum(box.__snowfx_el, true);
+        var tf = 'translate3d(' + (to.x - from.x) + 'px,' + (to.y - from.y) + 'px,0)';
+        if (box.style.transform === tf) continue;
+        box.style.transition = to.tr ? 'transform ' + to.tr : 'none';
+        box.style.transform = tf;
+      }
+    } catch (e) {}
+  }
+  // after Lampa's own focus handlers have set the new scroll target (they run after our capturing listener), and once more next frame
+  function syncBoxesSoon() {
+    try { Promise.resolve().then(syncBoxes); } catch (e) {}
+    requestAnimationFrame(syncBoxes);
   }
 
   function shakeOffPile(el) {
@@ -1463,6 +1483,7 @@ function resetAccumulationHard(reason) {
         if (cfg_tizen || !cfg_settle || !running) return;
         var card = cardOf(e.target), pc = card && card.querySelector('.snowfx_pile');
         if (pc) shakeOffPile(pc.parentNode);
+        syncBoxesSoon();
       }, true);
     } catch (e4) {}
 
