@@ -1035,12 +1035,12 @@ function resetAccumulationHard(reason) {
     if (!(dist > 0) || !document.body || !document.body.animate || fallLayers > 60) return;
     var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
-    // the box holds the layers at the card and rides along while Lampa scrolls the row or the page
+    // the box holds the layers where the card is now and carries the card's velocity on (inertia)
     var box = document.createElement('div');
     box.className = 'snowfx_fall_layer';
     box.style.cssText = 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + p.w + 'px;height:' + p.ph + 'px;pointer-events:none;z-index:999999;';
     document.body.appendChild(box);
-    followScroll(box, p.el);
+    inertia(box, p.el);
     for (var j = 0; j < n; j++) {
       var c = document.createElement('canvas');
       c.width = (p.w * dp) | 0;
@@ -1068,29 +1068,43 @@ function resetAccumulationHard(reason) {
     if (!box.firstChild && box.parentNode) box.parentNode.removeChild(box);
   }
 
-  // Lampa scrolls by setting the final translate3d on .scroll__body and letting a CSS transition get there, so at the moment of focus
-  // the card is still at its old place. The box gets the same remaining shift with the same transition: the snow leaves with the card.
-  // Next frame, not now: the scroll may be started after our focus handler.
-  function followScroll(box, el) {
-    requestAnimationFrame(function () {
-      try {
-        var dx = 0, dy = 0, tr = '';
-        for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
-          if (!b.classList.contains('scroll__body')) continue;
-          var to = /translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(b.style.webkitTransform || b.style.transform || '');
-          if (!to) continue;
-          var cs = getComputedStyle(b), m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || ''), now = m ? m[1].split(',') : [0, 0, 0, 0, 0, 0];
-          var mx = to[1] - now[4], my = to[2] - now[5];
-          if (!mx && !my) continue;
-          dx += mx; dy += my;
-          tr = cs.transitionDuration.split(',')[0] + ' ' + cs.transitionTimingFunction.split(/,(?![^(]*\))/)[0];
-        }
-        if (!tr) return;
-        getComputedStyle(box).transform; // the start state must be computed before the transition is set
-        box.style.transition = 'transform ' + tr;
-        box.style.transform = 'translate3d(' + dx + 'px,' + dy + 'px,0)';
-      } catch (e) {}
-    });
+  // @module snow-inertia
+  // Physics of the shake-off: the snow leaves the card with the velocity the card has at that moment and then flies on its own,
+  // sideways by inertia (slowed by the air) and down by gravity. It never follows the card afterwards.
+  // dp: px the card moved in dt ms. The drift is played with INERTIA_EASE, whose slope at 0 is 4, so the start velocity
+  // drift / INERTIA_MS * 4 equals the card's dp / dt when drift = dp / dt * INERTIA_MS / 4.
+  var INERTIA_MS = 600, INERTIA_EASE = 'cubic-bezier(0.25,1,0.5,1)', INERTIA_MAX = 300;
+  function driftOf(dp, dt) {
+    var d = dp / Math.max(8, dt) * INERTIA_MS / 4; // dt under 8 ms: too short to tell a velocity
+    return d > INERTIA_MAX ? INERTIA_MAX : (d < -INERTIA_MAX ? -INERTIA_MAX : d);
+  }
+  // @end snow-inertia
+
+  // where Lampa's scrolls have carried the card by now: the sum of the animated translate of every .scroll__body above it
+  function scrollPos(el) {
+    var x = 0, y = 0;
+    for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
+      if (!b.classList.contains('scroll__body')) continue;
+      var cs = getComputedStyle(b), m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || '');
+      if (m) { m = m[1].split(','); x += +m[4]; y += +m[5]; }
+    }
+    return [x, y];
+  }
+  // the card's velocity is taken over the frame after the shake-off, then the box drifts on with it
+  function inertia(box, el) {
+    try {
+      var p0 = scrollPos(el), t0 = performance.now();
+      requestAnimationFrame(function () {
+        try {
+          var p1 = scrollPos(el), dt = performance.now() - t0;
+          var dx = driftOf(p1[0] - p0[0], dt), dy = driftOf(p1[1] - p0[1], dt);
+          if (!dx && !dy) return;
+          getComputedStyle(box).transform; // the start state must be computed before the transition is set
+          box.style.transition = 'transform ' + INERTIA_MS + 'ms ' + INERTIA_EASE;
+          box.style.transform = 'translate3d(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px,0)';
+        } catch (e) {}
+      });
+    } catch (e2) {}
   }
 
   function shakeOffPile(el) {

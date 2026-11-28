@@ -19,4 +19,16 @@ for (const [dist, vy] of [[250, 0.3], [250, 1.6], [520, 1], [40, 0.5]]) {
 }
 // pile sizes follow the interface scale; the reference window (1440 / 84.17 px body font) keeps scale 1
 assert(src.includes('var UI_REF = 1440 / 84.17'), 'reference scale');
-console.log('snow-debris: ok');
+
+
+// Inertia: the snow keeps the velocity the card had at the shake-off. The drift animation starts at exactly that velocity.
+{
+  const { driftOf, INERTIA_MS, INERTIA_EASE, INERTIA_MAX } = new Function(slice(src, 'snow-inertia') + '\nreturn { driftOf, INERTIA_MS, INERTIA_EASE, INERTIA_MAX };')();
+  const [x1, y1] = INERTIA_EASE.match(/\(([^)]+)\)/)[1].split(',').map(Number);
+  assert.strictEqual(driftOf(0, 16), 0, 'a card at rest: the snow falls straight down');
+  const v = -8 / 16; // card moving left, px per ms
+  assert(Math.abs(driftOf(-8, 16) / INERTIA_MS * (y1 / x1) - v) < 1e-9, 'start velocity of the drift = velocity of the card');
+  assert.strictEqual(driftOf(-500, 16), -INERTIA_MAX, 'capped');
+  assert.strictEqual(driftOf(5, 0), driftOf(5, 8), 'no division by a zero frame time');
+  console.log('snow-inertia: ok');
+}
