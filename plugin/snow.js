@@ -1252,10 +1252,10 @@ function resetAccumulationHard(reason) {
         if (surfaces.length && f.y > 0) {
           for (var sidx = 0; sidx < surfaces.length; sidx++) {
             var s = surfaces[sidx];
+            // the cheap edge test first: almost no flake crosses a given card in a given frame
+            if (!crossedTop(py, f.y, s.y)) continue;
             var cx = crossX(px, f.x, py, f.y, s.y);
-            if (cx < s.x1 || cx > s.x2) continue;
-
-            if (crossedTop(py, f.y, s.y)) {
+            if (cx >= s.x1 && cx <= s.x2) {
               // grains per landing = 7.1 * si (2x the old ~3.55 at "auto"); si is 0.4 / 1 / 1.6 for speed 1 / 2(auto) / 3, so 3 fills 4x faster than 1.
               // On a small interface (settleMul > 1) more grains per landing keep the fill time; settleMul < 1 thins them out.
               var ne = 7.1 * si * Math.min(1, settleMul) + (settleMul > 1 ? 2 * (settleMul - 1) * si : 0);

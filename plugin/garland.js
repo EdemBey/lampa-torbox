@@ -800,9 +800,10 @@
           size: size
         });
       }
+      bakeStatic(w);
     }
 
-    function drawWire(w) {
+    function drawWire(ctx, w) {
 	var wireY  = MOBILE ? 36 : ((TIZEN || TV) ? 36 : 72);
 	var sagAmp = MOBILE ? 2  : ((TIZEN || TV) ? ((Q === 'low') ? 3 : 4) : ((Q === 'low') ? 6 : 10));
 
@@ -837,21 +838,28 @@
       ctx.restore();
     }
 
-function drawBulb(b, w, now) {
-  var x = b.t * w;
+// The wire and the sockets never change between resizes, so they are painted once into a layer
+// and each frame blits it: path strokes and fills every frame are what costs on a TV.
+var staticLayer = document.createElement('canvas');
+function bakeStatic(w) {
+  staticLayer.width = canvas.width;
+  staticLayer.height = canvas.height;
+  var c = staticLayer.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawWire(c, w);
+  for (var i = 0; i < bulbs.length; i++) drawSocket(c, bulbs[i], w);
+}
 
-  var sag = Math.sin(b.t * Math.PI) * b.sagAmp;
-  var wireY = b.wireY + sag;
+function bulbY(b) {
+  var wireY = b.wireY + Math.sin(b.t * Math.PI) * b.sagAmp;
   var offset = MOBILE ? (b.size * 2.0) : ((TIZEN || TV) ? (b.size * 1.9) : (b.size * 1.6));
-  var y = wireY + b.hang + offset;
+  return wireY + b.hang + offset;
+}
 
-  var local = (now + b.delay) % b.period;
-  var p = local / b.period;
-  var stt = blinkState(p);
-
-  ctx.save();
-
-  var socketTop = y - b.size * 2.15;
+function drawSocket(ctx, b, w) {
+  var x = b.t * w;
+  var wireY = b.wireY + Math.sin(b.t * Math.PI) * b.sagAmp;
+  var socketTop = bulbY(b) - b.size * 2.15;
 
   ctx.lineWidth = 1.3;
   ctx.strokeStyle = 'rgba(0,0,0,0.55)';
@@ -864,15 +872,13 @@ function drawBulb(b, w, now) {
   ctx.fillStyle = 'rgba(20,20,20,0.85)';
   roundRect(ctx, x - (b.size * 0.75), socketTop, b.size * 1.5, b.size * 0.9, 3);
   ctx.fill();
+}
 
+function drawBulb(b, w, now) {
+  var stt = blinkState(((now + b.delay) % b.period) / b.period);
   var sprite = (stt.g > 0.05) ? spritesGlow[b.color] : spritesNoGlow[b.color];
   ctx.globalAlpha = stt.a;
-
-  var sw = sprite.width;
-  var sh = sprite.height;
-  ctx.drawImage(sprite, x - sw / 2, y - sh / 2);
-
-  ctx.restore();
+  ctx.drawImage(sprite, b.t * w - sprite.width / 2, bulbY(b) - sprite.height / 2);
 }
 
     function clearAll(w, h) {
@@ -926,8 +932,9 @@ function drawBulb(b, w, now) {
       if (snowActive(ts, sd)) draw = shouldDrawFrame(ts, sd, window.__snowfx_interval);
       if (draw) {
         clearAll(w, h);
-        drawWire(w);
+        ctx.drawImage(staticLayer, 0, 0, staticLayer.width / dpr, staticLayer.height / dpr);
         for (var i = 0; i < bulbs.length; i++) drawBulb(bulbs[i], w, now);
+        ctx.globalAlpha = 1;
       }
       // snow active: stay on rAF to sit in snow's frames; otherwise own timer, then rAF (as original)
       if (snowActive(ts, sd)) rafId = requestAnimationFrame(tick);
