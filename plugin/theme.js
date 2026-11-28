@@ -328,6 +328,9 @@
 
   // shortcut: Background.change() debounces with a hardcoded setTimeout(…, 1000); we debounce ourselves, preload, then let it run with 0. Revisit if Lampa changes change().
   // Lampa draws every image that finishes loading, even stale ones; preloading and passing only the latest URL stops the flashes after fast scrolling.
+  // ms without a new focus before the backdrop is loaded: only for the card the user stopped on. At 150 every card of a fast scroll
+  // loaded, decoded and drew its backdrop, which is what made the scroll itself lag on the TV.
+  var BG_WAIT = 400;
   function patchBackground() {
     var B = window.Lampa && Lampa.Background;
     if (!B || !B.change || B.__themePatched) return;
@@ -352,7 +355,7 @@
         img.crossOrigin = 'Anonymous';
         img.onload = img.onerror = function () { if (latest === url) fast(url); };
         img.src = url;
-      }, 150);
+      }, BG_WAIT);
     };
     if (origImm) B.immediately = function (url) { latest = ''; clearTimeout(timer); return origImm.call(B, bgUrl(url)); };
   }
