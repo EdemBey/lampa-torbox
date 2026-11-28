@@ -1457,12 +1457,13 @@ function resetAccumulationHard(reason) {
 
     // The cap falls at the moment of focus, from where the card is then. The 250 ms probe below stays as a fallback,
     // but alone it started the fall late: the card had already moved away and the snow hung in the air.
+    // Lampa dispatches hover:focus as a native event that does not bubble, so only a capturing listener sees it from the document.
     try {
-      $(document).on('hover:focus', '.card', function () {
+      document.addEventListener('hover:focus', function (e) {
         if (cfg_tizen || !cfg_settle || !running) return;
-        var pc = this.querySelector('.snowfx_pile');
+        var card = cardOf(e.target), pc = card && card.querySelector('.snowfx_pile');
         if (pc) shakeOffPile(pc.parentNode);
-      });
+      }, true);
     } catch (e4) {}
 
     // probe interval
