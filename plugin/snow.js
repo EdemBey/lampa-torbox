@@ -1035,18 +1035,23 @@ function resetAccumulationHard(reason) {
     if (!(dist > 0) || !document.body || !document.body.animate || fallLayers > 60) return;
     var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
+    // the box holds the layers at the card and rides along while Lampa scrolls the row or the page
+    var box = document.createElement('div');
+    box.className = 'snowfx_fall_layer';
+    box.style.cssText = 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + p.w + 'px;height:' + p.ph + 'px;pointer-events:none;z-index:999999;';
+    document.body.appendChild(box);
+    followScroll(box, p.el);
     for (var j = 0; j < n; j++) {
       var c = document.createElement('canvas');
-      c.className = 'snowfx_fall_layer';
       c.width = (p.w * dp) | 0;
       c.height = (p.ph * dp) | 0;
-      c.style.cssText = 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + p.w + 'px;height:' + p.ph + 'px;pointer-events:none;z-index:999999;will-change:transform;';
+      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;will-change:transform;';
       var g = { ctx: c.getContext('2d'), ui: p.ui, ph: p.ph };
       if (!g.ctx) continue;
       g.ctx.setTransform(dp, 0, 0, dp, 0, 0);
       for (var i = j; i < p.dots.length; i += n) drawGrain(g, p.dots[i].x, p.dots[i].y, p.dots[i].r, p.dots[i].a);
       var vy = rand(0.3, 1.6), t = fallFrames(dist, vy);
-      document.body.appendChild(c);
+      box.appendChild(c);
       c.animate(
         [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(' + (rand(-0.8, 0.8) * t).toFixed(1) + 'px,' + dist + 'px,0)' }],
         { duration: t * 16.67, easing: fallEasing(dist, vy, t), fill: 'forwards' }
@@ -1057,7 +1062,35 @@ function resetAccumulationHard(reason) {
   }
   function removeLayer(c) {
     fallLayers--;
-    if (c.parentNode) c.parentNode.removeChild(c);
+    var box = c.parentNode;
+    if (!box) return;
+    box.removeChild(c);
+    if (!box.firstChild && box.parentNode) box.parentNode.removeChild(box);
+  }
+
+  // Lampa scrolls by setting the final translate3d on .scroll__body and letting a CSS transition get there, so at the moment of focus
+  // the card is still at its old place. The box gets the same remaining shift with the same transition: the snow leaves with the card.
+  // Next frame, not now: the scroll may be started after our focus handler.
+  function followScroll(box, el) {
+    requestAnimationFrame(function () {
+      try {
+        var dx = 0, dy = 0, tr = '';
+        for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
+          if (!b.classList.contains('scroll__body')) continue;
+          var to = /translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(b.style.webkitTransform || b.style.transform || '');
+          if (!to) continue;
+          var cs = getComputedStyle(b), m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || ''), now = m ? m[1].split(',') : [0, 0, 0, 0, 0, 0];
+          var mx = to[1] - now[4], my = to[2] - now[5];
+          if (!mx && !my) continue;
+          dx += mx; dy += my;
+          tr = cs.transitionDuration.split(',')[0] + ' ' + cs.transitionTimingFunction.split(/,(?![^(]*\))/)[0];
+        }
+        if (!tr) return;
+        getComputedStyle(box).transform; // the start state must be computed before the transition is set
+        box.style.transition = 'transform ' + tr;
+        box.style.transform = 'translate3d(' + dx + 'px,' + dy + 'px,0)';
+      } catch (e) {}
+    });
   }
 
   function shakeOffPile(el) {
