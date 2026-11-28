@@ -17,6 +17,7 @@
     var CONFIG = {
         tmdbApiKey: '4ef0d7355d9ffb5151e987764708ce96',   // API ключ для доступу до TMDB
         cacheTime: 24 * 60 * 60 * 1000,                   // Час зберігання кешу (24 години)
+        cacheMax: 500,                                    // Скільки записів кешу тримати (найсвіжіші)
         enabled: true,                                    // Активувати/деактивувати плагін
         language: 'uk'                                    // Мова для запитів до TMDB
     };
@@ -118,9 +119,83 @@
         return 'unknown';
     }
 
-    // Ініціалізація кешу з localStorage
-    // Використовуємо localStorage для зберігання кешованих даних
-    var cache = JSON.parse(localStorage.getItem('seasonBadgeCache') || '{}');
+    // @module seasons-cache
+    // The badge reads of TMDB's tv/{id} only: id, how many seasons have episodes (as Lampa.Utils.countSeasons counts them,
+    // which online_mod_watch.splitOf asks), the last aired season/episode and that season's episode count. Pure.
+    // Record: {t: written at, i: id, k: seasons, s: last season, e: last episode, c: its episode count}; {t, x: 1} = no badge.
+    function compactSeason(d) {
+        var last = d && d.seasons && d.last_episode_to_air, cur = null, k = 0, i, s;
+        if (last) for (i = 0; i < d.seasons.length; i++) {
+            s = d.seasons[i];
+            if (s.episode_count > 0) k++;
+            if (!cur && s.season_number === last.season_number && s.season_number > 0) cur = s;
+        }
+        if (!cur) return { x: 1 };
+        if (k > d.number_of_seasons) k = d.number_of_seasons;
+        return { i: d.id, k: k, s: last.season_number, e: last.episode_number || 0, c: cur.episode_count || 0 };
+    }
+
+    // A record as the TMDB-shaped object getSeasonProgress() and splitOf() take (filler seasons keep the count)
+    function seasonOf(r) {
+        if (r.x) return {};
+        var seasons = [{ season_number: r.s, episode_count: r.c }];
+        for (var n = r.c > 0 ? 1 : 0; n < r.k; n++) seasons.push({ season_number: 0, episode_count: 1 });
+        return { id: r.i, number_of_seasons: r.k, seasons: seasons, last_episode_to_air: { season_number: r.s, episode_number: r.e } };
+    }
+
+    // The stored cache as records: old full answers {data, timestamp} become records, entries older than ttl go,
+    // of the rest the `max` newest stay. Anything unreadable is dropped.
+    function pruneSeasonCache(raw, now, ttl, max) {
+        var out = {}, keys = [], id, r, t;
+        if (!raw || typeof raw !== 'object') return out;
+        for (id in raw) {
+            r = raw[id];
+            if (!r || typeof r !== 'object') continue;
+            if (r.data) {
+                t = r.timestamp;
+                r = compactSeason(r.data);
+                r.t = t;
+            }
+            if (!(now - r.t < ttl)) continue;
+            out[id] = r;
+            keys.push(id);
+        }
+        keys.sort(function (a, b) { return out[b].t - out[a].t; });
+        keys.slice(max).forEach(function (k) { delete out[k]; });
+        return out;
+    }
+    // @end seasons-cache
+
+    // Кеш у пам'яті одразу; у localStorage пишемо раз за 2.5 с після останньої зміни (і при виході зі сторінки).
+    // A record is ~60 bytes: 500 of them are ~30 KB, far more shows than a card list scrolls through in 24 h.
+    var cache = {};
+    var saveTimer = 0;
+    function saveCache() {
+        clearTimeout(saveTimer);
+        saveTimer = 0;
+        cache = pruneSeasonCache(cache, Date.now(), CONFIG.cacheTime, CONFIG.cacheMax);
+        try { localStorage.setItem('seasonBadgeCache', JSON.stringify(cache)); } catch (e) {}
+    }
+    try {
+        var rawCache = localStorage.getItem('seasonBadgeCache') || '{}';
+        cache = pruneSeasonCache(JSON.parse(rawCache), Date.now(), CONFIG.cacheTime, CONFIG.cacheMax);
+        // the first run after the update shrinks the old full-answer cache (and drops what expired) once
+        if (JSON.stringify(cache) !== rawCache) saveCache();
+    } catch (e) {}
+    function flushCache() { if (saveTimer) saveCache(); }
+    document.addEventListener('visibilitychange', function () { if (document.hidden) flushCache(); });
+    window.addEventListener('pagehide', flushCache);
+
+    // At most 4 TMDB requests at once, one request per id while it is in flight
+    var inflight = {};
+    var active = 0;
+    var queue = [];
+    function pump() {
+        while (active < 4 && queue.length) {
+            active++;
+            queue.shift()();
+        }
+    }
 
     /**
      * Завантажує дані серіалу з TMDB API з використанням кешу
@@ -128,40 +203,55 @@
      * @returns {Promise} - проміс з даними серіалу
      */
     function fetchSeriesData(tmdbId) {
-        return new Promise(function(resolve, reject) {
-            // Перевірка кешу: якщо дані є і не прострочені - використовуємо їх
-            if (cache[tmdbId] && (Date.now() - cache[tmdbId].timestamp < CONFIG.cacheTime)) {
-                return resolve(cache[tmdbId].data);
-            }
+        // Перевірка кешу: якщо дані є і не прострочені - використовуємо їх
+        var hit = cache[tmdbId];
+        if (hit && (Date.now() - hit.t < CONFIG.cacheTime)) return Promise.resolve(seasonOf(hit));
+        if (inflight[tmdbId]) return inflight[tmdbId];
 
-            // Перевірка коректності API ключа
-            if (!CONFIG.tmdbApiKey || CONFIG.tmdbApiKey === 'ваш_tmdb_api_key_тут') {
-                return reject(new Error('Будь ласка, вставте коректний TMDB API ключ'));
-            }
+        // Перевірка коректності API ключа
+        if (!CONFIG.tmdbApiKey || CONFIG.tmdbApiKey === 'ваш_tmdb_api_key_тут') {
+            return Promise.reject(new Error('Будь ласка, вставте коректний TMDB API ключ'));
+        }
 
-            // Формування URL для запиту до TMDB API
-            var url = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${CONFIG.tmdbApiKey}&language=${CONFIG.language}`;
-            
-            // Виконання HTTP запиту до TMDB API
-            fetch(url)
-                .then(response => response.json())  // Перетворюємо відповідь в JSON
-                .then(function(data) {
-                    // Перевірка на помилку від API
-                    if (data.success === false) throw new Error(data.status_message);
+        // Формування URL для запиту до TMDB API
+        var url = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${CONFIG.tmdbApiKey}&language=${CONFIG.language}`;
 
-                    // Збереження даних в кеш з поточною міткою часу
-                    cache[tmdbId] = { 
-                        data: data, 
-                        timestamp: Date.now() 
-                    };
-                    // Зберігаємо оновлений кеш в localStorage
-                    localStorage.setItem('seasonBadgeCache', JSON.stringify(cache));
+        inflight[tmdbId] = new Promise(function(resolve, reject) {
+            queue.push(function() {
+                var released = false;
+                // a request that hangs must not hold its slot for good
+                var guard = setTimeout(release, 15000);
+                function release() {
+                    if (released) return;
+                    released = true;
+                    clearTimeout(guard);
+                    delete inflight[tmdbId];
+                    active--;
+                    pump();
+                }
+                // Виконання HTTP запиту до TMDB API
+                fetch(url)
+                    .then(response => response.json())  // Перетворюємо відповідь в JSON
+                    .then(function(data) {
+                        // Перевірка на помилку від API
+                        if (data.success === false) throw new Error(data.status_message);
 
-                    // Повертаємо отримані дані
-                    resolve(data);
-                })
-                .catch(reject);  // Передаємо помилку далі
+                        // Зберігаємо в кеш лише потрібні для мітки поля з поточною міткою часу
+                        var rec = compactSeason(data);
+                        rec.t = Date.now();
+                        cache[tmdbId] = rec;
+                        clearTimeout(saveTimer);
+                        saveTimer = setTimeout(saveCache, 2500);
+
+                        // Повертаємо отримані дані
+                        resolve(seasonOf(rec));
+                    })
+                    .catch(reject)  // Передаємо помилку далі
+                    .then(release);
+            });
+            pump();
         });
+        return inflight[tmdbId];
     }
 
     /**
