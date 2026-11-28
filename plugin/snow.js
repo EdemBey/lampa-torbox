@@ -991,7 +991,8 @@ function resetAccumulationHard(reason) {
   }
 
   function depositOnCard(s, x, r, a) {
-    var p = s.pile || (s.pile = pileOf(s.el));
+    var p = s.pile;
+    if (!p || p.dead) p = s.pile = pileOf(s.el); // dead: its canvas is falling off the card
     if (!p || !spriteDot || p.dots.length >= PILE_MAX) return;
     var lx = x - (s.x1 - 10);
     r = grainR(Math.random(), cfg_size_mult || 1);
@@ -1041,10 +1042,25 @@ function resetAccumulationHard(reason) {
     // a fast scroll shakes a card every press: six new canvases each time made the scroll itself lag, so the cap then falls as one layer
     var at = Date.now(), fast = at - lastDropAt < FAST_MS;
     lastDropAt = at;
-    var n = (fast || fallLayers > 24) ? 1 : Math.min(6, p.dots.length);
+    var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
     // above the neighbours while the snow falls, or a layer drifting sideways goes under the next poster
     var card = cardOf(p.el);
+    // Fast scroll: the cap's own canvas is what falls. A copy drawn into a new canvas reaches the screen late on a busy TV,
+    // after the cap was already wiped: the old snow popped up again on cards the focus had passed.
+    if (fast) {
+      if (!p.canvas || p.freed) return;
+      var pc = p.canvas, vy0 = rand(0.3, 1.6), t0 = fallFrames(dist, vy0);
+      pc.className = 'snowfx_fall_layer';
+      pc.style.zIndex = '4';
+      pc.animate([{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(0,' + dist + 'px,0)' }], { duration: t0 * 16.67, easing: fallEasing(dist, vy0, t0), fill: 'forwards' });
+      fallLayers++;
+      if (card) { card.__snowfx_fall = (card.__snowfx_fall || 0) + 1; card.style.zIndex = '5'; }
+      setTimeout(removeLayer, t0 * 16.67 + 50, pc, card);
+      // the pile is gone with its canvas; the next landing on this card starts a new one
+      p.canvas = null; p.dead = true; p.el.__snowfx_pile__ = null;
+      return;
+    }
     for (var j = 0; j < n; j++) {
       var c = document.createElement('canvas');
       c.className = 'snowfx_fall_layer';
@@ -1080,7 +1096,7 @@ function resetAccumulationHard(reason) {
     if (!rect) return;
     dropLayers(p, rect);
     p.dots = [];
-    try { p.ctx.clearRect(0, 0, p.w, p.ph); } catch (e) {}
+    if (!p.dead) { try { p.ctx.clearRect(0, 0, p.w, p.ph); } catch (e) {} }
     if (p.key && pileSaved && pileSaved[p.key]) {
       try { delete pileSaved[p.key]; } catch (e2) {}
       pileDirty = true;
