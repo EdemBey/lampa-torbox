@@ -429,6 +429,139 @@ try {
     },
   };
 
+  // @module release-tags
+  // Everything the list can tell about a release before playing it: from the
+  // title (Torrentio flags, tracker tags like "Dub + Sub Rus, Eng") and from
+  // ffprobe when the parser sent it. Language codes match the preferred-langs
+  // setting (RU, EN, UK...).
+  const parseReleaseTags = (title, raw) => {
+    const t = String(title || '');
+    const probe = Array.isArray(raw && raw.ffprobe) ? raw.ffprobe : [];
+    const iso = { rus: 'RU', eng: 'EN', ukr: 'UK', jpn: 'JA', jap: 'JA', kor: 'KO', chi: 'ZH', zho: 'ZH', fre: 'FR', fra: 'FR', ger: 'DE', deu: 'DE', spa: 'ES', ita: 'IT', pol: 'PL', por: 'PT', tur: 'TR', hin: 'HI', ara: 'AR', kaz: 'KK', bel: 'BE', ua: 'UK' };
+    const flag = { GB: 'EN', US: 'EN', UA: 'UK', JP: 'JA', KR: 'KO', CN: 'ZH', TW: 'ZH', MX: 'ES', BR: 'PT', IN: 'HI', KZ: 'KK', BY: 'BE' };
+    const langOf = (code) => {
+      const c = String(code || '').toLowerCase();
+      if (!c || c === 'und' || c === 'mul') return '';
+      return iso[c] || (c.length === 2 ? c.toUpperCase() : '');
+    };
+    const add = (list, v) => v && !list.includes(v) && list.push(v);
+    const tokenRe = /(?:^|[^a-z])(rus|eng|ukr|ua|jpn|jap|kor|chi|fre|fra|ger|deu|spa|ita|pol|por|tur|kaz)(?![a-z])/gi;
+    const tokens = (s) => [...String(s).matchAll(tokenRe)].map((m) => langOf(m[1]));
+
+    const audio = [];
+    const subs = [];
+    const voice = [];
+    const sound = [];
+
+    // Subtitles first, so "Sub (Rus, Eng)" is not read as audio languages.
+    let rest = t.replace(
+      /(?:^|[^a-z])(?:sub(?:s|titles?)?|субт\w*)(?![a-z])\s*[:(]?\s*((?:(?:rus|eng|ukr|ua|jpn|jap|kor|chi|fre|fra|ger|deu|spa|ita|pol|por|tur|kaz)[\s,/+&]*)*)\)?/gi,
+      (m, langs) => {
+        const found = tokens(' ' + langs);
+        found.forEach((l) => add(subs, l));
+        if (!found.length) add(subs, 'SUB');
+        return ' ';
+      }
+    );
+    if (/multi[\s.-]?subs?/i.test(t)) add(subs, 'MULTI');
+
+    // Torrentio marks languages with flag emoji.
+    for (const m of rest.matchAll(/([\u{1F1E6}-\u{1F1FF}])([\u{1F1E6}-\u{1F1FF}])/gu)) {
+      const cc = String.fromCharCode(m[1].codePointAt(0) - 0x1f1e6 + 65, m[2].codePointAt(0) - 0x1f1e6 + 65);
+      add(audio, flag[cc] || cc);
+    }
+    tokens(rest).forEach((l) => add(audio, l));
+
+    const voices = [
+      [/(?:^|[^a-z])dub(?:bed)?(?![a-z])|дубл/i, 'Дубляж'],
+      [/(?:^|[^a-z])mvo(?![a-z])|многоголос/i, 'MVO'],
+      [/(?:^|[^a-z])dvo(?![a-z])|двухголос/i, 'DVO'],
+      [/(?:^|[^a-z])avo(?![a-z])|авторск/i, 'AVO'],
+      [/(?:^|[^a-z])vo(?![a-z])|одноголос/i, 'VO'],
+    ];
+    // "Dub (Ukr)" names its language; a bare Dub/MVO is the Russian tracker convention.
+    voices.forEach(([re, label]) => {
+      const m = rest.match(re);
+      if (!m) return;
+      add(voice, label);
+      const after = rest.slice(m.index + m[0].length).match(/^[a-zа-я]*\s*\(([^)]*)\)/i);
+      const langs = after ? tokens(' ' + after[1]) : [];
+      (langs.length ? langs : ['RU']).forEach((l) => add(audio, l));
+    });
+    if (/(?:^|[^a-z])original(?![a-z])|оригинал/i.test(rest)) add(voice, 'Original');
+    if (/multi[\s.-]?audio|(?:^|[^a-z])multi(?![a-z.-]?subs?)/i.test(rest)) add(audio, 'MULTI');
+
+    // ffprobe beats guesses from the title.
+    probe.forEach((s) => {
+      const lang = langOf(s && s.tags && (s.tags.language || s.tags.LANGUAGE));
+      if (s && s.codec_type === 'audio') add(audio, lang);
+      if (s && s.codec_type === 'subtitle') add(subs, lang || 'SUB');
+    });
+    if (subs.length > 1 && subs.includes('SUB')) subs.splice(subs.indexOf('SUB'), 1);
+
+    // Sound format
+    if (/atmos/i.test(t)) add(sound, 'Atmos');
+    if (/true[\s.-]?hd/i.test(t)) add(sound, 'TrueHD');
+    if (/dts[\s.:-]?x(?![a-z])/i.test(t)) add(sound, 'DTS:X');
+    else if (/dts[\s.-]?hd/i.test(t)) add(sound, 'DTS-HD');
+    else if (/(?:^|[^a-z])dts(?![a-z])/i.test(t)) add(sound, 'DTS');
+    if (/dd\+|ddp|e-?ac-?3/i.test(t)) add(sound, 'DD+');
+    else if (/(?:^|[^a-z])(?:ac-?3|dd)(?![a-z+])/i.test(t)) add(sound, 'DD');
+    if (/(?:^|[^a-z])aac(?![a-z])/i.test(t)) add(sound, 'AAC');
+    if (/flac/i.test(t)) add(sound, 'FLAC');
+    const probeCodec = { truehd: 'TrueHD', eac3: 'DD+', ac3: 'DD', dts: 'DTS', aac: 'AAC', flac: 'FLAC', opus: 'Opus' };
+    let channels = 0;
+    probe.forEach((s) => {
+      if (!s || s.codec_type !== 'audio') return;
+      const c = probeCodec[String(s.codec_name || '').toLowerCase()];
+      if (c && !(c === 'DTS' && sound.some((x) => /^DTS/.test(x)))) add(sound, c);
+      channels = Math.max(channels, Number(s.channels) || 0);
+    });
+    const ch = t.match(/(?:^|\D)([2-9])[\s.]([01])(?!\d|\s*[gmkt]i?b)/i) || t.match(/(?:^|[^a-z\d])([68])ch(?![a-z])/i);
+    if (ch) add(sound, ch[2] !== undefined ? `${ch[1]}.${ch[2]}` : ch[1] === '8' ? '7.1' : '5.1');
+    else if (channels >= 8) add(sound, '7.1');
+    else if (channels >= 6) add(sound, '5.1');
+
+    // Video
+    const v = probe.find((s) => s && s.codec_type === 'video');
+    const w = v ? Number(v.width) || 0 : 0;
+    const res =
+      w >= 3000 || /2160p|(?:^|[^a-z\d])(?:4k|uhd)(?![a-z])/i.test(t) ? '4K'
+      : w >= 1800 || /1080[pi]/i.test(t) ? '1080p'
+      : w >= 1200 || /720p/i.test(t) ? '720p'
+      : w > 0 ? `${Number(v.height) || w}p`
+      : /(?:480|576)p/i.test(t) ? 'SD' : '';
+    const vt = String((raw && raw.info && raw.info.videotype) || '');
+    const dv = /(?:^|[^a-z])(?:dv|dovi)(?![a-z])|dolby[\s.]?vision/i.test(t) || /dovi|vision/i.test(vt);
+    const hdr = /hdr10\+|hdr10plus/i.test(t) ? 'HDR10+' : /hdr10/i.test(t) ? 'HDR10' : /hdr/i.test(t) || /hdr/i.test(vt) ? 'HDR' : '';
+    const codecName = String((v && v.codec_name) || '').toLowerCase();
+    const codec =
+      codecName === 'hevc' || /hevc|[hx][\s.]?265/i.test(t) ? 'HEVC'
+      : codecName === 'av1' || /(?:^|[^a-z])av1(?![a-z\d])/i.test(t) ? 'AV1'
+      : codecName === 'h264' || /(?:^|[^a-z])avc(?![a-z])|[hx][\s.]?264/i.test(t) ? 'AVC'
+      : codecName ? codecName.toUpperCase() : '';
+    const sources = [
+      [/remux/i, 'Remux'], [/bd-?rip|br-?rip/i, 'BDRip'], [/blu-?ray|(?:^|[^a-z])bd(?:25|50|66|100)?(?![a-z])/i, 'BluRay'],
+      [/web-?dl/i, 'WEB-DL'], [/web-?rip/i, 'WEBRip'], [/(?:^|[^a-z])web(?![a-z])/i, 'WEB'], [/hdtv/i, 'HDTV'],
+      [/dvd/i, 'DVD'], [/cam-?rip|(?:^|[^a-z])(?:cam|ts|tc|telesync|telecine)(?![a-z])/i, 'CAM'],
+    ];
+    const source = (sources.find(([re]) => re.test(t)) || [])[1] || '';
+
+    return {
+      res,
+      hdr: [dv ? 'DV' : '', hdr].filter(Boolean),
+      codec,
+      bit10: /10[\s.-]?bit|hi10/i.test(t) || /10le|p010/.test(String((v && v.pix_fmt) || '')),
+      source,
+      audio,
+      voice,
+      sound,
+      subs,
+      studios: Array.isArray(raw && raw.info && raw.info.voices) ? raw.info.voices.filter(Boolean).map(String) : [],
+    };
+  };
+  // @end release-tags
+
   const sanitizeExtensions = (value) => {
     const parts = String(Array.isArray(value) ? value.join(',') : value || '')
       .split(/[,\s]+/)
@@ -2084,32 +2217,28 @@ try {
     };
 
     // ───────────────────────────── Rendering helpers ─────────────────────────────
-    this.buildTechBar = (tech, raw) => {
-      const tag = (txt, cls) =>
-        `<div class="torbox-item__tech-item torbox-item__tech-item--${cls}">${txt}</div>`;
+    this.buildTechBar = (tags) => {
+      const esc = Utils.escapeHtml;
+      const tag = (txt, cls) => `<span class="torbox-tag torbox-tag--${cls}">${esc(txt)}</span>`;
+      const langLabel = { UK: 'UA', JA: 'JP', KO: 'KR', ZH: 'CN', SUB: 'SUB', MULTI: 'MULTI' };
+      const lang = (l, cls) => tag(langLabel[l] || l, cls);
+      const group = (icon, html) => (html ? `<span class="torbox-tags__group">${icon ? `<span class="torbox-tags__icon">${icon}</span>` : ''}${html}</span>` : '');
 
-      let html = '';
-      if (tech.video_resolution) html += tag(Utils.escapeHtml(tech.video_resolution), 'res');
-      if (tech.video_codec) html += tag(Utils.escapeHtml(String(tech.video_codec).toUpperCase()), 'codec');
-      if (tech.has_hdr) html += tag('HDR', 'hdr');
-      if (tech.has_dv) html += tag('Dolby Vision', 'dv');
+      const video =
+        (tags.res ? tag(tags.res, 'res') : '') +
+        tags.hdr.map((h) => tag(h === 'DV' ? 'Dolby Vision' : h, h === 'DV' ? 'dv' : 'hdr')).join('') +
+        (tags.codec ? tag(tags.codec + (tags.bit10 ? ' 10bit' : ''), 'codec') : '') +
+        (tags.source ? tag(tags.source, tags.source === 'CAM' ? 'bad' : 'source') : '');
+      const audio =
+        tags.audio.map((l) => lang(l, 'lang')).join('') +
+        tags.voice.map((v) => tag(v, 'voice')).join('') +
+        tags.sound.map((x) => tag(x, 'sound')).join('');
+      const subs = tags.subs.map((l) => lang(l, 'sub')).join('');
+      const studios = tags.studios.length
+        ? `<span class="torbox-tags__studios">${esc(tags.studios.slice(0, 3).join(', '))}${tags.studios.length > 3 ? ` +${tags.studios.length - 3}` : ''}</span>`
+        : '';
 
-      // Audio streams (resilient: show codec/lang/layout if present; tolerates missing ffprobe)
-      const audioStreams = Array.isArray(raw?.ffprobe) ? raw.ffprobe.filter((s) => s?.codec_type === 'audio') : [];
-      let voiceIdx = 0;
-      audioStreams.forEach((s) => {
-        let lang =
-          s?.tags?.language?.toUpperCase() ||
-          s?.tags?.LANGUAGE?.toUpperCase() ||
-          (Array.isArray(raw?.info?.voices) && raw.info.voices[voiceIdx++]) ||
-          null;
-
-        const codec = s?.codec_name ? String(s.codec_name).toUpperCase() : '';
-        const layout = s?.channel_layout || '';
-        const text = [lang, codec, layout].filter(Boolean).join(' ');
-        if (text) html += tag(Utils.escapeHtml(text), 'audio');
-      });
-
+      const html = group('', video) + group('🔊', audio) + group('💬', subs) + group('🎙', studios);
       return html ? `<div class="torbox-item__tech-bar">${html}</div>` : '';
     };
 
@@ -2122,13 +2251,11 @@ try {
         .filter(Boolean);
       const primaryTracker = trackers[0] || translate('torbox_not_available');
 
+      const tags = parseReleaseTags(raw?.Title, raw);
       const tech = {
-        video_codec: v?.codec_name || null,
-        video_resolution: v ? `${v.width}x${v.height}` : null,
-        audio_langs: [...new Set(a.map((s) => s?.tags?.language || s?.tags?.LANGUAGE).filter(Boolean))].map((x) => String(x).toUpperCase()),
+        video_codec: v?.codec_name || tags.codec || null,
+        audio_langs: tags.audio.filter((l) => l !== 'MULTI'),
         audio_codecs: [...new Set(a.map((s) => s?.codec_name).filter(Boolean))].map((x) => String(x).toUpperCase()),
-        has_hdr: /(^|\W)hdr(\W|$)/i.test(raw?.Title || '') || /hdr/i.test(raw?.info?.videotype || ''),
-        has_dv: /(dv|dolby\s*vision)/i.test(raw?.Title || '') || /(dovi|dolby\s*vision)/i.test(raw?.info?.videotype || ''),
       };
 
       const isCached = cachedSet.has(hashHex.toLowerCase());
@@ -2168,7 +2295,7 @@ try {
             : '') +
           `${translate('torbox_info_trackers')}: ${Utils.escapeHtml(primaryTracker)} ` +
           `| ${translate('torbox_info_added')}: ${Utils.formatAge(raw?.PublishDate) || translate('torbox_not_available')}`,
-        tech_bar_html: this.buildTechBar(tech, raw),
+        tech_bar_html: this.buildTechBar(tags),
       };
 
       storeRawTorrent(hashHex, raw);
@@ -4935,13 +5062,23 @@ try {
           .torbox-back-item { opacity:.8; }
           .torbox-back-item__icon { display:inline-block; margin-right:.4em; font-size:1.2em; }
           .torbox-season-item { padding:.7em .5em; }
-          .torbox-item__tech-bar { display:flex; flex-wrap:wrap; gap:.55em; margin:0 -1.2em -1em; padding:.6em 1.2em; background:rgba(0,0,0,.08); font-size:.84em; font-weight:500; transition:background .2s; }
-          .torbox-item__tech-item { padding:.22em .55em; border-radius:.4em; color:#fff; }
-          .torbox-item__tech-item--res { background:#3b82f6; }
-          .torbox-item__tech-item--codec { background:#16a34a; }
-          .torbox-item__tech-item--audio { background:#f97316; }
-          .torbox-item__tech-item--hdr { background:linear-gradient(45deg,#ff8c00,#ffa500); }
-          .torbox-item__tech-item--dv  { background:linear-gradient(45deg,#4b0082,#8a2be2); }
+          .torbox-item__tech-bar { display:flex; flex-wrap:wrap; align-items:center; gap:.45em 1em; margin:0 -1.2em -1em; padding:.6em 1.2em; background:rgba(0,0,0,.12); font-size:.82em; font-weight:600; }
+          .torbox-tags__group { display:inline-flex; flex-wrap:wrap; align-items:center; gap:.35em; }
+          .torbox-tags__icon { font-size:1.1em; margin-right:.1em; }
+          .torbox-tags__studios { opacity:.85; font-weight:500; }
+          .torbox-tag { padding:.2em .5em; border-radius:.4em; color:#fff; line-height:1.2; white-space:nowrap; }
+          .torbox-tag--res { background:#2563eb; }
+          .torbox-tag--hdr { background:linear-gradient(45deg,#f59e0b,#fbbf24); color:#1a1a1a; }
+          .torbox-tag--dv { background:linear-gradient(45deg,#4b0082,#8a2be2); }
+          .torbox-tag--codec { background:#16a34a; }
+          .torbox-tag--source { background:rgba(255,255,255,.16); }
+          .torbox-tag--bad { background:#dc2626; }
+          .torbox-tag--lang { background:#f8fafc; color:#111; letter-spacing:.04em; }
+          .torbox-tag--voice { background:#db2777; }
+          .torbox-tag--sound { background:#ea580c; }
+          .torbox-tag--sub { background:#0d9488; letter-spacing:.04em; }
+          .torbox-item.focus .torbox-tag--source { background:rgba(0,0,0,.25); }
+          .torbox-item.focus .torbox-tag--lang { box-shadow:0 0 0 1px rgba(0,0,0,.35); }
           .torbox-cached-toggle { display:inline-flex; align-items:center; justify-content:center; border:2px solid transparent; transition:.2s; gap:.5em; padding:0 .8em; min-height:2.5em; }
           .torbox-cached-toggle__icon { font-size:1.5em; line-height:1; }
           .torbox-cached-toggle__label { font-size:.85em; font-weight:500; white-space:nowrap; }
