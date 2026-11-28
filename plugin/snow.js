@@ -812,6 +812,9 @@ function resetAccumulationHard(reason) {
   }
 
   var PILE_H = 14; var PILE_MAX = 260; var debris = [];
+  // Piles with a card in the document. A pile whose card was not a surface for PILE_FREE_MS and is far off screen gives its canvas back (the grains stay in p.dots);
+  // it is redrawn from p.dots when the card is a surface (or a focused card) again. At most PILE_FREE_BATCH piles per 500 ms tick.
+  var pileList = [], PILE_FREE_MS = 12000, PILE_FREE_BATCH = 30;
   // Pile sizes are written for the reference window (Lampa body font 1440 / 84.17 = 17.1 px): they follow the interface scale, so a grain keeps its share of the card
   var UI_REF = 1440 / 84.17, pileUi = 1, settleMul = 1;
   function refreshPileScale() {
@@ -891,6 +894,42 @@ function resetAccumulationHard(reason) {
     p.ctx.globalAlpha = 1;
   }
 
+  function newPileCanvas(el, w, ph) {
+    var c = document.createElement('canvas');
+    c.className = 'snowfx_pile';
+    c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:' + ph + 'px;pointer-events:none;z-index:3;';
+    var dpr2 = (window.devicePixelRatio || 1);
+    if (dpr2 > 2) dpr2 = 2;
+    c.width = (w * dpr2) | 0;
+    c.height = (ph * dpr2) | 0;
+    var ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(dpr2, 0, 0, dpr2, 0, 0);
+    try { el.appendChild(c); } catch (e3) { return null; }
+    return { c: c, ctx: ctx };
+  }
+
+  // the canvas of a far-away card is dropped (backing store and compositor layer); p.dots keeps the pile
+  function freePile(p) {
+    p.freed = true;
+    try { p.canvas.width = 0; p.canvas.height = 0; if (p.canvas.parentNode) p.canvas.parentNode.removeChild(p.canvas); } catch (e) {}
+    p.canvas = null;
+  }
+
+  // the same canvas as before and the same grains in the order they fell: the same pixels
+  function restorePile(p) {
+    var nc = newPileCanvas(p.el, p.w, p.ph);
+    if (!nc) return;
+    p.canvas = nc.c;
+    p.ctx = nc.ctx;
+    p.freed = false;
+    p.seen = Date.now();
+    for (var i = 0; i < p.dots.length; i++) {
+      var d = p.dots[i];
+      drawGrain(p, d.x, d.y, d.r, d.a);
+    }
+  }
+
   function pileOf(el) {
     if (!el) return null;
     try {
@@ -898,7 +937,11 @@ function resetAccumulationHard(reason) {
       var w = 0;
       // layout width: the focus zoom (transform) must not rebuild the pile
       try { w = el.offsetWidth || el.getBoundingClientRect().width; } catch (e) { w = 0; }
-      if (p && Math.abs(p.w - w) < 1) return p;
+      if (p && Math.abs(p.w - w) < 1) {
+        if (p.freed) restorePile(p);
+        return p;
+      }
+      if (p) p.dead = true;
       if (p && p.canvas && p.canvas.parentNode) {
         try { p.canvas.parentNode.removeChild(p.canvas); } catch (e2) {}
       }
@@ -907,23 +950,14 @@ function resetAccumulationHard(reason) {
       var cs = window.getComputedStyle ? getComputedStyle(el) : null;
       if (cs && cs.position === 'static') el.style.position = 'relative';
 
-      var c = document.createElement('canvas');
-      c.className = 'snowfx_pile';
       var ui = pileUi, ph = Math.max(4, Math.round(PILE_H * ui)); // whole CSS px: no blur at DPR 2
-      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:' + ph + 'px;pointer-events:none;z-index:3;';
-      var dpr2 = (window.devicePixelRatio || 1);
-      if (dpr2 > 2) dpr2 = 2;
-      c.width = (w * dpr2) | 0;
-      c.height = (ph * dpr2) | 0;
-      var ctx = c.getContext('2d');
-      if (!ctx) return null;
-      ctx.setTransform(dpr2, 0, 0, dpr2, 0, 0);
-
-      try { el.appendChild(c); } catch (e3) { return null; }
+      var nc = newPileCanvas(el, w, ph);
+      if (!nc) return null;
 
       var key = pileKey(el);
-      var pnew = { canvas: c, ctx: ctx, w: w, ui: ui, ph: ph, dots: [], key: key, seed: seedOf(key || 'x') };
+      var pnew = { canvas: nc.c, ctx: nc.ctx, el: el, w: w, ui: ui, ph: ph, dots: [], key: key, seed: seedOf(key || 'x'), seen: Date.now(), freed: false, dead: false };
       el.__snowfx_pile__ = pnew;
+      pileList.push(pnew);
 
       if (key && spriteDot) {
         var st = pileStore();
@@ -991,14 +1025,38 @@ function resetAccumulationHard(reason) {
     }
   }
 
+  // piles of cards that are still in the document, freed ones too (c is null for them)
   function eachPile(fn) {
     try {
-      var cs = document.querySelectorAll('.snowfx_pile');
-      for (var i = 0; i < cs.length; i++) {
-        var c = cs[i];
-        if (c && c.parentNode) fn(c.parentNode, c);
+      for (var i = pileList.length - 1; i >= 0; i--) {
+        var p = pileList[i];
+        if (p.dead || !document.documentElement.contains(p.el)) { p.dead = true; pileList.splice(i, 1); continue; }
+        fn(p.el, p.canvas);
       }
     } catch (e) {}
+  }
+
+  // @module snow-farOff
+  // no box at all (hidden page) or more than 100 px outside the window
+  function farOff(r, W, H) {
+    return (!r.width && !r.height) || r.bottom < -100 || r.top > H + 100 || r.right < -100 || r.left > W + 100;
+  }
+  // @end snow-farOff
+
+  // once per surfaces tick: forget piles of removed cards, free the canvases of cards far off screen
+  function sweepPiles(now) {
+    var budget = PILE_FREE_BATCH;
+    for (var i = pileList.length - 1; i >= 0 && budget > 0; i--) {
+      var p = pileList[i];
+      if (p.dead || !document.documentElement.contains(p.el)) { p.dead = true; pileList.splice(i, 1); continue; }
+      if (p.freed || now - p.seen < PILE_FREE_MS) continue;
+      budget--;
+      var r = null;
+      try { r = p.el.getBoundingClientRect(); } catch (e) { r = null; }
+      // hidden (no box) or far outside the window; a card still on screen is asked again later
+      if (r && farOff(r, W, H)) freePile(p);
+      else p.seen = now;
+    }
   }
 
   function removePiles() {
@@ -1008,6 +1066,7 @@ function resetAccumulationHard(reason) {
         try { el.__snowfx_pile__ = null; } catch (e2) {}
       });
     } catch (e) {}
+    pileList = [];
     pileSaved = {};
     pileDirty = true;
     flushPiles(true);
@@ -1021,6 +1080,7 @@ function resetAccumulationHard(reason) {
     surfaces = [];
     if (cfg_tizen || !cfg_settle) return;
     refreshPileScale();
+    var now = Date.now();
 
     var els = getCardElements();
     var max = isAndroid() ? 40 : 55; // ограничиваем, чтобы не жрать CPU
@@ -1034,7 +1094,12 @@ function resetAccumulationHard(reason) {
 
       // a focused card sheds its snow, so it collects none
       var cd = cardOf(el);
-      if (cd && cd.classList.contains('focus')) continue;
+      if (cd && cd.classList.contains('focus')) {
+        // its pile must be on the canvas for the shake-off
+        var fp = el.__snowfx_pile__;
+        if (fp) { fp.seen = now; if (fp.freed) restorePile(fp); }
+        continue;
+      }
 
       // только реально видимые карточки (важно для горизонтальных каруселей и скрытых списков)
       if (!isElVisible(el)) continue;
@@ -1083,11 +1148,13 @@ function resetAccumulationHard(reason) {
         var k0 = pileKey(el);
         if (k0 && pileStore()[k0]) sp = pileOf(el);
       }
+      if (sp) { sp.seen = now; if (sp.freed) restorePile(sp); }
       surfaces[surfaces.length - 1].pile = sp;
 
       added++;
       if (added >= max) break;
     }
+    if (pileList.length) sweepPiles(now);
   }
 
   function scheduleSurfaces() {
@@ -1133,6 +1200,17 @@ function resetAccumulationHard(reason) {
     return Math.min(cap, base * si);
   }
 
+  // @module snow-cross
+  // A flake settles when it crosses the top edge of a card between two frames (it was above edge + 3 px, it is at or below the edge now), at the x of the crossing:
+  // the old "inside a 3 px band in this frame" test let a flake jump over the band when frames are slower than 60 fps (step > 3 px).
+  function crossedTop(py, y, top) { return y >= top && py < top + 3; }
+  function crossX(px, x, py, y, top) {
+    if (!(y > py) || py >= top) return x;
+    var t = (top - py) / (y - py);
+    return px + (x - px) * (t > 1 ? 1 : t);
+  }
+  // @end snow-cross
+
   function drawFrame(dt) {
     if (!fallCtx) return;
 
@@ -1141,6 +1219,7 @@ function resetAccumulationHard(reason) {
     for (var i = 0; i < flakes.length; i++) {
       var f = flakes[i];
 
+      var py = f.y, px = f.x;
       f.y += f.vy * (dt / 16.67);
       f.x += f.vx * (dt / 16.67);
 
@@ -1165,11 +1244,12 @@ function resetAccumulationHard(reason) {
         if (surfaces.length && f.y > 0) {
           for (var sidx = 0; sidx < surfaces.length; sidx++) {
             var s = surfaces[sidx];
-            if (f.x < s.x1 || f.x > s.x2) continue;
+            var cx = crossX(px, f.x, py, f.y, s.y);
+            if (cx < s.x1 || cx > s.x2) continue;
 
-            if (f.y >= s.y && f.y <= s.y + 3) {
+            if (crossedTop(py, f.y, s.y)) {
               if (allowDeposit(si * Math.min(1, settleMul))) {
-                depositOnCard(s, f.x, f.r, Math.min(0.9, f.a + 0.15));
+                depositOnCard(s, cx, f.r, Math.min(0.9, f.a + 0.15));
                 // smaller grains on a small interface: more of them per landing flake keep the fill time
                 if (settleMul > 1 && Math.random() < settleMul - 1) depositOnCard(s, f.x + rand(-5, 5), f.r * 0.8, Math.min(0.75, f.a));
                 if (Math.random() < settleP(0.55, 0, si)) depositOnCard(s, f.x + rand(-4, 4), f.r * 0.85, Math.min(0.8, f.a));
@@ -1915,7 +1995,7 @@ function resetAccumulationHard(reason) {
           flushPiles(true);
 
           // leaving a details page drops poster snow (card snow stays)
-          try { eachPile(function (el, c) { var pp = el.__snowfx_pile__; if (!pp || !pp.key) { try { el.removeChild(c); } catch (e) {} el.__snowfx_pile__ = null; } }); } catch (eP) {}
+          try { eachPile(function (el, c) { var pp = el.__snowfx_pile__; if (!pp || !pp.key) { try { el.removeChild(c); } catch (e) {} if (pp) pp.dead = true; el.__snowfx_pile__ = null; } }); } catch (eP) {}
 
           applyConfigAndState(true);
 
