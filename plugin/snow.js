@@ -1029,88 +1029,44 @@ function resetAccumulationHard(reason) {
   // The shaken-off cap falls as a few small layers moved by the browser's compositor, like Lampa's own focus animation.
   // Drawing the grains on the full-screen canvas at the screen rate froze the page for 100-180 ms on the TV (measured: 6 of 12 shake-offs).
   var fallLayers = 0;
+  // The layers are children of the card itself (like the pile canvas), so they move with the card whatever Lampa does to the row:
+  // boxes animated beside the row drifted apart from it on a fast scroll, when the TV started the row's transition late.
   function dropLayers(p, rect) {
-    var dist = H + 10 - rect.top;
+    // a row clips its cards (.scroll is overflow:hidden), so the fall ends at the row's lower edge when that is above the screen's
+    var floor = H + 10, sc = p.el.closest ? p.el.closest('.scroll') : null;
+    if (sc) { try { floor = Math.min(floor, sc.getBoundingClientRect().bottom + 10); } catch (e) {} }
+    var dist = floor - rect.top;
     // no Web Animations (old browsers) or a storm of layers (device shake with many cards): the cap just disappears
-    if (!(dist > 0) || !document.body || !document.body.animate || fallLayers > 60) return;
+    if (!(dist > 0) || !p.el.animate || fallLayers > 60) return;
     var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
-    // the box holds the layers at the card and rides along while Lampa scrolls the row or the page
-    var box = document.createElement('div');
-    box.className = 'snowfx_fall_layer';
-    box.style.cssText = 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + p.w + 'px;height:' + p.ph + 'px;pointer-events:none;z-index:999999;';
-    document.body.appendChild(box);
-    followScroll(box, p.el);
+    // above the neighbours while the snow falls, or a layer drifting sideways goes under the next poster
+    var card = cardOf(p.el);
     for (var j = 0; j < n; j++) {
       var c = document.createElement('canvas');
+      c.className = 'snowfx_fall_layer';
       c.width = (p.w * dp) | 0;
       c.height = (p.ph * dp) | 0;
-      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;will-change:transform;';
+      c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:' + p.ph + 'px;pointer-events:none;z-index:4;will-change:transform;';
       var g = { ctx: c.getContext('2d'), ui: p.ui, ph: p.ph };
       if (!g.ctx) continue;
       g.ctx.setTransform(dp, 0, 0, dp, 0, 0);
       for (var i = j; i < p.dots.length; i += n) drawGrain(g, p.dots[i].x, p.dots[i].y, p.dots[i].r, p.dots[i].a);
       var vy = rand(0.3, 1.6), t = fallFrames(dist, vy);
-      box.appendChild(c);
+      p.el.appendChild(c);
       c.animate(
         [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(' + (rand(-0.8, 0.8) * t).toFixed(1) + 'px,' + dist + 'px,0)' }],
         { duration: t * 16.67, easing: fallEasing(dist, vy, t), fill: 'forwards' }
       );
       fallLayers++;
-      setTimeout(removeLayer, t * 16.67 + 50, c);
+      if (card) { card.__snowfx_fall = (card.__snowfx_fall || 0) + 1; card.style.zIndex = '5'; }
+      setTimeout(removeLayer, t * 16.67 + 50, c, card);
     }
   }
-  function removeLayer(c) {
+  function removeLayer(c, card) {
     fallLayers--;
-    var box = c.parentNode;
-    if (!box) return;
-    box.removeChild(c);
-    if (!box.firstChild && box.parentNode) box.parentNode.removeChild(box);
-  }
-
-  // Lampa scrolls by setting the final translate3d on .scroll__body and letting a CSS transition get there, so at the moment of focus
-  // the card is still at its old place. The box rides with the card: its shift is always (where the scrolls are heading now) minus
-  // (where they were when the snow left the card), played with the scroll's own transition. Every new focus retargets the scrolls,
-  // so every focus retargets the live boxes too: with a shift taken once, the snow ran ahead of the card on a fast scroll.
-  function scrollSum(el, target) {
-    var x = 0, y = 0, tr = '';
-    for (var b = el; b && b.nodeType === 1; b = b.parentNode) {
-      if (!b.classList.contains('scroll__body')) continue;
-      var cs = getComputedStyle(b);
-      var to = target && /translate3d\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px/.exec(b.style.webkitTransform || b.style.transform || '');
-      if (to) { x += +to[1]; y += +to[2]; }
-      else {
-        var m = /matrix\(([^)]+)\)/.exec(cs.transform || cs.webkitTransform || '');
-        if (m) { m = m[1].split(','); x += +m[4]; y += +m[5]; }
-      }
-      if (!tr) tr = cs.transitionDuration.split(',')[0] + ' ' + cs.transitionTimingFunction.split(/,(?![^(]*\))/)[0];
-    }
-    return { x: x, y: y, tr: tr };
-  }
-  function followScroll(box, el) {
-    box.__snowfx_el = el;
-    box.__snowfx_from = scrollSum(el, false);
-    getComputedStyle(box).transform; // the start state must be computed before a transition is set
-    syncBoxesSoon();
-  }
-  function syncBoxes() {
-    try {
-      var boxes = document.querySelectorAll('.snowfx_fall_layer');
-      for (var i = 0; i < boxes.length; i++) {
-        var box = boxes[i], from = box.__snowfx_from;
-        if (!from) continue;
-        var to = scrollSum(box.__snowfx_el, true);
-        var tf = 'translate3d(' + (to.x - from.x) + 'px,' + (to.y - from.y) + 'px,0)';
-        if (box.style.transform === tf) continue;
-        box.style.transition = to.tr ? 'transform ' + to.tr : 'none';
-        box.style.transform = tf;
-      }
-    } catch (e) {}
-  }
-  // after Lampa's own focus handlers have set the new scroll target (they run after our capturing listener), and once more next frame
-  function syncBoxesSoon() {
-    try { Promise.resolve().then(syncBoxes); } catch (e) {}
-    requestAnimationFrame(syncBoxes);
+    if (c.parentNode) c.parentNode.removeChild(c);
+    if (card && --card.__snowfx_fall <= 0) card.style.zIndex = '';
   }
 
   function shakeOffPile(el) {
@@ -1483,7 +1439,6 @@ function resetAccumulationHard(reason) {
         if (cfg_tizen || !cfg_settle || !running) return;
         var card = cardOf(e.target), pc = card && card.querySelector('.snowfx_pile');
         if (pc) shakeOffPile(pc.parentNode);
-        syncBoxesSoon();
       }, true);
     } catch (e4) {}
 
