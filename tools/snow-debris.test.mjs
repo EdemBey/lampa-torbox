@@ -1,20 +1,22 @@
 import assert from 'node:assert';
-import { read } from './_slice.mjs';
+import { read, slice } from './_slice.mjs';
 
-// Shaken-off grains: position is a closed form of the age in 60 fps frames, equal to the old per-frame Euler step at 60 fps, whatever the frame rate.
+// A shaken-off cap falls as CSS-animated layers. Their timing must follow the path the grains had on the canvas:
+// y = vy*t + 0.09*t*(t+1), t in 60 fps frames (the closed form of the old per-frame step vy += 0.18, y += vy).
 const src = read('snow.js');
-assert(src.includes('0.09 * d.t * (d.t + 1)'), 'closed-form y');
-assert(!/d\.vy \+= 0\.18/.test(src), 'old per-frame step left in place');
-const y0 = 100, vy = 1.1, vx = -0.4, x0 = 50;
-let y = y0, v = vy, x = x0;
-for (let n = 1; n <= 60; n++) { v += 0.18; x += vx; y += v; }
-const t = 60;
-assert(Math.abs(y - (y0 + vy * t + 0.09 * t * (t + 1))) < 1e-9, 'y at 60 frames');
-assert(Math.abs(x - (x0 + vx * t)) < 1e-9, 'x at 60 frames');
-// the same age reached in 20 ms steps (k = 1.2) or in one jump gives the same point
-const at = (steps) => { let a = 0; for (const k of steps) a += k; return y0 + vy * a + 0.09 * a * (a + 1); };
-assert(Math.abs(at([1.2, 1.2, 1.2]) - at([3.6])) < 1e-9, 'frame rate independent');
+const { fallFrames, fallEasing } = new Function(slice(src, 'snow-fall') + '\nreturn { fallFrames, fallEasing };')();
+assert(!/debris/.test(src), 'canvas debris left in place');
+const path = (vy, t) => vy * t + 0.09 * t * (t + 1);
+for (const [dist, vy] of [[250, 0.3], [250, 1.6], [520, 1], [40, 0.5]]) {
+  const t = fallFrames(dist, vy);
+  assert(Math.abs(path(vy, t) - dist) < 1e-6, 'lands at dist after fallFrames');
+  // the timing function, evaluated as a Bezier with x = s (x1 = 1/3, x2 = 2/3), is the same path at every moment
+  const [, y1, , y2] = fallEasing(dist, vy, t).match(/\(([^)]+)\)/)[1].split(',').map(Number);
+  for (const s of [0.1, 0.25, 0.5, 0.75, 0.9]) {
+    const bez = 3 * (1 - s) * (1 - s) * s * y1 + 3 * (1 - s) * s * s * y2 + s * s * s;
+    assert(Math.abs(bez * dist - path(vy, s * t)) < dist * 2e-4, 'easing follows the path at ' + s);
+  }
+}
 // pile sizes follow the interface scale; the reference window (1440 / 84.17 px body font) keeps scale 1
 assert(src.includes('var UI_REF = 1440 / 84.17'), 'reference scale');
-assert(Math.abs(1440 / 84.17 / (1440 / 84.17) - 1) < 1e-12);
 console.log('snow-debris: ok');

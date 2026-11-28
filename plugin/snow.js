@@ -653,7 +653,7 @@ function resetAccumulationHard(reason) {
 
     flakes = [];
     surfaces = [];
-    debris = [];
+    try { var fl = document.querySelectorAll('.snowfx_fall_layer'); for (var li = 0; li < fl.length; li++) fl[li].parentNode.removeChild(fl[li]); } catch (eL) {}
     running = false;
     lastTs = 0;
     window.__snowfx_drawn = 0;
@@ -816,7 +816,7 @@ function resetAccumulationHard(reason) {
   }
 
   // PILE_H: max grain diameter at size 4 (2*3.1*2.6 = 16) + depth, scaled with the grain
-  var PILE_H = 46; var PILE_MAX = 400; var debris = [];
+  var PILE_H = 46; var PILE_MAX = 400;
   // Piles with a card in the document. A pile whose card was not a surface for PILE_FREE_MS and is far off screen gives its canvas back (the grains stay in p.dots);
   // it is redrawn from p.dots when the card is a surface (or a focused card) again. At most PILE_FREE_BATCH piles per 500 ms tick.
   var pileList = [], PILE_FREE_MS = 12000, PILE_FREE_BATCH = 30;
@@ -1013,18 +1013,60 @@ function resetAccumulationHard(reason) {
     }
   }
 
+  // @module snow-fall
+  // A shaken-off grain used to fall as y = vy*t + 0.09*t*(t+1), t in 60 fps frames. fallFrames: t at which it has fallen dist px;
+  // fallEasing: that same curve as a CSS timing function (a quadratic is an exact cubic Bezier with x at 1/3 and 2/3).
+  function fallFrames(dist, vy) {
+    var b = vy + 0.09;
+    return (Math.sqrt(b * b + 0.36 * dist) - b) / 0.18;
+  }
+  function fallEasing(dist, vy, t) {
+    var al = (vy + 0.09) * t / dist;
+    return 'cubic-bezier(0.3333,' + (al / 3).toFixed(4) + ',0.6667,' + ((1 + al) / 3).toFixed(4) + ')';
+  }
+  // @end snow-fall
+
+  // The shaken-off cap falls as a few small layers moved by the browser's compositor, like Lampa's own focus animation.
+  // Drawing the grains on the full-screen canvas at the screen rate froze the page for 100-180 ms on the TV (measured: 6 of 12 shake-offs).
+  var fallLayers = 0;
+  function dropLayers(p, rect) {
+    var dist = H + 10 - rect.top;
+    // no Web Animations (old browsers) or a storm of layers (device shake with many cards): the cap just disappears
+    if (!(dist > 0) || !document.body || !document.body.animate || fallLayers > 60) return;
+    var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
+    var dp = Math.min(window.devicePixelRatio || 1, 2);
+    for (var j = 0; j < n; j++) {
+      var c = document.createElement('canvas');
+      c.className = 'snowfx_fall_layer';
+      c.width = (p.w * dp) | 0;
+      c.height = (p.ph * dp) | 0;
+      c.style.cssText = 'position:fixed;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + p.w + 'px;height:' + p.ph + 'px;pointer-events:none;z-index:999999;will-change:transform;';
+      var g = { ctx: c.getContext('2d'), ui: p.ui, ph: p.ph };
+      if (!g.ctx) continue;
+      g.ctx.setTransform(dp, 0, 0, dp, 0, 0);
+      for (var i = j; i < p.dots.length; i += n) drawGrain(g, p.dots[i].x, p.dots[i].y, p.dots[i].r, p.dots[i].a);
+      var vy = rand(0.3, 1.6), t = fallFrames(dist, vy);
+      document.body.appendChild(c);
+      c.animate(
+        [{ transform: 'translate3d(0,0,0)' }, { transform: 'translate3d(' + (rand(-0.8, 0.8) * t).toFixed(1) + 'px,' + dist + 'px,0)' }],
+        { duration: t * 16.67, easing: fallEasing(dist, vy, t), fill: 'forwards' }
+      );
+      fallLayers++;
+      setTimeout(removeLayer, t * 16.67 + 50, c);
+    }
+  }
+  function removeLayer(c) {
+    fallLayers--;
+    if (c.parentNode) c.parentNode.removeChild(c);
+  }
+
   function shakeOffPile(el) {
     var p = el && el.__snowfx_pile__;
     if (!p || !p.dots.length) return;
     var rect = null;
     try { rect = el.getBoundingClientRect(); } catch (e) { rect = null; }
     if (!rect) return;
-    var step = 1;
-    if (p.dots.length > 150) step = Math.ceil(p.dots.length / 150);
-    for (var i = 0; i < p.dots.length && debris.length < 600; i += step) {
-      var d = p.dots[i];
-      debris.push({ x0: rect.left + d.x, y0: rect.top + d.y, t: 0, vx: rand(-0.8, 0.8), vy: rand(0.3, 1.6), r: d.r, u: p.ui || 1, a: d.a });
-    }
+    dropLayers(p, rect);
     p.dots = [];
     try { p.ctx.clearRect(0, 0, p.w, p.ph); } catch (e) {}
     if (p.key && pileSaved && pileSaved[p.key]) {
@@ -1284,23 +1326,6 @@ function resetAccumulationHard(reason) {
       fallCtx.drawImage(img, f.x, f.y, size, size);
     }
 
-    if (debris.length && spriteDot) {
-      var k = Math.min(dt, 250) / 16.67; // long stall: do not fling the grains out of the screen at once
-      for (var di = debris.length - 1; di >= 0; di--) {
-        var d = debris[di];
-        // age in 60 fps frames; closed form of the old per-frame step (vy += 0.18, y += vy): the same path at any frame rate, a slow frame skips ahead
-        d.t += k;
-        var dy = d.y0 + d.vy * d.t + 0.09 * d.t * (d.t + 1);
-        if (dy > H + 10) {
-          debris.splice(di, 1);
-          continue;
-        }
-        fallCtx.globalAlpha = d.a;
-        var ds = ((d.r * 2) | 0) * d.u;
-        fallCtx.drawImage(spriteDot, d.x0 + d.vx * d.t, dy, ds, ds);
-      }
-    }
-
     fallCtx.globalAlpha = 1;
   }
 
@@ -1312,13 +1337,6 @@ function resetAccumulationHard(reason) {
     return iv < 16 ? 16 : (iv > 100 ? 100 : iv);
   }
   // @end snow-interval
-
-  // @module snow-boost
-  // draw this frame? while shaken-off debris is flying: every rAF (full screen rate); otherwise the fps limiter
-  function shouldDraw(dt, interval, hasDebris) {
-    return hasDebris || dt >= interval;
-  }
-  // @end snow-boost
 
   function loop(ts) {
     if (!running) return;
@@ -1335,7 +1353,7 @@ function resetAccumulationHard(reason) {
     if (!lastTs) lastTs = ts;
     var dt = ts - lastTs;
 
-    if (shouldDraw(dt, interval, debris.length > 0)) {
+    if (dt >= interval) {
       lastTs = ts;
       drawFrame(dt);
       window.__snowfx_interval = drawnInterval(ts, window.__snowfx_drawn, interval);
