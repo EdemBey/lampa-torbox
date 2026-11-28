@@ -89,7 +89,9 @@ Lampa показывает пункты «Аниме», «Лента» и «Ре
 
 ## Сервер
 
-`server/` — помощник для Alloha, Turbo, HDrezka и TorBox в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo, HDrezka и TorBox — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает) и на api.torbox.app; cookie, пароль и ключ TorBox в логи не пишет. Маршрут `/torbox` пересылает запросы любому, кто знает адрес сервера (с любым ключом TorBox), поэтому адрес держите в секрете.
+`server/` — помощник для Alloha, Turbo, HDrezka и TorBox в браузере (Node, порт 8790). К Alloha ходит через Cloudflare WARP (wireproxy) и curl-impersonate. К Turbo, HDrezka и TorBox — напрямую; HDrezka получает запросы как от приложения (`okhttp`), и проверка на бота не показывается. Пересылает запросы только на rezka.ag и hdrezka.ag (зеркало HDrezka на другом домене через сервер и скрипт не работает), на api.torbox.app и на CDN Turbo (`*.superdupercdn.com`); cookie, пароль и ключ TorBox в логи не пишет. Маршрут `/torbox` пересылает запросы любому, кто знает адрес сервера (с любым ключом TorBox), поэтому адрес держите в секрете.
+
+Видео Turbo (плейлисты и куски) идёт через сервер, маршрут `/turbo/cdn/<хост>/<путь>`. Ссылки CDN действуют только для IP, который их получил, а получает их сервер; плеер с другим IP (VPN, мобильный интернет, не из дома) напрямую получил бы 404. Поэтому весь трафик Turbo проходит через сервер и туннель, и скорость вне дома ограничена отдачей домашнего интернета.
 
 Нужен `server/wireproxy.conf` (в git не хранится): WireGuard-профиль WARP (`wgcf register && wgcf generate`, затем скопировать `wgcf-profile.conf` в `server/wireproxy.conf`) и в конце секция
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { decodePlaylist, browserCookie, isCdnHost, masterPlaylist, dddVoiceovers, absolutePlaylist } from './turbo.mjs';
+import { decodePlaylist, browserCookie, isCdnHost, masterPlaylist, dddVoiceovers, cdnProxyUrl, proxyPlaylist, handleTurbo } from './turbo.mjs';
 
 // Build a PlayerJS-style blob: junk prefix + base64 JSON with "//" + btoa("c/c/c") markers spliced in.
 const cfg = { lang: 'en', file: [{ title: 'Season 1', folder: [{ title: 'Episode 1', folder: [{ title: '(RU) DUB', file: '[720p]https://cdn-x.obrut.show/stream/a,[Auto]https://cdn-x.obrut.show/stream/b' }] }] }] };
@@ -62,10 +62,69 @@ const dvNone = dddVoiceovers({ voices: V, u: 'https://nope', base: BASE, tail: T
 assert.deepEqual(dvNone.map((v) => v.selected), [true, false]);
 console.log('turbo voiceovers OK');
 
-// absolutePlaylist
+// cdnProxyUrl
 const PL = 'https://lucky.z.superdupercdn.com/t/h/s:1/hls-v1-a3.m3u8';
-assert.equal(absolutePlaylist('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n./1080.mp4:hls:manifest-v1-a3.m3u8\n', PL),
-  '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://lucky.z.superdupercdn.com/t/h/s:1/1080.mp4:hls:manifest-v1-a3.m3u8\n');
-assert.equal(absolutePlaylist('#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4,\nseg1.ts\n', PL),
-  '#EXT-X-MAP:URI="https://lucky.z.superdupercdn.com/t/h/s:1/init.mp4"\n#EXTINF:4,\nhttps://lucky.z.superdupercdn.com/t/h/s:1/seg1.ts\n');
-console.log('turbo absolutePlaylist OK');
+const PB = 'https://helper.example';
+assert.equal(cdnProxyUrl('https://lucky.z.superdupercdn.com/t/h/s:1/hls-v1-a3.m3u8?x=1', PB), PB + '/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/hls-v1-a3.m3u8?x=1');
+console.log('turbo cdnProxyUrl OK');
+
+// proxyPlaylist
+const PP_IN = '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:4,\n./seg1.ts\nhttps://other.example/x.m3u8\nhttps://lucky.z.superdupercdn.com/t/h/s:1/seg2.ts\n';
+const PP_OUT = '#EXTM3U\n#EXT-X-MAP:URI="' + PB + '/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/init.mp4"\n#EXTINF:4,\n' + PB + '/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/seg1.ts\nhttps://other.example/x.m3u8\n' + PB + '/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/seg2.ts\n';
+assert.equal(proxyPlaylist(PP_IN, PL, PB), PP_OUT);
+console.log('turbo proxyPlaylist OK');
+
+// proxyPlaylist with a colon path + query
+const PP2_IN = '1080.mp4:hls:manifest-v1-a3.m3u8?t=1\n';
+const PP2_OUT = PB + '/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/1080.mp4:hls:manifest-v1-a3.m3u8?t=1\n';
+assert.equal(proxyPlaylist(PP2_IN, PL, PB), PP2_OUT);
+console.log('turbo proxyPlaylist colon OK');
+
+// handleTurbo signature helpers
+function fakeRes() {
+  const r = { statusCode: null, headers: null, body: '', headersSent: false, writableEnded: false };
+  r.writeHead = (status, headers) => { r.statusCode = status; r.headers = headers || {}; r.headersSent = true; };
+  r.end = (body = '') => { r.body += body == null ? '' : String(body); r.writableEnded = true; };
+  r.destroy = () => {};
+  return r;
+}
+
+// /turbo/master.m3u8 accepts the proxy form and rewrites every link through it
+const masterUrl = new URL('http://h/turbo/master.m3u8');
+masterUrl.searchParams.set('base', 'http://h/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/');
+masterUrl.searchParams.set('a', '1:x');
+const mres = fakeRes();
+assert.equal(await handleTurbo({ headers: {} }, mres, masterUrl, 'http://h'), true);
+assert.equal(mres.statusCode, 200);
+for (const line of String(mres.body).split('\n')) {
+  const mm = line.match(/URI="([^"]*)"/);
+  if (mm) assert.ok(mm[1].startsWith('http://h/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/'), mm[1]);
+  const t = line.trim();
+  if (t && !t.startsWith('#')) assert.ok(t.startsWith('http://h/turbo/cdn/lucky.z.superdupercdn.com/t/h/s:1/'), t);
+}
+console.log('turbo handleTurbo master OK');
+
+for (const badBase of ['http://h/turbo/cdn/evil.com/', 'http://other/turbo/cdn/lucky.z.superdupercdn.com/x/']) {
+  const u = new URL('http://h/turbo/master.m3u8');
+  u.searchParams.set('base', badBase);
+  u.searchParams.set('a', '1:x');
+  const r = fakeRes();
+  assert.equal(await handleTurbo({ headers: {} }, r, u, 'http://h'), true);
+  assert.equal(r.statusCode, 400, badBase);
+}
+console.log('turbo handleTurbo master bad base OK');
+
+// /turbo/cdn/<host> rejects a non-CDN host without calling fetch
+let fetchCalled = false;
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => { fetchCalled = true; throw new Error('should not be called'); };
+try {
+  const u = new URL('http://h/turbo/cdn/evil.com/x');
+  const r = fakeRes();
+  assert.equal(await handleTurbo({ headers: {} }, r, u, 'http://h'), true);
+  assert.equal(r.statusCode, 400);
+  assert.equal(fetchCalled, false);
+  console.log('turbo handleTurbo cdn bad host OK');
+} finally {
+  globalThis.fetch = originalFetch;
+}

@@ -5,6 +5,7 @@
 // so the checkbox runs in the user's browser while every request — and the approval cookie —
 // belongs to this server. After that the server reads playlists on its own until obrut
 // asks again, and online_mod then shows the checkbox again.
+import { Readable, pipeline } from 'node:stream';
 const TIMEOUT = 20000;
 const PARENT = 'https://onomovie.ru/';
 // Shown instead of obrut's player once the check passes: the phone (or the TV iframe) only had to tick the box.
@@ -139,12 +140,36 @@ export function dddVoiceovers({ voices, u, base, tail }) {
   return { voiceovers: out };
 }
 
-// Playlist lines are relative to the CDN path; the player fetches them from this helper's origin, so make them absolute.
-export function absolutePlaylist(text, playlistUrl) {
+// Turn a CDN url into a same-origin proxy url so the player never touches the CDN directly.
+export function cdnProxyUrl(cdnUrl, base) {
+  const u = new URL(cdnUrl);
+  return `${base}/turbo/cdn/${u.hostname}${u.pathname}${u.search}`;
+}
+
+// Resolve each playlist URI against playlistUrl and wrap CDN hosts through cdnProxyUrl.
+export function proxyPlaylist(text, playlistUrl, base) {
   return text.split('\n').map((line) => {
-    if (line.startsWith('#')) return line.replace(/URI="([^"]*)"/g, (m, x) => `URI="${new URL(x, playlistUrl).href}"`);
+    if (line.startsWith('#')) {
+      return line.replace(/URI="([^"]*)"/g, (m, x) => {
+        let resolved;
+        try { resolved = new URL(x, playlistUrl).href; } catch { return m; }
+        try {
+          const u = new URL(resolved);
+          if (isCdnHost(u.hostname)) return `URI="${cdnProxyUrl(resolved, base)}"`;
+        } catch {}
+        return `URI="${resolved}"`;
+      });
+    }
     const t = line.trim();
-    return t ? new URL(t, playlistUrl).href : line;
+    if (!t) return line;
+    try {
+      const resolved = new URL(t, playlistUrl).href;
+      const u = new URL(resolved);
+      if (isCdnHost(u.hostname)) return cdnProxyUrl(resolved, base);
+      return resolved;
+    } catch {
+      return line;
+    }
   }).join('\n');
 }
 
@@ -202,13 +227,13 @@ export async function handleTurbo(req, res, url, base) {
       return true;
     }
 
-    // Only this hop needs obrut's Referer, which a browser cannot set; the player follows the CDN redirects itself.
+    // Only this hop needs obrut's Referer, which a browser cannot set; the player then gets the CDN through /turbo/cdn/.
     if (path === '/turbo/stream') {
       const r = await resolveCdn(q.get('u'));
       if (!r.cdn) { json(res, r.status, r.body); return true; }
       // Lampa asks with json=1 and hands the link to its player: a redirect from here to the CDN makes the browser send Origin: null, which the CDN refuses.
-      if (q.get('json')) { json(res, 200, { url: r.cdn }); return true; }
-      res.writeHead(302, { Location: r.cdn, 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+      if (q.get('json')) { json(res, 200, { url: cdnProxyUrl(r.cdn, base) }); return true; }
+      res.writeHead(302, { Location: cdnProxyUrl(r.cdn, base), 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
       res.end();
       return true;
     }
@@ -222,14 +247,58 @@ export async function handleTurbo(req, res, url, base) {
       const text = await up.text();
       if (!text.includes('#EXTM3U')) { json(res, 502, { error: 'playlist' }); return true; }
       res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
-      res.end(absolutePlaylist(text, up.url));
+      res.end(proxyPlaylist(text, up.url, base));
+      return true;
+    }
+
+    // Proxy all CDN traffic (playlists + segments) so the player (another IP) never hits the CDN directly.
+    const cdnMatch = path.match(/^\/turbo\/cdn\/([^/]+)(\/.*)?$/);
+    if (cdnMatch) {
+      const host = cdnMatch[1];
+      const rest = cdnMatch[2] || '/';
+      if (!isCdnHost(host)) { json(res, 400, { error: 'bad cdn host' }); return true; }
+      const isM3u8 = rest.endsWith('.m3u8');
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), TIMEOUT);
+      let up;
+      try { up = await fetch('https://' + host + rest + url.search, { redirect: 'follow', headers: { 'User-Agent': state.ua || 'Mozilla/5.0', ...(req.headers.range ? { Range: req.headers.range } : {}) }, signal: ac.signal }); } catch (e) { clearTimeout(timer); throw e; }
+      if (!isM3u8) clearTimeout(timer);
+      if (!isCdnHost(new URL(up.url).hostname)) { clearTimeout(timer); await up.body?.cancel(); json(res, 502, { error: 'unexpected cdn host' }); return true; }
+      if (isM3u8) {
+        let text;
+        try { text = await up.text(); } finally { clearTimeout(timer); }
+        if (!text.includes('#EXTM3U')) { json(res, 502, { error: 'playlist' }); return true; }
+        res.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true', 'Cache-Control': 'no-store' });
+        res.end(proxyPlaylist(text, up.url, base));
+        return true;
+      }
+      const out = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Private-Network': 'true' };
+      for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+        if (h === 'content-length' && up.headers.get('content-encoding')) continue;
+        const v = up.headers.get(h);
+        if (v) out[h] = v;
+      }
+      res.writeHead(up.status, out);
+      if (!up.body) { res.end(); return true; }
+      const body = Readable.fromWeb(up.body);
+      body.on('error', () => res.destroy());
+      pipeline(body, res, () => {});
       return true;
     }
 
     if (path === '/turbo/master.m3u8') {
       let b;
       try { b = new URL(q.get('base') || ''); } catch { b = null; }
-      if (!b || b.protocol !== 'https:' || !isCdnHost(b.hostname) || !b.pathname.endsWith('/') || b.search || b.hash) { json(res, 400, { error: 'bad base' }); return true; }
+      let proxyForm = false;
+      if (b) {
+        try {
+          if (b.origin === new URL(base).origin && b.pathname.startsWith('/turbo/cdn/') && b.pathname.endsWith('/') && !b.search && !b.hash) {
+            const seg = b.pathname.slice('/turbo/cdn/'.length).split('/')[0];
+            if (isCdnHost(seg)) proxyForm = true;
+          }
+        } catch {}
+      }
+      if (!b || !proxyForm) { json(res, 400, { error: 'bad base' }); return true; }
       const tracks = q.getAll('a').map((a) => { const m = a.match(/^(\d{1,2}):([\s\S]*)$/); return m && { n: Number(m[1]), name: m[2] }; });
       if (!tracks.length || tracks.length > 32 || tracks.some((t) => !t)) { json(res, 400, { error: 'bad tracks' }); return true; }
       const def = Number(q.get('d') ?? tracks[0].n);
