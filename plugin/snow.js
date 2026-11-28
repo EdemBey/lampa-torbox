@@ -1307,6 +1307,13 @@ function resetAccumulationHard(reason) {
   }
   // @end snow-interval
 
+  // @module snow-boost
+  // draw this frame? while shaken-off debris is flying: every rAF (full screen rate); otherwise the fps limiter
+  function shouldDraw(dt, interval, hasDebris) {
+    return hasDebris || dt >= interval;
+  }
+  // @end snow-boost
+
   function loop(ts) {
     if (!running) return;
 
@@ -1322,7 +1329,7 @@ function resetAccumulationHard(reason) {
     if (!lastTs) lastTs = ts;
     var dt = ts - lastTs;
 
-    if (dt >= interval) {
+    if (shouldDraw(dt, interval, debris.length > 0)) {
       lastTs = ts;
       drawFrame(dt);
       window.__snowfx_interval = drawnInterval(ts, window.__snowfx_drawn, interval);
