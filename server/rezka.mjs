@@ -1,3 +1,4 @@
+import { readBody } from './body.mjs';
 // HDrezka proxy for online_mod. Rezka sends no CORS headers and its Anubis bot check
 // passes only app user agents (okhttp/4.12.0 gets the real page), so a browser cannot
 // reach it directly: the helper relays with that UA, mirroring the CORS-proxy URL protocol
@@ -104,17 +105,12 @@ export async function handleRezka(req, res) {
     const method = req.method === 'POST' ? 'POST' : 'GET';
     let body;
     if (method === 'POST') {
-      const chunks = [];
-      let n = 0;
-      for await (const c of req) {
-        if ((n += c.length) > 65536) {
-          res.writeHead(413, { ...cors, 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('too large');
-          return true;
-        }
-        chunks.push(c);
+      body = await readBody(req);
+      if (!body) {
+        res.writeHead(413, { ...cors, 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('too large');
+        return true;
       }
-      body = Buffer.concat(chunks);
       upHeaders['Content-Type'] = req.headers['content-type'] || 'application/x-www-form-urlencoded';
       upHeaders['X-Requested-With'] = 'XMLHttpRequest';
     }

@@ -1,3 +1,4 @@
+import { readBody } from './body.mjs';
 // TorBox relay for the TorBox plugin. api.torbox.app refuses CORS from lampa.mx, so a browser
 // cannot call it; the helper does, and the user's key never passes a third-party proxy.
 // Only api.torbox.app/v1/api/* is reachable: the helper is public.
@@ -37,13 +38,8 @@ export async function handleTorbox(req, res, url) {
 
     let body;
     if (req.method === 'POST') {
-      const chunks = [];
-      let n = 0;
-      for await (const c of req) {
-        if ((n += c.length) > 65536) { text(res, 413, 'too large'); return true; }
-        chunks.push(c);
-      }
-      body = Buffer.concat(chunks);
+      body = await readBody(req);
+      if (!body) { text(res, 413, 'too large'); return true; }
     }
 
     const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });

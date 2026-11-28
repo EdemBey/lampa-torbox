@@ -6,6 +6,7 @@
 // belongs to this server. After that the server reads playlists on its own until obrut
 // asks again, and online_mod then shows the checkbox again.
 import { Readable, pipeline } from 'node:stream';
+import { readBody } from './body.mjs';
 const TIMEOUT = 20000;
 const PARENT = 'https://onomovie.ru/';
 // Shown instead of obrut's player once the check passes: the phone (or the TV iframe) only had to tick the box.
@@ -351,18 +352,7 @@ export async function handleTurbo(req, res, url, base) {
       };
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
       if (req.method === 'POST') headers.Origin = 'https://' + state.host;
-      const body = req.method === 'POST' ? await new Promise((ok) => {
-        const parts = [];
-        let size = 0;
-        let overflow = false;
-        req.on('data', (d) => {
-          if (overflow) return;
-          size += d.length;
-          if (size > 65536) { overflow = true; req.destroy(); ok(null); return; }
-          parts.push(d);
-        });
-        req.on('end', () => { if (!overflow) ok(Buffer.concat(parts)); });
-      }) : undefined;
+      const body = req.method === 'POST' ? await readBody(req) : undefined;
       if (body === null) { json(res, 413, { error: 'body too large' }); return true; }
       // obrut answers the checkbox POST with 404 when it comes through curl-impersonate, so the check stays on Node fetch.
       const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
