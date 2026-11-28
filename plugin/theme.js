@@ -328,9 +328,18 @@
 
   // shortcut: Background.change() debounces with a hardcoded setTimeout(…, 1000); we debounce ourselves, preload, then let it run with 0. Revisit if Lampa changes change().
   // Lampa draws every image that finishes loading, even stale ones; preloading and passing only the latest URL stops the flashes after fast scrolling.
-  // ms without a new focus before the backdrop is loaded: only for the card the user stopped on. At 150 every card of a fast scroll
-  // loaded, decoded and drew its backdrop, which is what made the scroll itself lag on the TV.
-  var BG_WAIT = 400;
+  // Fast scroll: a focus less than FAST_MS after the previous one. Then the backdrop and the billboard wait STOP_WAIT ms for the user
+  // to stop on a card, so the cards passed on the way load and draw nothing. A calm step keeps the short delays.
+  var FAST_MS = 350, STOP_WAIT = 400, lastFocusAt = 0, fastNow = false;
+  function focusWait(calm) { return fastNow ? STOP_WAIT : calm; }
+  // registered before the other focus listeners, so they already see the answer for this focus
+  function watchFocusPace() {
+    document.addEventListener('hover:focus', function () {
+      var at = Date.now();
+      fastNow = at - lastFocusAt < FAST_MS;
+      lastFocusAt = at;
+    }, true);
+  }
   function patchBackground() {
     var B = window.Lampa && Lampa.Background;
     if (!B || !B.change || B.__themePatched) return;
@@ -355,7 +364,7 @@
         img.crossOrigin = 'Anonymous';
         img.onload = img.onerror = function () { if (latest === url) fast(url); };
         img.src = url;
-      }, BG_WAIT);
+      }, focusWait(150));
     };
     if (origImm) B.immediately = function (url) { latest = ''; clearTimeout(timer); return origImm.call(B, bgUrl(url)); };
   }
@@ -619,7 +628,7 @@
     bb.timer = setTimeout(function () {
       bb.root.classList.add('lampa-bb--out');
       setTimeout(function () { bbRender(d); bb.root.classList.remove('lampa-bb--out'); }, 160);
-    }, 120);
+    }, focusWait(120));
   }
 
   // Lampa creates only params.items.view (7) cards in a row and adds more on scroll; the smaller billboard cards need more to fill the width.
@@ -693,6 +702,7 @@
   }
 
   function ready() {
+    watchFocusPace();
     patchBackground();
     fixBackdrops();
     bbInit();
