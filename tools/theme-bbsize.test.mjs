@@ -25,10 +25,10 @@ for (const [w, h, top, ck] of rows) {
 const a = bbSize(900, 17.1), b = bbSize(540, 11.4);
 assert.strictEqual(a.gap, 34);
 assert.strictEqual(b.fade[1], Math.round(3.3 * 11.4));
-// cards in a row: window width over the card width (13.8 em), rounded up, plus one; no em -> nothing to add
-assert.strictEqual(bbCount(960, 0.68 * fs(960)), 10); // TV 960x540: 8.97 -> 9 + 1
-assert.strictEqual(bbCount(1440, 0.68 * fs(1440)), 10);
-assert.strictEqual(bbCount(1920, 0.68 * fs(1920)), 10);
+// cards in a row: window width over the card width (13.8 em), rounded up; no em -> nothing to add
+assert.strictEqual(bbCount(960, 0.68 * fs(960)), 9); // TV 960x540: 8.97 -> 9
+assert.strictEqual(bbCount(1440, 0.68 * fs(1440)), 9);
+assert.strictEqual(bbCount(1920, 0.68 * fs(1920)), 9);
 assert.strictEqual(bbCount(960, 0), 0);
 assert.strictEqual(bbCount(NaN, 10), 0);
 assert.strictEqual(bbCount(0, 10), 0);

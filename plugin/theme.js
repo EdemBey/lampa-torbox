@@ -281,6 +281,7 @@
     bbSync();
     bakeSync();
     shadowSync();
+    trimSync();
   }
 
   function addSetting() {
@@ -306,6 +307,12 @@
       component: 'lampa_theme',
       param: { name: 'lampa_theme_billboard', type: 'trigger', default: true },
       field: { name: 'Афиша на главной', description: 'Описание и рейтинги выбранной карточки над рядами' },
+      onChange: apply
+    });
+    Lampa.SettingsApi.addParam({
+      component: 'lampa_theme',
+      param: { name: TRIM_KEY, type: 'trigger', default: true },
+      field: { name: 'Выгружать постеры за экраном', description: 'Постеры далёких от фокуса карточек освобождают память, при приближении возвращаются: ТВ не тормозит при долгой работе' },
       onChange: apply
     });
     Lampa.SettingsApi.addParam({
@@ -451,8 +458,8 @@
     var ck = Math.max(0.45, Math.min(0.68, ((H * 0.96 - rows) / fs - 6.85) / 26.4));
     return { bottom: bottom, rows: rows, ck: Math.round(ck * 100) / 100, gap: Math.round(2 * fs), tail: Math.round(2.4 * fs), lift: Math.round(0.7 * fs), fade: [Math.round(2.1 * fs), Math.round(3.3 * fs), Math.round(1.4 * fs)] };
   }
-  // cards to have in a row: the window width over the card width (13.8 card-em, measured), rounded up (the last one peeks in), plus one more
-  function bbCount(W, em) { return em > 0 && W > 0 ? Math.min(20, Math.ceil(W / (13.8 * em)) + 1) : 0; }
+  // cards to have in a row: the window width over the card width (13.8 card-em, measured), rounded up (the one peeking in at the edge is already counted)
+  function bbCount(W, em) { return em > 0 && W > 0 ? Math.min(20, Math.ceil(W / (13.8 * em))) : 0; }
   // @end theme-bbsize
 
   function bbBuild() {
@@ -686,8 +693,112 @@
     if (Lampa.Listener) Lampa.Listener.follow('resize_end', bbResize);
     window.addEventListener('resize', bbResize);
     if (Lampa.Listener) Lampa.Listener.follow('line', bbOnLine);
+    if (Lampa.Listener) Lampa.Listener.follow('activity', function () { trim.fr = -1; trimSchedule(TRIM_WAIT); });
     if (Lampa.Listener) Lampa.Listener.follow('resize_end', shadowSync);
   }
+
+  // @module theme-trim
+  // The core never removes cards that scrolled away nor frees their posters (~0.5 MB decoded each); on a TV the memory only grows.
+  // Far from the focus a card's <img> loses its src attribute (the decoded image and texture go; no load or error event fires, so the core's
+  // onerror / card--loaded / one-shot 'visible' are untouched, and the box is absolutely positioned 100%, so layout does not change).
+  // The original src is kept on the element and put back ahead of time. Decided by indexes only: rows from the focused row, cards from each row's active card.
+  var TRIM_KEY = 'lampa_theme_trim', TRIM_K = 4, TRIM_M = 15, TRIM_BACK = 5, TRIM_BATCH = 12, TRIM_WAIT = 400;
+  // 'unload' | 'restore' | 'keep'. Unload beyond K rows or M cards; restore only inside K-1 rows and M-BACK cards; in between the card stays as it is (no flapping).
+  function trimDecide(row, card, frow, fcard, loaded, K, M) {
+    var dr = Math.abs(row - frow), dc = Math.abs(card - fcard);
+    if (dr > K || dc > M) return loaded ? 'unload' : 'keep';
+    if (dr <= K - 1 && dc <= M - TRIM_BACK) return loaded ? 'keep' : 'restore';
+    return 'keep';
+  }
+  // @end theme-trim
+
+  var trim = { t: 0, used: false, on: false, fr: -1 };
+
+  function trimOn() {
+    var v = true;
+    try { v = String(Lampa.Storage.get(TRIM_KEY, 'true')) !== 'false'; } catch (e) {}
+    return isOn() && v;
+  }
+
+  // not postponed by later calls: while the user keeps moving a pass still runs every `ms`, so the cards ahead come back in time
+  function trimSchedule(ms) {
+    if (trim.t) return;
+    trim.t = setTimeout(function () {
+      trim.t = 0;
+      trimPass();
+    }, ms);
+  }
+
+  // the setting is read here only (apply() runs on every change), not on each pass
+  function trimSync() {
+    trim.on = trimOn();
+    if (trim.used || trim.on) trimSchedule(50);
+  }
+
+  function trimRestore(img) {
+    var s = img.__lt_src;
+    img.__lt_src = '';
+    if (s && !img.getAttribute('src')) img.setAttribute('src', s);
+  }
+
+  // only an image that finished loading (not the core's "broken" stub) and is not unloaded already; naturalWidth is not read: it can force a layout
+  function trimUnload(img) {
+    var s = img.getAttribute('src');
+    if (!s || img.__lt_src || !img.complete || s.indexOf('img_broken') >= 0) return false;
+    img.__lt_src = s;
+    img.removeAttribute('src');
+    return true;
+  }
+
+  // active card of a row other than the focused one: the core keeps it in line.active
+  function trimAnchor(row) {
+    for (var i = 0; i < bb.lines.length; i++) {
+      try { if (bb.lines[i].render(true) === row) return typeof bb.lines[i].active === 'number' ? bb.lines[i].active : 0; } catch (e) {}
+    }
+    return 0;
+  }
+
+  function trimPass() {
+    var i, j, left = 0, n = 0, act = document.querySelector('.activity--active');
+    if (!trim.on) { // switched off: bring everything back, in batches
+      if (!trim.used) return;
+      var all = document.querySelectorAll('img.card__img');
+      for (i = 0; i < all.length; i++) {
+        if (!all[i].__lt_src) continue;
+        if (n >= TRIM_BATCH) { left = 1; break; }
+        trimRestore(all[i]);
+        n++;
+      }
+      if (left) trimSchedule(60);
+      else trim.used = false;
+      return;
+    }
+    if (!act || !act.closest || bbOverlay() || act.querySelector('.full-start-new, .full-start')) return;
+    var fc = act.querySelector('.items-line .focus'); // a card, or the row's "more" button; none while the focus is in the header or the menu
+    var rows = act.querySelectorAll('.items-line'), fl = fc && fc.closest('.items-line'), fr = -1, ops = [], back = [];
+    for (i = 0; i < rows.length; i++) if (rows[i] === fl) fr = trim.fr = i;
+    if (fr < 0) fr = trim.fr >= 0 && trim.fr < rows.length ? trim.fr : -1; // the rows stay where they were: count from the last focused one
+    if (fr < 0) return; // no focus yet (page just opened or came back): the visible row is unknown, touch nothing until the focus lands (hover:focus reschedules)
+    for (i = 0; i < rows.length; i++) {
+      var cards = rows[i].querySelectorAll('.card'), an = 0;
+      an = trimAnchor(rows[i]);
+      if (i === fr) for (j = 0; j < cards.length; j++) if (cards[j] === fc) an = j;
+      for (j = 0; j < cards.length; j++) {
+        var img = cards[j].__lt_img || (cards[j].__lt_img = cards[j].querySelector('.card__img'));
+        if (!img) continue;
+        var d = trimDecide(i, j, fr, an, !img.__lt_src, TRIM_K, TRIM_M);
+        if (d === 'restore') back.push(img);
+        else if (d === 'unload') ops.push(img);
+      }
+    }
+    // coming back first: those are the ones the user is about to see
+    for (i = 0; i < back.length && n < TRIM_BATCH; i++, n++) trimRestore(back[i]);
+    left = back.length - i;
+    for (i = 0; i < ops.length && n < TRIM_BATCH; i++) if (trimUnload(ops[i])) { n += 2; trim.used = true; } // an unload costs about twice a restore
+    if (left > 0 || (i < ops.length && n >= TRIM_BATCH)) trimSchedule(100);
+  }
+
+  document.addEventListener('hover:focus', function () { trimSchedule(TRIM_WAIT); }, true);
 
   function ready() {
     patchBackground();
