@@ -815,7 +815,8 @@ function resetAccumulationHard(reason) {
     accCtx.globalAlpha = 1;
   }
 
-  var PILE_H = 46; var PILE_MAX = 400; // PILE_H: max grain diameter at size 4 (2*3.1*2.6 = 16) + depth, scaled with the grain var debris = [];
+  // PILE_H: max grain diameter at size 4 (2*3.1*2.6 = 16) + depth, scaled with the grain
+  var PILE_H = 46; var PILE_MAX = 400; var debris = [];
   // Piles with a card in the document. A pile whose card was not a surface for PILE_FREE_MS and is far off screen gives its canvas back (the grains stay in p.dots);
   // it is redrawn from p.dots when the card is a surface (or a focused card) again. At most PILE_FREE_BATCH piles per 500 ms tick.
   var pileList = [], PILE_FREE_MS = 12000, PILE_FREE_BATCH = 30;
