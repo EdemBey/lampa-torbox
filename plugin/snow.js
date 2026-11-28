@@ -1028,7 +1028,7 @@ function resetAccumulationHard(reason) {
 
   // The shaken-off cap falls as a few small layers moved by the browser's compositor, like Lampa's own focus animation.
   // Drawing the grains on the full-screen canvas at the screen rate froze the page for 100-180 ms on the TV (measured: 6 of 12 shake-offs).
-  var fallLayers = 0;
+  var fallLayers = 0, lastDropAt = 0, FAST_MS = 350;
   // The layers are children of the card itself (like the pile canvas), so they move with the card whatever Lampa does to the row:
   // boxes animated beside the row drifted apart from it on a fast scroll, when the TV started the row's transition late.
   function dropLayers(p, rect) {
@@ -1038,7 +1038,10 @@ function resetAccumulationHard(reason) {
     var dist = floor - rect.top;
     // no Web Animations (old browsers) or a storm of layers (device shake with many cards): the cap just disappears
     if (!(dist > 0) || !p.el.animate || fallLayers > 60) return;
-    var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
+    // a fast scroll shakes a card every press: six new canvases each time made the scroll itself lag, so the cap then falls as one layer
+    var at = Date.now(), fast = at - lastDropAt < FAST_MS;
+    lastDropAt = at;
+    var n = (fast || fallLayers > 24) ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
     // above the neighbours while the snow falls, or a layer drifting sideways goes under the next poster
     var card = cardOf(p.el);
