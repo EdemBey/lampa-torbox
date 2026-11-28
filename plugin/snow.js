@@ -1030,6 +1030,10 @@ function resetAccumulationHard(reason) {
   // dtA/dtB = the last two frame intervals. A card step makes frames 40-60+ ms long; debris drawn then stutters.
   var SHAKE_CALM_K = 1.5;   // calm frame: shorter than 1.5 x the normal snow frame interval (TV: 33 ms -> 50 ms)
   var SHAKE_WAIT_MAX = 600; // ms; never keep a pile longer, whatever the load
+  // TV: cfg_fps 50 (interval 20 ms) but the limiter draws every 2nd 60 Hz frame, so the real snow frame is ~33 ms;
+  // dt below is measured between DRAWN frames (loop's lastTs moves only on drawn ones). Threshold never under 50 ms.
+  var SHAKE_FRAME_MIN = 33.4;
+  function shakeThr(interval) { return SHAKE_CALM_K * (interval > SHAKE_FRAME_MIN ? interval : SHAKE_FRAME_MIN); }
   function shakeNow(waited, dtA, dtB, thr, max) {
     if (waited == null) return false;
     return waited > max || (dtA < thr && dtB < thr);
@@ -1360,7 +1364,7 @@ function resetAccumulationHard(reason) {
     if (dt >= interval) {
       lastTs = ts;
       shakeDt2 = shakeDt1; shakeDt1 = dt;
-      shakeStep(ts, interval * SHAKE_CALM_K);
+      shakeStep(ts, shakeThr(interval));
       drawFrame(dt);
       window.__snowfx_interval = drawnInterval(ts, window.__snowfx_drawn, interval);
       window.__snowfx_drawn = ts;
