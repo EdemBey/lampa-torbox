@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { Readable, pipeline } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { bareLabel, borthFor, episodeKey, mapPlaylist, pickQuality, QUALITIES, YB, skipsOf, sourceFor, withDeadline } from './alloha-sign.mjs';
 import { handleTurbo } from './turbo.mjs';
 import { handleRezka, isRezkaPath } from './rezka.mjs';
@@ -402,7 +403,7 @@ const headersFor = (s) => ({
 // would sign the same episode dozens of times a minute — which is exactly what gets it refused.
 const RETRY_STATUS = /^(401|403|410)$/;
 
-function recoverOnce(key, s) {
+export function recoverOnce(key, s) {
   const now = Date.now();
   const hit = recoveries.get(key);
   if (hit) {
@@ -423,7 +424,7 @@ function recoverOnce(key, s) {
     }
   })().then(
     () => recoveries.set(key, { at: Date.now() }),
-    () => recoveries.delete(key),
+    (e) => { recoveries.delete(key); throw e; },
   );
   recoveries.set(key, { at: now, promise: p });
   return p;
@@ -608,7 +609,7 @@ const isAllowedIframe = (u) => {
   catch { return false; }
 };
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   // A malformed path (//, //[ ) throws here, and an unhandled rejection would kill the process.
   let url;
   try { url = new URL(req.url, 'http://x'); }
@@ -770,4 +771,6 @@ http.createServer(async (req, res) => {
     console.error(url.pathname, e.message);
     if (!res.headersSent) send(res, 502, e.message); else res.end();
   }
-}).listen(PORT, '0.0.0.0', () => console.log(`alloha helper on :${PORT}`));
+});
+// Only when run directly: a test imports this file without opening the port.
+if (process.argv[1] === fileURLToPath(import.meta.url)) server.listen(PORT, '0.0.0.0', () => console.log(`alloha helper on :${PORT}`));

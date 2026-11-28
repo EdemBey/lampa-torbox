@@ -15,7 +15,6 @@
 
     // === НАЛАШТУВАННЯ ПЛАГІНА ===
     var CONFIG = {
-        tmdbApiKey: '4ef0d7355d9ffb5151e987764708ce96',   // API ключ для доступу до TMDB
         cacheTime: 24 * 60 * 60 * 1000,                   // Час зберігання кешу (24 години)
         cacheMax: 500,                                    // Скільки записів кешу тримати (найсвіжіші)
         enabled: true,                                    // Активувати/деактивувати плагін
@@ -208,13 +207,8 @@
         if (hit && (Date.now() - hit.t < CONFIG.cacheTime)) return Promise.resolve(seasonOf(hit));
         if (inflight[tmdbId]) return inflight[tmdbId];
 
-        // Перевірка коректності API ключа
-        if (!CONFIG.tmdbApiKey || CONFIG.tmdbApiKey === 'ваш_tmdb_api_key_тут') {
-            return Promise.reject(new Error('Будь ласка, вставте коректний TMDB API ключ'));
-        }
-
-        // Формування URL для запиту до TMDB API
-        var url = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${CONFIG.tmdbApiKey}&language=${CONFIG.language}`;
+        // Lampa.TMDB.api: the user's TMDB proxy setting applies (api.themoviedb.org is blocked for some)
+        var url = Lampa.TMDB.api('tv/' + tmdbId + '?api_key=' + Lampa.TMDB.key() + '&language=' + CONFIG.language);
 
         inflight[tmdbId] = new Promise(function(resolve, reject) {
             queue.push(function() {

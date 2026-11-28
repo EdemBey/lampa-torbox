@@ -351,19 +351,16 @@ export async function handleTurbo(req, res, url, base) {
       };
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
       if (req.method === 'POST') headers.Origin = 'https://' + state.host;
-      const body = req.method === 'POST' ? await new Promise((ok) => {
+      let body;
+      if (req.method === 'POST') {
         const parts = [];
         let size = 0;
-        let overflow = false;
-        req.on('data', (d) => {
-          if (overflow) return;
-          size += d.length;
-          if (size > 65536) { overflow = true; req.destroy(); ok(null); return; }
+        for await (const d of req) {
+          if ((size += d.length) > 65536) { json(res, 413, { error: 'body too large' }); return true; }
           parts.push(d);
-        });
-        req.on('end', () => { if (!overflow) ok(Buffer.concat(parts)); });
-      }) : undefined;
-      if (body === null) { json(res, 413, { error: 'body too large' }); return true; }
+        }
+        body = Buffer.concat(parts);
+      }
       // obrut answers the checkbox POST with 404 when it comes through curl-impersonate, so the check stays on Node fetch.
       const up = await fetch(target, { method: req.method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT) });
       rememberCookies(up.headers);

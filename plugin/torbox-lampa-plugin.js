@@ -4595,9 +4595,9 @@ try {
       },
       torbox_settings_server_name: { ru: 'Адрес своего сервера', en: 'Own server address', uk: 'Адреса свого сервера' },
       torbox_settings_server_desc: {
-        ru: 'Сервер из server/ (тот же, что в online_mod). Если указан, запросы к TorBox и ключ идут только через него',
-        en: 'Server from server/ (the same one as in online_mod). If set, TorBox requests and the key go only through it',
-        uk: 'Сервер із server/ (той самий, що в online_mod). Якщо вказано, запити до TorBox і ключ ідуть лише через нього',
+        ru: 'Сервер из server/ (тот же, что в online_mod). Если указан, запросы к TorBox идут через него; поиск Torrentio по-прежнему получает ключ напрямую',
+        en: 'Server from server/ (the same one as in online_mod). If set, TorBox requests go through it; the Torrentio search still gets the key directly',
+        uk: 'Сервер із server/ (той самий, що в online_mod). Якщо вказано, запити до TorBox ідуть через нього; пошук Torrentio і далі отримує ключ напряму',
       },
       torbox_settings_proxy_name: { ru: 'URL CORS‑прокси', en: 'CORS proxy URL', uk: 'URL CORS-проксі' },
       torbox_settings_proxy_desc: {
