@@ -1422,6 +1422,16 @@ function resetAccumulationHard(reason) {
     try { document.addEventListener('wheel', onAnyScrollLike, { passive: true }); } catch (e2) {}
     try { document.addEventListener('touchmove', onAnyScrollLike, { passive: true }); } catch (e3) {}
 
+    // The cap falls at the moment of focus, from where the card is then. The 250 ms probe below stays as a fallback,
+    // but alone it started the fall late: the card had already moved away and the snow hung in the air.
+    try {
+      $(document).on('hover:focus', '.card', function () {
+        if (cfg_tizen || !cfg_settle || !running) return;
+        var pc = this.querySelector('.snowfx_pile');
+        if (pc) shakeOffPile(pc.parentNode);
+      });
+    } catch (e4) {}
+
     // probe interval
     setInterval(function () {
       // flush persisted piles periodically (even if engine stopped)
