@@ -16,6 +16,7 @@
   var KEY_SHAKE   = 'snowfx_shake';   // 0 off, 1 on (shake to clear on mobile)
   var KEY_FLAKE   = 'snowfx_flake_style'; // 0 auto, 1 dots, 2 flakes, 3 mixed
   var KEY_IN_CARD = 'snowfx_in_card'; // 0 off, 1 on (details/card screen)
+  var KEY_FAST_LITE = 'snowfx_fast_lite'; // on: a fast scroll drops the cap as one piece (a TV cannot keep up with the full shake-off)
   // Menu icon (filled), behaves like native icons (color inherits from menu item)
   var SNOW_ICON =
     '<svg class="snowfx-menu-icon" width="88" height="83" viewBox="0 0 88 83" xmlns="http://www.w3.org/2000/svg">' +
@@ -1040,7 +1041,7 @@ function resetAccumulationHard(reason) {
     // no Web Animations (old browsers) or a storm of layers (device shake with many cards): the cap just disappears
     if (!(dist > 0) || !p.el.animate || fallLayers > 60) return;
     // a fast scroll shakes a card every press: six new canvases each time made the scroll itself lag, so the cap then falls as one layer
-    var at = Date.now(), fast = at - lastDropAt < FAST_MS;
+    var at = Date.now(), fast = at - lastDropAt < FAST_MS && flag(KEY_FAST_LITE, !isDesktop());
     lastDropAt = at;
     var n = fallLayers > 24 ? 1 : Math.min(6, p.dots.length);
     var dp = Math.min(window.devicePixelRatio || 1, 2);
@@ -1749,6 +1750,9 @@ function resetAccumulationHard(reason) {
       in_card_name: 'Снег в карточке',
       in_card_desc: 'Показывать снег на странице деталей фильма/сериала',
 
+      fast_lite_name: 'Упрощать стряхивание при быстром листании',
+      fast_lite_desc: 'Шапка падает одним куском, без рассыпания. Нужно на ТВ; на компьютере можно выключить',
+
       density_name: 'Плотность снега',
       density_desc: 'На Tizen плотность ограничена',
 
@@ -1806,6 +1810,9 @@ function resetAccumulationHard(reason) {
       in_card_name: 'Snow inside cards',
       in_card_desc: 'Show snow on the details page',
 
+      fast_lite_name: 'Simpler shake-off on fast scrolling',
+      fast_lite_desc: 'The cap falls as one piece, without scattering. Needed on a TV; can be turned off on a computer',
+
       density_name: 'Snow density',
       density_desc: 'On Tizen, density is limited',
 
@@ -1862,6 +1869,9 @@ function resetAccumulationHard(reason) {
 
       in_card_name: 'Сніг у картці',
       in_card_desc: 'Показувати сніг на сторінці деталей фільму/серіалу',
+
+      fast_lite_name: 'Спрощувати струшування при швидкому гортанні',
+      fast_lite_desc: 'Шапка падає одним шматком, без розсипання. Потрібно на ТБ; на комп\'ютері можна вимкнути',
 
       density_name: 'Щільність снігу',
       density_desc: 'На Tizen щільність обмежена',
@@ -1958,6 +1968,19 @@ function resetAccumulationHard(reason) {
         field: {
           name: snowfx_t('in_card_name'),
           description: snowfx_t('in_card_desc')
+        }
+      });
+
+      Lampa.SettingsApi.addParam({
+        component: 'snowfx',
+        param: {
+          name: KEY_FAST_LITE,
+          type: 'trigger',
+          "default": !isDesktop()
+        },
+        field: {
+          name: snowfx_t('fast_lite_name'),
+          description: snowfx_t('fast_lite_desc')
         }
       });
 
